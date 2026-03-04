@@ -1,0 +1,77 @@
+@page "/"
+@page "/repositories"
+@inject RepositoryService RepoService
+
+<PageTitle>Repositories - Daisi Git</PageTitle>
+
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h3>Your Repositories</h3>
+    <a href="/new" class="btn btn-primary">
+        <i class="fa-duotone fa-plus me-1"></i> New Repository
+    </a>
+</div>
+
+@if (loading)
+{
+    <div class="text-center py-5">
+        <div class="spinner-border text-primary" role="status">
+            <span class="visually-hidden">Loading...</span>
+        </div>
+    </div>
+}
+else if (repositories.Count == 0)
+{
+    <div class="text-center py-5">
+        <i class="fa-duotone fa-code-branch fa-3x text-muted mb-3"></i>
+        <h5 class="text-muted">No repositories yet</h5>
+        <p class="text-muted">Create your first repository to get started.</p>
+        <a href="/new" class="btn btn-primary">Create Repository</a>
+    </div>
+}
+else
+{
+    <div class="list-group">
+        @foreach (var repo in repositories)
+        {
+            <a href="/@repo.OwnerName/@repo.Slug" class="list-group-item list-group-item-action">
+                <div class="d-flex w-100 justify-content-between">
+                    <div>
+                        <h5 class="mb-1">
+                            <span class="text-muted">@repo.OwnerName /</span> @repo.Name
+                        </h5>
+                        @if (!string.IsNullOrEmpty(repo.Description))
+                        {
+                            <p class="mb-1 text-muted">@repo.Description</p>
+                        }
+                    </div>
+                    <div class="text-end">
+                        <span class="badge bg-@(repo.Visibility == GitRepoVisibility.Public ? "success" : repo.Visibility == GitRepoVisibility.Internal ? "warning" : "secondary")">
+                            @repo.Visibility
+                        </span>
+                        <br />
+                        <small class="text-muted">@repo.CreatedUtc.ToString("MMM d, yyyy")</small>
+                    </div>
+                </div>
+            </a>
+        }
+    </div>
+}
+
+@code {
+    [CascadingParameter(Name = "AccountId")] string AccountId { get; set; } = "";
+    private List<GitRepository> repositories = [];
+    private bool loading = true;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (!string.IsNullOrEmpty(AccountId))
+        {
+            try
+            {
+                repositories = await RepoService.GetRepositoriesAsync(AccountId);
+            }
+            catch { }
+            loading = false;
+        }
+    }
+}

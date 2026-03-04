@@ -1,0 +1,158 @@
+/* Daisi Git — App Layout */
+
+:root {
+    --dg-sidebar-width: 240px;
+    --dg-header-height: 56px;
+    --dg-primary: #2563eb;
+    --dg-sidebar-bg: #1e293b;
+    --dg-sidebar-text: #cbd5e1;
+    --dg-sidebar-active: #3b82f6;
+}
+
+body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    margin: 0;
+    background: #f8fafc;
+}
+
+.dg-app {
+    display: flex;
+    min-height: 100vh;
+}
+
+/* Sidebar */
+.dg-sidebar {
+    width: var(--dg-sidebar-width);
+    background: var(--dg-sidebar-bg);
+    color: var(--dg-sidebar-text);
+    display: flex;
+    flex-direction: column;
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    z-index: 1000;
+}
+
+.dg-sidebar-header {
+    padding: 16px 20px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.dg-logo {
+    color: white;
+    text-decoration: none;
+    font-weight: 600;
+    font-size: 1.1rem;
+    display: flex;
+    align-items: center;
+}
+
+.dg-logo:hover {
+    color: white;
+}
+
+.dg-sidebar-nav {
+    padding: 12px 8px;
+    flex: 1;
+    overflow-y: auto;
+}
+
+.dg-nav-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px;
+    color: var(--dg-sidebar-text);
+    text-decoration: none;
+    border-radius: 6px;
+    margin-bottom: 2px;
+    font-size: 0.9rem;
+    transition: background 0.15s;
+}
+
+.dg-nav-item:hover {
+    background: rgba(255, 255, 255, 0.08);
+    color: white;
+}
+
+.dg-nav-item.active {
+    background: var(--dg-sidebar-active);
+    color: white;
+}
+
+.dg-nav-item i {
+    width: 20px;
+    text-align: center;
+}
+
+/* Main content */
+.dg-main {
+    margin-left: var(--dg-sidebar-width);
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 100vh;
+}
+
+.dg-header {
+    height: var(--dg-header-height);
+    background: white;
+    border-bottom: 1px solid #e2e8f0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 24px;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+}
+
+.dg-header-left,
+.dg-header-right {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.dg-content {
+    flex: 1;
+    padding: 24px;
+    max-width: 1200px;
+    width: 100%;
+    margin: 0 auto;
+}
+
+.dg-footer {
+    padding: 16px 24px;
+    text-align: center;
+    color: #94a3b8;
+    font-size: 0.85rem;
+    border-top: 1px solid #e2e8f0;
+}
+
+/* Repository page */
+.repo-header {
+    background: white;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    padding: 24px;
+    margin-bottom: 24px;
+}
+
+.repo-clone-url {
+    background: #f1f5f9;
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+    padding: 8px 12px;
+    font-family: monospace;
+    font-size: 0.85rem;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.repo-clone-url code {
+    flex: 1;
+    word-break: break-all;
+}

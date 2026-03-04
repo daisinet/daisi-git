@@ -1,0 +1,9 @@
+<Solution>
+  <Project Path="DaisiGit.Core/DaisiGit.Core.csproj" />
+  <Project Path="DaisiGit.Data/DaisiGit.Data.csproj" />
+  <Project Path="DaisiGit.Services/DaisiGit.Services.csproj" />
+  <Project Path="DaisiGit.Web/DaisiGit.Web.csproj" />
+  <Folder Name="/Tests/">
+    <Project Path="DaisiGit.Tests/DaisiGit.Tests.csproj" />
+  </Folder>
+</Solution>

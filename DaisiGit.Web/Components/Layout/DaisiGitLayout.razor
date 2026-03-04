@@ -1,0 +1,121 @@
+@inherits LayoutComponentBase
+@inject NavigationManager Nav
+@inject IJSRuntime JS
+@using Daisi.SDK.Web.Services
+@using Daisi.SDK.Models
+@using System.Security.Claims
+
+@if (isAuthenticated)
+{
+<div class="dg-app">
+    <!-- Sidebar -->
+    <nav class="dg-sidebar">
+        <div class="dg-sidebar-header">
+            <a href="/" class="dg-logo">
+                <img src="images/daisi-logo-white.svg" alt="Daisi" style="height: 24px;" />
+                <span class="ms-2">Daisi Git</span>
+            </a>
+        </div>
+
+        <div class="dg-sidebar-nav">
+            <NavLink class="dg-nav-item" href="" Match="NavLinkMatch.All">
+                <i class="fa-duotone fa-gauge-high"></i>
+                <span>Dashboard</span>
+            </NavLink>
+            <NavLink class="dg-nav-item" href="repositories">
+                <i class="fa-duotone fa-code-branch"></i>
+                <span>Repositories</span>
+            </NavLink>
+            <NavLink class="dg-nav-item" href="new">
+                <i class="fa-duotone fa-plus"></i>
+                <span>New Repository</span>
+            </NavLink>
+        </div>
+    </nav>
+
+    <!-- Main content -->
+    <div class="dg-main">
+        <header class="dg-header">
+            <div class="dg-header-left">
+                <nav aria-label="breadcrumb">
+                    <ol class="breadcrumb mb-0">
+                        <li class="breadcrumb-item"><a href="/">Daisi Git</a></li>
+                    </ol>
+                </nav>
+            </div>
+            <div class="dg-header-right">
+                <div class="dropdown">
+                    <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown">
+                        <i class="fa-duotone fa-user me-1"></i> @userName
+                    </button>
+                    <ul class="dropdown-menu dropdown-menu-end">
+                        <li><a class="dropdown-item" href="#" @onclick:preventDefault @onclick="Logout">Logout</a></li>
+                    </ul>
+                </div>
+            </div>
+        </header>
+
+        <main class="dg-content">
+            <CascadingValue Value="accountId" Name="AccountId">
+                <CascadingValue Value="userName" Name="UserName">
+                    <CascadingValue Value="userId" Name="UserId">
+                        @Body
+                    </CascadingValue>
+                </CascadingValue>
+            </CascadingValue>
+        </main>
+
+        <footer class="dg-footer">
+            &copy; @DateTime.UtcNow.Year Daisi Git &mdash; Powered by Daisinet
+        </footer>
+    </div>
+</div>
+}
+
+<MudThemeProvider />
+<MudPopoverProvider />
+<MudDialogProvider />
+<MudSnackbarProvider />
+
+@code {
+    private bool isAuthenticated;
+    private string accountId = "";
+    private string userName = "";
+    private string userId = "";
+
+    [Inject] AuthService Auth { get; set; } = default!;
+    [Inject] IHttpContextAccessor HttpContextAccessor { get; set; } = default!;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            isAuthenticated = await Auth.IsAuthenticatedAsync();
+            if (!isAuthenticated)
+            {
+                var appUrl = DaisiStaticSettings.SsoAppUrl;
+                var authorityUrl = DaisiStaticSettings.SsoAuthorityUrl;
+                var callbackUrl = Uri.EscapeDataString($"{appUrl}/sso/callback");
+                var origin = Uri.EscapeDataString(appUrl ?? "");
+                Nav.NavigateTo(
+                    $"{authorityUrl}/sso/authorize?returnUrl={callbackUrl}&origin={origin}", true);
+                return;
+            }
+
+            userName = await Auth.GetUserNameAsync() ?? "";
+            accountId = await Auth.GetAccountIdAsync() ?? "";
+            userId = HttpContextAccessor.HttpContext?.User?.Claims
+                .FirstOrDefault(c => c.Type == ClaimTypes.Sid)?.Value ?? "";
+        }
+        catch
+        {
+            Nav.NavigateTo("/", true);
+        }
+    }
+
+    private async Task Logout()
+    {
+        await Auth.LogoutAsync();
+        Nav.NavigateTo("/", true);
+    }
+}

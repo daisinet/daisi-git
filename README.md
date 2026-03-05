@@ -170,3 +170,9 @@ dotnet run --project DaisiGit.Web
 - SDK: `ForkRepositoryAsync`, `ListForksAsync`, `StarRepositoryAsync`, `UnstarRepositoryAsync`, `ExploreRepositoriesAsync`
 - Bot tools: `ForkRepository` (action) and `StarRepository` (action with star/unstar) in marketplace catalog
 - 9 new unit tests for fork fields, star model, and counter behavior
+
+### Phase 8 — Settings Hub
+- Settings page (`/settings`) with card grid layout linking to configuration sections
+- Organizations moved from top-level sidebar nav into the Settings hub
+- Settings nav item in sidebar (`fa-duotone fa-gear`) replaces direct Organizations link
+- Custom `.dg-settings-card` styling with hover elevation and border effects

@@ -1,0 +1,67 @@
+@using DaisiGit.Core.Enums
+
+<div class="card mb-3">
+    <div class="card-header">
+        <h6 class="mb-0"><i class="fa-duotone fa-clipboard-check me-1"></i> Submit Review</h6>
+    </div>
+    <div class="card-body">
+        <textarea class="form-control mb-3" rows="4" @bind="Body" placeholder="Leave a review comment..."></textarea>
+
+        <div class="mb-3">
+            <div class="form-check mb-2">
+                <input class="form-check-input" type="radio" name="reviewState" id="stateComment"
+                       checked="@(State == ReviewState.Commented)" @onchange="@(() => State = ReviewState.Commented)" />
+                <label class="form-check-label" for="stateComment">
+                    <i class="fa-duotone fa-comment me-1"></i> Comment
+                    <span class="text-muted small">— Submit general feedback without explicit approval.</span>
+                </label>
+            </div>
+            <div class="form-check mb-2">
+                <input class="form-check-input" type="radio" name="reviewState" id="stateApprove"
+                       checked="@(State == ReviewState.Approved)" @onchange="@(() => State = ReviewState.Approved)" />
+                <label class="form-check-label" for="stateApprove">
+                    <i class="fa-duotone fa-check me-1 text-success"></i> Approve
+                    <span class="text-muted small">— Submit feedback and approve merging these changes.</span>
+                </label>
+            </div>
+            <div class="form-check">
+                <input class="form-check-input" type="radio" name="reviewState" id="stateChanges"
+                       checked="@(State == ReviewState.ChangesRequested)" @onchange="@(() => State = ReviewState.ChangesRequested)" />
+                <label class="form-check-label" for="stateChanges">
+                    <i class="fa-duotone fa-times me-1 text-danger"></i> Request Changes
+                    <span class="text-muted small">— Submit feedback that must be addressed before merging.</span>
+                </label>
+            </div>
+        </div>
+
+        <button class="btn btn-primary" @onclick="Submit" disabled="@Submitting">
+            @if (Submitting)
+            {
+                <span class="spinner-border spinner-border-sm me-1"></span>
+            }
+            Submit Review
+        </button>
+        <button class="btn btn-outline-secondary ms-2" @onclick="Cancel">Cancel</button>
+    </div>
+</div>
+
+@code {
+    [Parameter] public EventCallback<(ReviewState State, string? Body)> OnSubmit { get; set; }
+    [Parameter] public EventCallback OnCancel { get; set; }
+
+    private ReviewState State { get; set; } = ReviewState.Commented;
+    private string? Body { get; set; }
+    private bool Submitting { get; set; }
+
+    private async Task Submit()
+    {
+        Submitting = true;
+        await OnSubmit.InvokeAsync((State, Body));
+        Submitting = false;
+    }
+
+    private async Task Cancel()
+    {
+        await OnCancel.InvokeAsync();
+    }
+}

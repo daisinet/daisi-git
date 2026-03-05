@@ -1,0 +1,174 @@
+@page "/{Owner}/{RepoSlug}/tree/{Branch}/{**Path}"
+@page "/{Owner}/{RepoSlug}/tree/{Branch}"
+@inject BrowseService BrowseService
+@inject RepositoryService RepoService
+@inject NavigationManager Nav
+
+<PageTitle>@(string.IsNullOrEmpty(Path) ? $"{Owner}/{RepoSlug}" : $"{Path} - {Owner}/{RepoSlug}") - Daisi Git</PageTitle>
+
+<RepositoryLayout Owner="@Owner" RepoSlug="@RepoSlug" ActiveTab="code" SelectedBranch="@Branch">
+    @if (browseResult == null && !loading)
+    {
+        <div class="text-center py-4 text-muted">
+            <p>This repository is empty or the branch doesn't exist.</p>
+        </div>
+    }
+    else if (browseResult != null)
+    {
+        <!-- Branch selector + path breadcrumb -->
+        <div class="d-flex align-items-center gap-2 mb-3">
+            <div class="dropdown">
+                <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown">
+                    <i class="fa-duotone fa-code-branch me-1"></i> @Branch
+                </button>
+                <ul class="dropdown-menu">
+                    @foreach (var b in branches)
+                    {
+                        <li>
+                            <a class="dropdown-item @(b == Branch ? "active" : "")"
+                               href="/@Owner/@RepoSlug/tree/@b/@Path">@b</a>
+                        </li>
+                    }
+                </ul>
+            </div>
+
+            <!-- Breadcrumb -->
+            @if (!string.IsNullOrEmpty(Path))
+            {
+                <nav aria-label="breadcrumb" class="flex-grow-1">
+                    <ol class="breadcrumb mb-0">
+                        <li class="breadcrumb-item">
+                            <a href="/@Owner/@RepoSlug/tree/@Branch">@RepoSlug</a>
+                        </li>
+                        @{
+                            var segments = Path.Trim('/').Split('/');
+                            var accumulated = "";
+                            for (var i = 0; i < segments.Length; i++)
+                            {
+                                accumulated = string.IsNullOrEmpty(accumulated) ? segments[i] : $"{accumulated}/{segments[i]}";
+                                var isLast = i == segments.Length - 1;
+                                if (isLast)
+                                {
+                                    <li class="breadcrumb-item active">@segments[i]</li>
+                                }
+                                else
+                                {
+                                    var linkPath = accumulated;
+                                    <li class="breadcrumb-item">
+                                        <a href="/@Owner/@RepoSlug/tree/@Branch/@linkPath">@segments[i]</a>
+                                    </li>
+                                }
+                            }
+                        }
+                    </ol>
+                </nav>
+            }
+        </div>
+
+        @if (browseResult.IsFile)
+        {
+            <!-- File view — redirect to blob page -->
+            Nav.NavigateTo($"/{Owner}/{RepoSlug}/blob/{Branch}/{Path}", replace: true);
+        }
+        else
+        {
+            <!-- Tree (directory) listing -->
+            <div class="card">
+                @if (lastCommit != null)
+                {
+                    <div class="card-header bg-light d-flex align-items-center gap-2">
+                        <strong class="text-truncate">@lastCommit.AuthorName</strong>
+                        <span class="text-muted text-truncate flex-grow-1">@lastCommit.MessageFirstLine</span>
+                        <a href="/@Owner/@RepoSlug/commit/@lastCommit.Sha" class="text-muted text-nowrap">
+                            <code>@lastCommit.ShortSha</code>
+                        </a>
+                        <span class="text-muted text-nowrap">@FormatRelativeDate(lastCommit.AuthorDate)</span>
+                    </div>
+                }
+                <div class="list-group list-group-flush">
+                    @if (!string.IsNullOrEmpty(Path))
+                    {
+                        var parentPath = string.Join("/", Path.Trim('/').Split('/').SkipLast(1));
+                        <a href="/@Owner/@RepoSlug/tree/@Branch/@parentPath" class="list-group-item list-group-item-action dg-tree-entry">
+                            <i class="fa-duotone fa-arrow-up text-muted dg-tree-icon"></i>
+                            <span>..</span>
+                        </a>
+                    }
+                    @foreach (var entry in browseResult.Entries)
+                    {
+                        var entryPath = string.IsNullOrEmpty(Path) ? entry.Name : $"{Path.TrimEnd('/')}/{entry.Name}";
+                        var linkType = entry.IsTree ? "tree" : "blob";
+                        <a href="/@Owner/@RepoSlug/@linkType/@Branch/@entryPath"
+                           class="list-group-item list-group-item-action dg-tree-entry">
+                            @if (entry.IsTree)
+                            {
+                                <i class="fa-duotone fa-folder text-primary dg-tree-icon"></i>
+                            }
+                            else
+                            {
+                                <i class="fa-duotone fa-file-code text-muted dg-tree-icon"></i>
+                            }
+                            <span>@entry.Name</span>
+                        </a>
+                    }
+                </div>
+            </div>
+        }
+    }
+</RepositoryLayout>
+
+@code {
+    [Parameter] public string Owner { get; set; } = "";
+    [Parameter] public string RepoSlug { get; set; } = "";
+    [Parameter] public string Branch { get; set; } = "main";
+    [Parameter] public string? Path { get; set; }
+
+    private BrowseResult? browseResult;
+    private CommitInfo? lastCommit;
+    private List<string> branches = [];
+    private bool loading = true;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        loading = true;
+        try
+        {
+            var repo = await RepoService.GetRepositoryBySlugAsync(Owner, RepoSlug);
+            if (repo == null) { loading = false; return; }
+
+            // Load branches
+            var refs = await BrowseService.GetBranchesAsync(repo.id, repo.DefaultBranch);
+            branches = refs.Select(b => b.Name).ToList();
+
+            // Resolve branch to SHA
+            var commitSha = await BrowseService.ResolveRefAsync(repo.id, Branch);
+            if (commitSha == null) { loading = false; return; }
+
+            browseResult = await BrowseService.GetTreeAtPathAsync(repo.id, commitSha, Path ?? "");
+
+            // If it resolved to a file, redirect to blob view
+            if (browseResult is { IsFile: true })
+            {
+                loading = false;
+                return;
+            }
+
+            // Get last commit for header
+            var commits = await BrowseService.GetCommitLogAsync(repo.id, commitSha, 1);
+            lastCommit = commits.FirstOrDefault();
+        }
+        catch { }
+        loading = false;
+    }
+
+    private static string FormatRelativeDate(DateTimeOffset date)
+    {
+        var diff = DateTimeOffset.UtcNow - date;
+        if (diff.TotalMinutes < 1) return "just now";
+        if (diff.TotalHours < 1) return $"{(int)diff.TotalMinutes}m ago";
+        if (diff.TotalDays < 1) return $"{(int)diff.TotalHours}h ago";
+        if (diff.TotalDays < 30) return $"{(int)diff.TotalDays}d ago";
+        if (diff.TotalDays < 365) return $"{(int)(diff.TotalDays / 30)}mo ago";
+        return $"{(int)(diff.TotalDays / 365)}y ago";
+    }
+}

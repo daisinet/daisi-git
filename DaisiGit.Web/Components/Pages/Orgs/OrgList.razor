@@ -1,0 +1,64 @@
+@page "/organizations"
+@inject OrganizationService OrgService
+
+<PageTitle>Organizations - Daisi Git</PageTitle>
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h4>Organizations</h4>
+    <a href="/organizations/new" class="btn btn-success">
+        <i class="fa-duotone fa-plus me-1"></i> New Organization
+    </a>
+</div>
+
+@if (orgs.Count > 0)
+{
+    <div class="list-group">
+        @foreach (var org in orgs)
+        {
+            <a href="/org/@org.Slug" class="list-group-item list-group-item-action">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <div class="fw-semibold">
+                            <i class="fa-duotone fa-building me-1 text-muted"></i>
+                            @org.Name
+                        </div>
+                        @if (!string.IsNullOrEmpty(org.Description))
+                        {
+                            <div class="text-muted small mt-1">@org.Description</div>
+                        }
+                    </div>
+                    <div class="text-muted small text-nowrap">
+                        <span class="me-3"><i class="fa-duotone fa-users me-1"></i>@org.MemberCount</span>
+                        <span><i class="fa-duotone fa-people-group me-1"></i>@org.TeamCount</span>
+                    </div>
+                </div>
+            </a>
+        }
+    </div>
+}
+else if (!loading)
+{
+    <div class="text-center py-4 text-muted">
+        <i class="fa-duotone fa-building fa-2x mb-2"></i>
+        <p>No organizations yet. Create one to get started.</p>
+    </div>
+}
+
+@code {
+    [CascadingParameter(Name = "AccountId")] public string? AccountId { get; set; }
+
+    private List<GitOrganization> orgs = [];
+    private bool loading = true;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        loading = true;
+        try
+        {
+            if (!string.IsNullOrEmpty(AccountId))
+                orgs = await OrgService.ListAsync(AccountId);
+        }
+        catch { }
+        loading = false;
+    }
+}

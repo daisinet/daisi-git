@@ -1,0 +1,17 @@
+@page "/{Owner}/{RepoSlug}"
+@inject NavigationManager Nav
+@inject RepositoryService RepoService
+
+<PageTitle>@Owner/@RepoSlug - Daisi Git</PageTitle>
+
+@code {
+    [Parameter] public string Owner { get; set; } = "";
+    [Parameter] public string RepoSlug { get; set; } = "";
+
+    protected override async Task OnParametersSetAsync()
+    {
+        var repo = await RepoService.GetRepositoryBySlugAsync(Owner, RepoSlug);
+        var branch = repo?.DefaultBranch ?? "main";
+        Nav.NavigateTo($"/{Owner}/{RepoSlug}/tree/{branch}", replace: true);
+    }
+}

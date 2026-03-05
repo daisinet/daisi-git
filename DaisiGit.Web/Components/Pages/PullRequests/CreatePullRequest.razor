@@ -1,0 +1,132 @@
+@page "/{Owner}/{RepoSlug}/pulls/new"
+@inject PullRequestService PrService
+@inject RepositoryService RepoService
+@inject BrowseService BrowseService
+@inject NavigationManager Navigation
+
+<PageTitle>New Pull Request - @Owner/@RepoSlug - Daisi Git</PageTitle>
+
+<RepositoryLayout Owner="@Owner" RepoSlug="@RepoSlug" ActiveTab="pulls">
+    <h5 class="mb-3">Open a pull request</h5>
+
+    <div class="card">
+        <div class="card-body">
+            <!-- Branch selectors -->
+            <div class="d-flex align-items-center gap-2 mb-3">
+                <div>
+                    <label class="form-label small fw-semibold mb-1">Base</label>
+                    <select class="form-select form-select-sm" @bind="targetBranch">
+                        @foreach (var b in branches)
+                        {
+                            <option value="@b">@b</option>
+                        }
+                    </select>
+                </div>
+                <div class="align-self-end pb-1">
+                    <i class="fa-duotone fa-arrow-left"></i>
+                </div>
+                <div>
+                    <label class="form-label small fw-semibold mb-1">Compare</label>
+                    <select class="form-select form-select-sm" @bind="sourceBranch">
+                        @foreach (var b in branches)
+                        {
+                            <option value="@b">@b</option>
+                        }
+                    </select>
+                </div>
+            </div>
+
+            <div class="mb-3">
+                <label class="form-label fw-semibold">Title</label>
+                <input type="text" class="form-control" @bind="title" placeholder="Pull request title" />
+            </div>
+
+            <div class="mb-3">
+                <label class="form-label fw-semibold">Description</label>
+                <textarea class="form-control" rows="5" @bind="description" placeholder="Describe the changes..."></textarea>
+            </div>
+
+            @if (!string.IsNullOrEmpty(error))
+            {
+                <div class="alert alert-danger">@error</div>
+            }
+
+            <button class="btn btn-success" @onclick="Submit" disabled="@submitting">
+                @if (submitting)
+                {
+                    <span class="spinner-border spinner-border-sm me-1"></span>
+                }
+                Create Pull Request
+            </button>
+        </div>
+    </div>
+</RepositoryLayout>
+
+@code {
+    [Parameter] public string Owner { get; set; } = "";
+    [Parameter] public string RepoSlug { get; set; } = "";
+    [CascadingParameter(Name = "UserId")] public string? UserId { get; set; }
+    [CascadingParameter(Name = "UserName")] public string? UserName { get; set; }
+
+    private List<string> branches = [];
+    private string sourceBranch = "";
+    private string targetBranch = "";
+    private string title = "";
+    private string? description;
+    private string? error;
+    private bool submitting;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        try
+        {
+            var repo = await RepoService.GetRepositoryBySlugAsync(Owner, RepoSlug);
+            if (repo == null) return;
+
+            var branchInfos = await BrowseService.GetBranchesAsync(repo.id, repo.DefaultBranch);
+            branches = branchInfos.Select(b => b.Name).ToList();
+
+            targetBranch = repo.DefaultBranch;
+            sourceBranch = branches.FirstOrDefault(b => b != targetBranch) ?? targetBranch;
+        }
+        catch { }
+    }
+
+    private async Task Submit()
+    {
+        error = null;
+
+        if (string.IsNullOrWhiteSpace(title))
+        {
+            error = "Title is required.";
+            return;
+        }
+        if (sourceBranch == targetBranch)
+        {
+            error = "Source and target branches must be different.";
+            return;
+        }
+
+        submitting = true;
+        try
+        {
+            var repo = await RepoService.GetRepositoryBySlugAsync(Owner, RepoSlug);
+            if (repo == null) { error = "Repository not found."; return; }
+
+            var pr = await PrService.CreateAsync(
+                repo.id, title.Trim(), description?.Trim(),
+                sourceBranch, targetBranch,
+                UserId ?? "", UserName ?? "anonymous");
+
+            Navigation.NavigateTo($"/{Owner}/{RepoSlug}/pull/{pr.Number}");
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+        }
+        finally
+        {
+            submitting = false;
+        }
+    }
+}

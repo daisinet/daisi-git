@@ -1,0 +1,148 @@
+@page "/new"
+@inject RepositoryService RepoService
+@inject NavigationManager Nav
+
+<PageTitle>New Repository - Daisi Git</PageTitle>
+
+<div class="row justify-content-center">
+    <div class="col-md-8 col-lg-6">
+        <h3 class="mb-4">Create a new repository</h3>
+
+        <EditForm Model="model" OnValidSubmit="HandleSubmit" FormName="CreateRepo">
+            <div class="mb-3">
+                <label class="form-label">Repository name</label>
+                <InputText @bind-Value="model.Name" class="form-control" placeholder="my-project" />
+                @if (!string.IsNullOrEmpty(slug))
+                {
+                    <div class="form-text">
+                        Your repository will be available at <code>@userName/@slug</code>
+                    </div>
+                }
+            </div>
+
+            <div class="mb-3">
+                <label class="form-label">Description <span class="text-muted">(optional)</span></label>
+                <InputText @bind-Value="model.Description" class="form-control" placeholder="A short description of your project" />
+            </div>
+
+            <div class="mb-4">
+                <label class="form-label">Visibility</label>
+                <InputSelect @bind-Value="model.Visibility" class="form-select">
+                    <option value="@GitRepoVisibility.Private">Private</option>
+                    <option value="@GitRepoVisibility.Internal">Internal</option>
+                    <option value="@GitRepoVisibility.Public">Public</option>
+                </InputSelect>
+                <div class="form-text">
+                    @switch (model.Visibility)
+                    {
+                        case GitRepoVisibility.Private:
+                            <text>Only you can see this repository.</text>
+                            break;
+                        case GitRepoVisibility.Internal:
+                            <text>Anyone in your organization can see this repository.</text>
+                            break;
+                        case GitRepoVisibility.Public:
+                            <text>Anyone can see this repository.</text>
+                            break;
+                    }
+                </div>
+            </div>
+
+            @if (!string.IsNullOrEmpty(errorMessage))
+            {
+                <div class="alert alert-danger">@errorMessage</div>
+            }
+
+            <button type="submit" class="btn btn-primary" disabled="@submitting">
+                @if (submitting)
+                {
+                    <span class="spinner-border spinner-border-sm me-1"></span>
+                }
+                Create repository
+            </button>
+        </EditForm>
+    </div>
+</div>
+
+@code {
+    [CascadingParameter(Name = "AccountId")] string AccountId { get; set; } = "";
+    [CascadingParameter(Name = "UserName")] string userName { get; set; } = "";
+    [CascadingParameter(Name = "UserId")] string UserId { get; set; } = "";
+
+    private CreateRepoModel model = new();
+    private string slug = "";
+    private string? errorMessage;
+    private bool submitting;
+
+    private string ComputeSlug(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return "";
+        return System.Text.RegularExpressions.Regex.Replace(
+            name.ToLowerInvariant().Trim(), @"[^a-z0-9\-]", "-").Trim('-');
+    }
+
+    protected override void OnInitialized()
+    {
+        model.PropertyChanged += (_, _) => { slug = ComputeSlug(model.Name); StateHasChanged(); };
+    }
+
+    private async Task HandleSubmit()
+    {
+        if (string.IsNullOrWhiteSpace(model.Name))
+        {
+            errorMessage = "Repository name is required.";
+            return;
+        }
+
+        submitting = true;
+        errorMessage = null;
+
+        try
+        {
+            var repo = await RepoService.CreateRepositoryAsync(
+                AccountId, UserId, userName,
+                model.Name.Trim(), model.Description?.Trim(), model.Visibility);
+
+            Nav.NavigateTo($"/{repo.OwnerName}/{repo.Slug}");
+        }
+        catch (InvalidOperationException ex)
+        {
+            errorMessage = ex.Message;
+        }
+        catch (Exception)
+        {
+            errorMessage = "Failed to create repository. Please try again.";
+        }
+        finally
+        {
+            submitting = false;
+        }
+    }
+
+    private class CreateRepoModel : System.ComponentModel.INotifyPropertyChanged
+    {
+        private string _name = "";
+        private string? _description;
+        private GitRepoVisibility _visibility = GitRepoVisibility.Private;
+
+        public string Name
+        {
+            get => _name;
+            set { _name = value; PropertyChanged?.Invoke(this, new(nameof(Name))); }
+        }
+
+        public string? Description
+        {
+            get => _description;
+            set { _description = value; PropertyChanged?.Invoke(this, new(nameof(Description))); }
+        }
+
+        public GitRepoVisibility Visibility
+        {
+            get => _visibility;
+            set { _visibility = value; PropertyChanged?.Invoke(this, new(nameof(Visibility))); }
+        }
+
+        public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
+    }
+}

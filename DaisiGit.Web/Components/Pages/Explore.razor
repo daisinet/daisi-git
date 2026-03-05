@@ -1,0 +1,91 @@
+@page "/explore"
+@inject RepositoryService RepoService
+
+<PageTitle>Explore - Daisi Git</PageTitle>
+
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h3>Explore Public Repositories</h3>
+</div>
+
+@if (loading)
+{
+    <div class="text-center py-5">
+        <div class="spinner-border text-primary" role="status">
+            <span class="visually-hidden">Loading...</span>
+        </div>
+    </div>
+}
+else if (repositories.Count == 0)
+{
+    <div class="text-center py-5">
+        <i class="fa-duotone fa-compass fa-3x text-muted mb-3"></i>
+        <h5 class="text-muted">No public repositories yet</h5>
+        <p class="text-muted">Public repositories will appear here, sorted by popularity.</p>
+    </div>
+}
+else
+{
+    <div class="list-group">
+        @foreach (var repo in repositories)
+        {
+            <a href="/@repo.OwnerName/@repo.Slug" class="list-group-item list-group-item-action">
+                <div class="d-flex w-100 justify-content-between">
+                    <div>
+                        <h5 class="mb-1">
+                            <span class="text-muted">@repo.OwnerName /</span> @repo.Name
+                        </h5>
+                        @if (!string.IsNullOrEmpty(repo.Description))
+                        {
+                            <p class="mb-1 text-muted">@repo.Description</p>
+                        }
+                        @if (!string.IsNullOrEmpty(repo.ForkedFromOwnerName))
+                        {
+                            <small class="text-muted"><i class="fa-duotone fa-code-fork me-1"></i> Forked from @repo.ForkedFromOwnerName/@repo.ForkedFromSlug</small>
+                        }
+                    </div>
+                    <div class="text-end">
+                        <span class="me-3" title="Stars"><i class="fa-solid fa-star text-warning me-1"></i> @repo.StarCount</span>
+                        <span title="Forks"><i class="fa-duotone fa-code-fork me-1"></i> @repo.ForkCount</span>
+                    </div>
+                </div>
+            </a>
+        }
+    </div>
+
+    @if (repositories.Count >= pageSize)
+    {
+        <div class="text-center mt-3">
+            <button class="btn btn-outline-primary" @onclick="LoadMore">Load More</button>
+        </div>
+    }
+}
+
+@code {
+    private List<GitRepository> repositories = [];
+    private bool loading = true;
+    private int page;
+    private const int pageSize = 20;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadRepositories();
+    }
+
+    private async Task LoadRepositories()
+    {
+        loading = true;
+        try
+        {
+            repositories = await RepoService.GetPublicReposAsync(page * pageSize, pageSize);
+        }
+        catch { }
+        loading = false;
+    }
+
+    private async Task LoadMore()
+    {
+        page++;
+        var more = await RepoService.GetPublicReposAsync(page * pageSize, pageSize);
+        repositories.AddRange(more);
+    }
+}

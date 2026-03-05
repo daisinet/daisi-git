@@ -47,6 +47,9 @@ All endpoints are prefixed with `/api/git/` and require Daisi SSO authentication
 | `GET /repos/{owner}/{slug}/pulls` | List pull requests |
 | `POST /repos/{owner}/{slug}/pulls` | Create pull request |
 | `POST /repos/{owner}/{slug}/pulls/{n}/merge` | Merge pull request |
+| `GET /repos/{owner}/{slug}/pulls/{n}/reviews` | List reviews |
+| `POST /repos/{owner}/{slug}/pulls/{n}/reviews` | Submit review |
+| `GET /repos/{owner}/{slug}/pulls/{n}/diff-comments` | List inline diff comments |
 
 ### Ref Storage
 
@@ -136,3 +139,14 @@ dotnet run --project DaisiGit.Web
   - Catalog entry in `marketplace/catalog.json` with provider, tools, and plugin definitions
 - **DaisiGit.SDK** — typed client library (`DaisiGitClient`) for programmatic access to all REST API endpoints
 - **Unit tests** — 31 tests covering git objects, pack files, pkt-line protocol, browse results, and domain models
+
+### Phase 6 — Code Review
+- `Review`, `DiffComment` models with `ReviewState` (Commented/Approved/ChangesRequested/Dismissed) and `DiffSide` enums
+- `ReviewService` — submit reviews with inline diff comments, list reviews, dismiss reviews, get review summaries
+- `Reviews` Cosmos DB container storing both Review and DiffComment documents, partitioned by RepositoryId
+- PR detail page shows review summary badges (approvals, changes requested), review history, and submit review form
+- Inline diff comments rendered within the file diff view
+- REST API: `GET/POST /pulls/{n}/reviews`, `GET /pulls/{n}/diff-comments`
+- SDK: `ListReviewsAsync`, `SubmitReviewAsync`, `ListDiffCommentsAsync`
+- Bot tools: `ListReviews` (information) and `SubmitReview` (action) in marketplace catalog
+- 8 new unit tests for review models, enums, and field defaults

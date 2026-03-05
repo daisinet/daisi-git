@@ -49,6 +49,11 @@ public static class DaisiGitApiEndpoints
         api.MapPost("/repos/{owner}/{slug}/issues/{number:int}/comments", CreateIssueComment);
         api.MapGet("/repos/{owner}/{slug}/pulls/{number:int}/comments", ListPrComments);
         api.MapPost("/repos/{owner}/{slug}/pulls/{number:int}/comments", CreatePrComment);
+
+        // Reviews
+        api.MapGet("/repos/{owner}/{slug}/pulls/{number:int}/reviews", ListReviews);
+        api.MapPost("/repos/{owner}/{slug}/pulls/{number:int}/reviews", SubmitReview);
+        api.MapGet("/repos/{owner}/{slug}/pulls/{number:int}/diff-comments", ListDiffComments);
     }
 
     // ── Repository endpoints ──
@@ -394,6 +399,69 @@ public static class DaisiGitApiEndpoints
         return Results.Created("", comment);
     }
 
+    // ── Review endpoints ──
+
+    private static async Task<IResult> ListReviews(
+        string owner, string slug, int number,
+        RepositoryService repoService, PullRequestService prService, ReviewService reviewService)
+    {
+        var repo = await repoService.GetRepositoryBySlugAsync(owner, slug);
+        if (repo == null) return Results.NotFound();
+
+        var pr = await prService.GetByNumberAsync(repo.id, number);
+        if (pr == null) return Results.NotFound();
+
+        var reviews = await reviewService.ListReviewsAsync(repo.id, number);
+        return Results.Ok(reviews);
+    }
+
+    private static async Task<IResult> SubmitReview(
+        HttpContext ctx, string owner, string slug, int number, SubmitReviewRequest req,
+        RepositoryService repoService, PullRequestService prService, ReviewService reviewService)
+    {
+        var repo = await repoService.GetRepositoryBySlugAsync(owner, slug);
+        if (repo == null) return Results.NotFound();
+
+        var pr = await prService.GetByNumberAsync(repo.id, number);
+        if (pr == null) return Results.NotFound();
+
+        var state = req.State?.ToLowerInvariant() switch
+        {
+            "approved" or "approve" => ReviewState.Approved,
+            "changes_requested" or "request_changes" => ReviewState.ChangesRequested,
+            _ => ReviewState.Commented
+        };
+
+        var diffComments = req.DiffComments?.Select(dc => new DiffComment
+        {
+            Path = dc.Path,
+            Line = dc.Line,
+            Side = dc.Side?.ToLowerInvariant() == "left" ? DiffSide.Left : DiffSide.Right,
+            Body = dc.Body
+        }).ToList();
+
+        var review = await reviewService.SubmitReviewAsync(
+            repo.id, pr.id, number,
+            GetUserId(ctx), GetUserName(ctx),
+            state, req.Body, diffComments);
+
+        return Results.Created($"/api/git/repos/{owner}/{slug}/pulls/{number}/reviews", review);
+    }
+
+    private static async Task<IResult> ListDiffComments(
+        string owner, string slug, int number,
+        RepositoryService repoService, PullRequestService prService, ReviewService reviewService)
+    {
+        var repo = await repoService.GetRepositoryBySlugAsync(owner, slug);
+        if (repo == null) return Results.NotFound();
+
+        var pr = await prService.GetByNumberAsync(repo.id, number);
+        if (pr == null) return Results.NotFound();
+
+        var comments = await reviewService.GetDiffCommentsAsync(repo.id, number);
+        return Results.Ok(comments);
+    }
+
     // ── Helpers ──
 
     private static string GetUserId(HttpContext ctx) => ctx.Items["userId"] as string ?? "";
@@ -423,3 +491,5 @@ public record CreatePrRequest(string Title, string? Description, string SourceBr
 public record UpdatePrRequest(string? Title = null, string? Description = null, string? Action = null);
 public record MergePrRequest(string? Strategy = null);
 public record CreateCommentRequest(string Body);
+public record SubmitReviewRequest(string? State, string? Body, List<DiffCommentRequest>? DiffComments = null);
+public record DiffCommentRequest(string Path, int Line, string Body, string? Side = null);

@@ -193,6 +193,35 @@ public class DaisiGitClient : IDisposable
             new { strategy });
     }
 
+    // ── Reviews ──
+
+    /// <summary>
+    /// Lists reviews on a pull request.
+    /// </summary>
+    public async Task<List<ReviewDto>> ListReviewsAsync(string owner, string slug, int prNumber)
+    {
+        return await GetAsync<List<ReviewDto>>($"api/git/repos/{owner}/{slug}/pulls/{prNumber}/reviews");
+    }
+
+    /// <summary>
+    /// Submits a review on a pull request.
+    /// </summary>
+    public async Task<ReviewDto> SubmitReviewAsync(
+        string owner, string slug, int prNumber,
+        string state, string? body = null, List<DiffCommentInput>? diffComments = null)
+    {
+        return await PostAsync<ReviewDto>($"api/git/repos/{owner}/{slug}/pulls/{prNumber}/reviews",
+            new { state, body, diffComments });
+    }
+
+    /// <summary>
+    /// Lists inline diff comments on a pull request.
+    /// </summary>
+    public async Task<List<DiffCommentDto>> ListDiffCommentsAsync(string owner, string slug, int prNumber)
+    {
+        return await GetAsync<List<DiffCommentDto>>($"api/git/repos/{owner}/{slug}/pulls/{prNumber}/diff-comments");
+    }
+
     // ── Comments ──
 
     /// <summary>
@@ -343,4 +372,44 @@ public class MergeResultDto
     public bool Success { get; set; }
     public string? MergeCommitSha { get; set; }
     public string? Error { get; set; }
+}
+
+/// <summary>
+/// Review information returned by the API.
+/// </summary>
+public class ReviewDto
+{
+    public string Id { get; set; } = "";
+    public string State { get; set; } = "";
+    public string? Body { get; set; }
+    public string AuthorId { get; set; } = "";
+    public string AuthorName { get; set; } = "";
+    public int PullRequestNumber { get; set; }
+    public DateTime CreatedUtc { get; set; }
+}
+
+/// <summary>
+/// Inline diff comment returned by the API.
+/// </summary>
+public class DiffCommentDto
+{
+    public string Id { get; set; } = "";
+    public string ReviewId { get; set; } = "";
+    public string Path { get; set; } = "";
+    public int Line { get; set; }
+    public string Side { get; set; } = "";
+    public string Body { get; set; } = "";
+    public string AuthorName { get; set; } = "";
+    public DateTime CreatedUtc { get; set; }
+}
+
+/// <summary>
+/// Input for creating an inline diff comment as part of a review submission.
+/// </summary>
+public class DiffCommentInput
+{
+    public string Path { get; set; } = "";
+    public int Line { get; set; }
+    public string Body { get; set; } = "";
+    public string? Side { get; set; }
 }

@@ -61,6 +61,7 @@ public partial class DaisiGitCosmo(IConfiguration configuration, string connecti
             TeamsContainerName => TeamsPartitionKeyName,
             MembersContainerName => MembersPartitionKeyName,
             PermissionsContainerName => PermissionsPartitionKeyName,
+            ReviewsContainerName => ReviewsPartitionKeyName,
             _ => "id"
         };
 

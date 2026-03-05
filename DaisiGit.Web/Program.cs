@@ -40,6 +40,7 @@ builder.Services.AddScoped<MergeService>();
 builder.Services.AddScoped<OrganizationService>();
 builder.Services.AddScoped<TeamService>();
 builder.Services.AddScoped<PermissionService>();
+builder.Services.AddScoped<ReviewService>();
 builder.Services.AddScoped<DaisiUserService>();
 
 // JSON enum serialization for API endpoints

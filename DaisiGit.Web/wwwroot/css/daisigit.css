@@ -298,3 +298,46 @@ body {
 .border-purple {
     border-color: #8b5cf6 !important;
 }
+
+/* Settings grid */
+.dg-settings-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 20px;
+}
+
+.dg-settings-card {
+    background: white;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    padding: 24px;
+    cursor: pointer;
+    transition: box-shadow 0.15s, border-color 0.15s;
+    text-decoration: none;
+    color: inherit;
+    width: 280px;
+}
+
+.dg-settings-card:hover {
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+    border-color: var(--dg-primary);
+    color: inherit;
+    text-decoration: none;
+}
+
+.dg-settings-card i {
+    font-size: 1.5rem;
+    color: var(--dg-primary);
+    margin-bottom: 12px;
+}
+
+.dg-settings-card h6 {
+    margin: 0 0 6px 0;
+    font-weight: 600;
+}
+
+.dg-settings-card p {
+    margin: 0;
+    color: #64748b;
+    font-size: 0.875rem;
+}

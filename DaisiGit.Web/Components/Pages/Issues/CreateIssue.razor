@@ -1,0 +1,81 @@
+@page "/{Owner}/{RepoSlug}/issues/new"
+@inject IssueService IssueService
+@inject RepositoryService RepoService
+@inject NavigationManager Navigation
+
+<PageTitle>New Issue - @Owner/@RepoSlug - Daisi Git</PageTitle>
+
+<RepositoryLayout Owner="@Owner" RepoSlug="@RepoSlug" ActiveTab="issues">
+    <h5 class="mb-3">New issue</h5>
+
+    <div class="card">
+        <div class="card-body">
+            <div class="mb-3">
+                <label class="form-label fw-semibold">Title</label>
+                <input type="text" class="form-control" @bind="title" placeholder="Issue title" />
+            </div>
+
+            <div class="mb-3">
+                <label class="form-label fw-semibold">Description</label>
+                <textarea class="form-control" rows="6" @bind="description" placeholder="Describe the issue..."></textarea>
+            </div>
+
+            @if (!string.IsNullOrEmpty(error))
+            {
+                <div class="alert alert-danger">@error</div>
+            }
+
+            <button class="btn btn-success" @onclick="Submit" disabled="@submitting">
+                @if (submitting)
+                {
+                    <span class="spinner-border spinner-border-sm me-1"></span>
+                }
+                Submit New Issue
+            </button>
+        </div>
+    </div>
+</RepositoryLayout>
+
+@code {
+    [Parameter] public string Owner { get; set; } = "";
+    [Parameter] public string RepoSlug { get; set; } = "";
+    [CascadingParameter(Name = "UserId")] public string? UserId { get; set; }
+    [CascadingParameter(Name = "UserName")] public string? UserName { get; set; }
+
+    private string title = "";
+    private string? description;
+    private string? error;
+    private bool submitting;
+
+    private async Task Submit()
+    {
+        error = null;
+
+        if (string.IsNullOrWhiteSpace(title))
+        {
+            error = "Title is required.";
+            return;
+        }
+
+        submitting = true;
+        try
+        {
+            var repo = await RepoService.GetRepositoryBySlugAsync(Owner, RepoSlug);
+            if (repo == null) { error = "Repository not found."; return; }
+
+            var issue = await IssueService.CreateAsync(
+                repo.id, title.Trim(), description?.Trim(),
+                UserId ?? "", UserName ?? "anonymous");
+
+            Navigation.NavigateTo($"/{Owner}/{RepoSlug}/issue/{issue.Number}");
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+        }
+        finally
+        {
+            submitting = false;
+        }
+    }
+}

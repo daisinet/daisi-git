@@ -1,0 +1,120 @@
+@page "/{Owner}/{RepoSlug}/issues"
+@inject IssueService IssueService
+@inject RepositoryService RepoService
+
+<PageTitle>Issues - @Owner/@RepoSlug - Daisi Git</PageTitle>
+
+<RepositoryLayout Owner="@Owner" RepoSlug="@RepoSlug" ActiveTab="issues">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <div class="btn-group btn-group-sm">
+            <button class="btn @(showOpen ? "btn-primary" : "btn-outline-secondary")" @onclick="() => SetFilter(true)">
+                <i class="fa-duotone fa-circle-dot me-1"></i> Open
+                @if (openCount > 0) { <span class="badge bg-light text-dark ms-1">@openCount</span> }
+            </button>
+            <button class="btn @(!showOpen ? "btn-primary" : "btn-outline-secondary")" @onclick="() => SetFilter(false)">
+                <i class="fa-duotone fa-check me-1"></i> Closed
+                @if (closedCount > 0) { <span class="badge bg-light text-dark ms-1">@closedCount</span> }
+            </button>
+        </div>
+        <a href="/@Owner/@RepoSlug/issues/new" class="btn btn-sm btn-success">
+            <i class="fa-duotone fa-plus me-1"></i> New Issue
+        </a>
+    </div>
+
+    @if (issues.Count > 0)
+    {
+        <div class="list-group">
+            @foreach (var issue in issues)
+            {
+                <a href="/@Owner/@RepoSlug/issue/@issue.Number" class="list-group-item list-group-item-action">
+                    <div class="d-flex justify-content-between align-items-start">
+                        <div>
+                            <div class="fw-semibold">
+                                @if (issue.Status == IssueStatus.Open)
+                                {
+                                    <i class="fa-duotone fa-circle-dot text-success me-1"></i>
+                                }
+                                else
+                                {
+                                    <i class="fa-duotone fa-check-circle text-purple me-1"></i>
+                                }
+                                @issue.Title
+                                @foreach (var label in issue.Labels)
+                                {
+                                    <span class="badge bg-secondary ms-1">@label</span>
+                                }
+                            </div>
+                            <div class="text-muted small mt-1">
+                                #@issue.Number opened @FormatRelativeDate(issue.CreatedUtc) by @issue.AuthorName
+                            </div>
+                        </div>
+                        <div class="text-muted small text-nowrap">
+                            @if (issue.CommentCount > 0)
+                            {
+                                <i class="fa-duotone fa-comment me-1"></i>@issue.CommentCount
+                            }
+                        </div>
+                    </div>
+                </a>
+            }
+        </div>
+    }
+    else if (!loading)
+    {
+        <div class="text-center py-4 text-muted">
+            <i class="fa-duotone fa-circle-dot fa-2x mb-2"></i>
+            <p>No @(showOpen ? "open" : "closed") issues.</p>
+        </div>
+    }
+</RepositoryLayout>
+
+@code {
+    [Parameter] public string Owner { get; set; } = "";
+    [Parameter] public string RepoSlug { get; set; } = "";
+
+    private List<Issue> issues = [];
+    private bool loading = true;
+    private bool showOpen = true;
+    private int openCount;
+    private int closedCount;
+    private string? repoId;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        loading = true;
+        try
+        {
+            var repo = await RepoService.GetRepositoryBySlugAsync(Owner, RepoSlug);
+            if (repo == null) { loading = false; return; }
+            repoId = repo.id;
+
+            var open = await IssueService.ListAsync(repo.id, IssueStatus.Open);
+            var closed = await IssueService.ListAsync(repo.id, IssueStatus.Closed);
+
+            openCount = open.Count;
+            closedCount = closed.Count;
+
+            issues = showOpen ? open : closed;
+        }
+        catch { }
+        loading = false;
+    }
+
+    private async Task SetFilter(bool open)
+    {
+        showOpen = open;
+        if (repoId == null) return;
+        issues = await IssueService.ListAsync(repoId, showOpen ? IssueStatus.Open : IssueStatus.Closed);
+    }
+
+    private static string FormatRelativeDate(DateTime date)
+    {
+        var diff = DateTime.UtcNow - date;
+        if (diff.TotalMinutes < 1) return "just now";
+        if (diff.TotalHours < 1) return $"{(int)diff.TotalMinutes}m ago";
+        if (diff.TotalDays < 1) return $"{(int)diff.TotalHours}h ago";
+        if (diff.TotalDays < 30) return $"{(int)diff.TotalDays}d ago";
+        if (diff.TotalDays < 365) return $"{(int)(diff.TotalDays / 30)}mo ago";
+        return $"{(int)(diff.TotalDays / 365)}y ago";
+    }
+}

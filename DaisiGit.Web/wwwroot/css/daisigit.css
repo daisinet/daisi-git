@@ -285,3 +285,16 @@ body {
 .dg-diff-removed .dg-diff-num {
     background: #fecaca;
 }
+
+/* PR/Issue colors */
+.bg-purple {
+    background-color: #8b5cf6 !important;
+}
+
+.text-purple {
+    color: #8b5cf6 !important;
+}
+
+.border-purple {
+    border-color: #8b5cf6 !important;
+}

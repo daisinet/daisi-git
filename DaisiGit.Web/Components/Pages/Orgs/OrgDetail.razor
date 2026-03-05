@@ -1,0 +1,316 @@
+@page "/org/{Slug}"
+@inject OrganizationService OrgService
+@inject RepositoryService RepoService
+@inject TeamService TeamService
+@inject DaisiGit.Web.Services.DaisiUserService UserService
+
+<PageTitle>@(org?.Name ?? "Organization") - Daisi Git</PageTitle>
+
+@if (org != null)
+{
+    <div class="d-flex justify-content-between align-items-start mb-3">
+        <div>
+            <h3>
+                <i class="fa-duotone fa-building me-1 text-muted"></i>
+                @org.Name
+            </h3>
+            @if (!string.IsNullOrEmpty(org.Description))
+            {
+                <p class="text-muted mb-0">@org.Description</p>
+            }
+        </div>
+        <a href="/org/@Slug/settings" class="btn btn-sm btn-outline-secondary">
+            <i class="fa-duotone fa-gear me-1"></i> Settings
+        </a>
+    </div>
+
+    <!-- Tabs -->
+    <ul class="nav nav-tabs mb-3">
+        <li class="nav-item">
+            <a class="nav-link @(activeTab == "repos" ? "active" : "")" href="#" @onclick:preventDefault @onclick="SetTabRepos">
+                <i class="fa-duotone fa-code-branch me-1"></i> Repositories
+            </a>
+        </li>
+        <li class="nav-item">
+            <a class="nav-link @(activeTab == "members" ? "active" : "")" href="#" @onclick:preventDefault @onclick="SetTabMembers">
+                <i class="fa-duotone fa-users me-1"></i> Members (@members.Count)
+            </a>
+        </li>
+        <li class="nav-item">
+            <a class="nav-link @(activeTab == "teams" ? "active" : "")" href="#" @onclick:preventDefault @onclick="SetTabTeams">
+                <i class="fa-duotone fa-people-group me-1"></i> Teams (@teams.Count)
+            </a>
+        </li>
+    </ul>
+
+    @if (activeTab == "repos")
+    {
+        @if (repos.Count > 0)
+        {
+            <div class="list-group">
+                @foreach (var r in repos)
+                {
+                    <a href="/@org.Slug/@r.Slug" class="list-group-item list-group-item-action">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <div>
+                                <div class="fw-semibold">@r.Name</div>
+                                @if (!string.IsNullOrEmpty(r.Description))
+                                {
+                                    <div class="text-muted small">@r.Description</div>
+                                }
+                            </div>
+                            <span class="badge bg-@(r.Visibility == GitRepoVisibility.Public ? "success" : r.Visibility == GitRepoVisibility.Internal ? "warning" : "secondary")">
+                                @r.Visibility
+                            </span>
+                        </div>
+                    </a>
+                }
+            </div>
+        }
+        else
+        {
+            <div class="text-center py-4 text-muted">
+                <p>No repositories in this organization yet.</p>
+            </div>
+        }
+    }
+    else if (activeTab == "members")
+    {
+        <div class="d-flex justify-content-between align-items-center mb-2">
+            <h6>Members</h6>
+            <button class="btn btn-sm btn-outline-primary" @onclick="ToggleAddMember">
+                <i class="fa-duotone fa-user-plus me-1"></i> Import from Daisinet
+            </button>
+        </div>
+
+        @if (showAddMember)
+        {
+            <div class="card mb-3">
+                <div class="card-header">
+                    <i class="fa-duotone fa-magnifying-glass me-1"></i> Search Daisinet Users
+                </div>
+                <div class="card-body">
+                    <div class="input-group input-group-sm mb-2">
+                        <input type="text" class="form-control" @bind="userSearchTerm" @bind:event="oninput"
+                               placeholder="Search by name..." @onkeyup="OnSearchKeyUp" />
+                        <button class="btn btn-outline-secondary" @onclick="SearchUsers" disabled="@searching">
+                            @if (searching)
+                            {
+                                <span class="spinner-border spinner-border-sm"></span>
+                            }
+                            else
+                            {
+                                <i class="fa-duotone fa-search"></i>
+                            }
+                        </button>
+                    </div>
+
+                    @if (searchResults.Count > 0)
+                    {
+                        <div class="list-group list-group-flush">
+                            @foreach (var user in searchResults)
+                            {
+                                var alreadyMember = existingMemberIds.Contains(user.Id);
+                                <div class="list-group-item d-flex justify-content-between align-items-center py-2 px-0">
+                                    <div>
+                                        <strong class="small">@user.Name</strong>
+                                        <span class="text-muted small ms-1">@user.Email</span>
+                                    </div>
+                                    @if (alreadyMember)
+                                    {
+                                        <span class="badge bg-secondary">Already a member</span>
+                                    }
+                                    else
+                                    {
+                                        <div class="d-flex align-items-center gap-1">
+                                            <select class="form-select form-select-sm" style="width: auto;" @bind="newMemberRole">
+                                                <option value="@GitRole.Read">Read</option>
+                                                <option value="@GitRole.Write">Write</option>
+                                                <option value="@GitRole.Maintain">Maintain</option>
+                                                <option value="@GitRole.Admin">Admin</option>
+                                            </select>
+                                            <button class="btn btn-sm btn-primary" @onclick="() => AddMember(user)">
+                                                Add
+                                            </button>
+                                        </div>
+                                    }
+                                </div>
+                            }
+                        </div>
+                    }
+                    else if (hasSearched && !searching)
+                    {
+                        <div class="text-muted small text-center py-2">No users found.</div>
+                    }
+
+                    @if (!string.IsNullOrEmpty(memberError))
+                    {
+                        <div class="text-danger small mt-2">@memberError</div>
+                    }
+                </div>
+            </div>
+        }
+
+        <div class="list-group">
+            @foreach (var m in members)
+            {
+                <div class="list-group-item d-flex justify-content-between align-items-center">
+                    <div>
+                        <strong>@m.UserName</strong>
+                        <span class="badge bg-@(RoleBadgeColor(m.Role)) ms-2">@m.Role</span>
+                    </div>
+                    <div class="text-muted small">
+                        Joined @m.JoinedUtc.ToString("MMM d, yyyy")
+                    </div>
+                </div>
+            }
+        </div>
+    }
+    else if (activeTab == "teams")
+    {
+        <div class="d-flex justify-content-between align-items-center mb-2">
+            <h6>Teams</h6>
+            <a href="/org/@Slug/teams/new" class="btn btn-sm btn-outline-primary">
+                <i class="fa-duotone fa-plus me-1"></i> New Team
+            </a>
+        </div>
+
+        @if (teams.Count > 0)
+        {
+            <div class="list-group">
+                @foreach (var t in teams)
+                {
+                    <a href="/org/@Slug/team/@t.Slug" class="list-group-item list-group-item-action">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <div>
+                                <div class="fw-semibold">@t.Name</div>
+                                @if (!string.IsNullOrEmpty(t.Description))
+                                {
+                                    <div class="text-muted small">@t.Description</div>
+                                }
+                            </div>
+                            <div class="text-muted small">
+                                <i class="fa-duotone fa-users me-1"></i>@t.MemberCount
+                                <span class="badge bg-@(RoleBadgeColor(t.DefaultPermission)) ms-2">@t.DefaultPermission</span>
+                            </div>
+                        </div>
+                    </a>
+                }
+            </div>
+        }
+        else
+        {
+            <div class="text-center py-4 text-muted">
+                <p>No teams yet.</p>
+            </div>
+        }
+    }
+}
+else if (!loading)
+{
+    <div class="text-center py-4 text-muted">
+        <p>Organization not found.</p>
+    </div>
+}
+
+@code {
+    [Parameter] public string Slug { get; set; } = "";
+    [CascadingParameter(Name = "UserId")] public string? UserId { get; set; }
+
+    private GitOrganization? org;
+    private List<GitRepository> repos = [];
+    private List<OrgMember> members = [];
+    private List<Team> teams = [];
+    private HashSet<string> existingMemberIds = [];
+    private bool loading = true;
+    private string activeTab = "repos";
+    private bool showAddMember;
+    private GitRole newMemberRole = GitRole.Read;
+    private string? memberError;
+
+    // User search
+    private string userSearchTerm = "";
+    private List<DaisiGit.Web.Services.DaisiUserInfo> searchResults = [];
+    private bool searching;
+    private bool hasSearched;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        loading = true;
+        try
+        {
+            org = await OrgService.GetBySlugAsync(Slug);
+            if (org == null) { loading = false; return; }
+
+            repos = await RepoService.GetRepositoriesByOwnerAsync(org.Slug);
+            members = await OrgService.GetMembersAsync(org.id);
+            existingMemberIds = members.Select(m => m.UserId).ToHashSet();
+            teams = await TeamService.ListAsync(org.id);
+        }
+        catch { }
+        loading = false;
+    }
+
+    private void ToggleAddMember()
+    {
+        showAddMember = !showAddMember;
+        if (!showAddMember)
+        {
+            searchResults = [];
+            userSearchTerm = "";
+            hasSearched = false;
+        }
+    }
+
+    private async Task OnSearchKeyUp(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+            await SearchUsers();
+    }
+
+    private async Task SearchUsers()
+    {
+        if (string.IsNullOrWhiteSpace(userSearchTerm)) return;
+        searching = true;
+        memberError = null;
+        try
+        {
+            searchResults = await UserService.SearchUsersAsync(userSearchTerm.Trim());
+            hasSearched = true;
+        }
+        catch (Exception ex)
+        {
+            memberError = $"Failed to search users: {ex.Message}";
+        }
+        searching = false;
+    }
+
+    private async Task AddMember(DaisiGit.Web.Services.DaisiUserInfo user)
+    {
+        memberError = null;
+        if (org == null) return;
+        try
+        {
+            await OrgService.AddMemberAsync(org.id, user.Id, user.Name, newMemberRole);
+            members = await OrgService.GetMembersAsync(org.id);
+            existingMemberIds = members.Select(m => m.UserId).ToHashSet();
+        }
+        catch (Exception ex)
+        {
+            memberError = ex.Message;
+        }
+    }
+
+    private void SetTabRepos() => activeTab = "repos";
+    private void SetTabMembers() => activeTab = "members";
+    private void SetTabTeams() => activeTab = "teams";
+
+    private static string RoleBadgeColor(GitRole role) => role switch
+    {
+        GitRole.Owner => "danger",
+        GitRole.Admin => "warning",
+        GitRole.Maintain => "info",
+        GitRole.Write => "primary",
+        _ => "secondary"
+    };
+}

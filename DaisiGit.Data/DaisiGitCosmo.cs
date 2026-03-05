@@ -53,6 +53,14 @@ public partial class DaisiGitCosmo(IConfiguration configuration, string connecti
             RepositoriesContainerName => RepositoriesPartitionKeyName,
             GitObjectsContainerName => GitObjectsPartitionKeyName,
             RefsContainerName => RefsPartitionKeyName,
+            PullRequestsContainerName => PullRequestsPartitionKeyName,
+            IssuesContainerName => IssuesPartitionKeyName,
+            CommentsContainerName => CommentsPartitionKeyName,
+            LabelsContainerName => LabelsPartitionKeyName,
+            OrganizationsContainerName => OrganizationsPartitionKeyName,
+            TeamsContainerName => TeamsPartitionKeyName,
+            MembersContainerName => MembersPartitionKeyName,
+            PermissionsContainerName => PermissionsPartitionKeyName,
             _ => "id"
         };
 

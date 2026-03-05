@@ -33,6 +33,14 @@ builder.Services.AddScoped<GitObjectStore>();
 builder.Services.AddScoped<GitRefService>();
 builder.Services.AddScoped<RepositoryService>();
 builder.Services.AddScoped<BrowseService>();
+builder.Services.AddScoped<PullRequestService>();
+builder.Services.AddScoped<IssueService>();
+builder.Services.AddScoped<CommentService>();
+builder.Services.AddScoped<MergeService>();
+builder.Services.AddScoped<OrganizationService>();
+builder.Services.AddScoped<TeamService>();
+builder.Services.AddScoped<PermissionService>();
+builder.Services.AddScoped<DaisiUserService>();
 
 // JSON enum serialization for API endpoints
 builder.Services.ConfigureHttpJsonOptions(options =>
@@ -54,6 +62,9 @@ app.MapStaticAssets();
 // Git smart protocol endpoints (HTTP Basic auth)
 app.UseMiddleware<GitAuthMiddleware>();
 app.MapGitSmartProtocolEndpoints();
+
+// REST API endpoints
+app.MapDaisiGitApiEndpoints();
 
 app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode();

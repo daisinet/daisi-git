@@ -3,6 +3,7 @@
   <Project Path="DaisiGit.Data/DaisiGit.Data.csproj" />
   <Project Path="DaisiGit.Services/DaisiGit.Services.csproj" />
   <Project Path="DaisiGit.Web/DaisiGit.Web.csproj" />
+  <Project Path="DaisiGit.SDK/DaisiGit.SDK.csproj" />
   <Folder Name="/Tests/">
     <Project Path="DaisiGit.Tests/DaisiGit.Tests.csproj" />
   </Folder>

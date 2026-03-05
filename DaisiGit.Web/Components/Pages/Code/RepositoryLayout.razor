@@ -55,6 +55,16 @@ else
                     <i class="fa-duotone fa-code-branch me-1"></i> Branches
                 </a>
             </li>
+            <li class="nav-item">
+                <a class="nav-link @(ActiveTab == "pulls" ? "active" : "")" href="/@Owner/@RepoSlug/pulls">
+                    <i class="fa-duotone fa-code-pull-request me-1"></i> Pull Requests
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link @(ActiveTab == "issues" ? "active" : "")" href="/@Owner/@RepoSlug/issues">
+                    <i class="fa-duotone fa-circle-dot me-1"></i> Issues
+                </a>
+            </li>
         </ul>
     </div>
 

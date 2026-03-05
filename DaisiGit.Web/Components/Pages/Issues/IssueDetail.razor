@@ -1,0 +1,163 @@
+@page "/{Owner}/{RepoSlug}/issue/{Number:int}"
+@inject IssueService IssueService
+@inject RepositoryService RepoService
+@inject CommentService CommentService
+
+<PageTitle>#@Number - @Owner/@RepoSlug - Daisi Git</PageTitle>
+
+<RepositoryLayout Owner="@Owner" RepoSlug="@RepoSlug" ActiveTab="issues">
+    @if (issue != null)
+    {
+        <!-- Issue header -->
+        <div class="card mb-3">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-start">
+                    <div>
+                        <h4 class="mb-1">@issue.Title <span class="text-muted fw-normal">#@issue.Number</span></h4>
+                        <div class="d-flex align-items-center gap-2">
+                            @if (issue.Status == IssueStatus.Open)
+                            {
+                                <span class="badge bg-success"><i class="fa-duotone fa-circle-dot me-1"></i> Open</span>
+                            }
+                            else
+                            {
+                                <span class="badge bg-purple"><i class="fa-duotone fa-check-circle me-1"></i> Closed</span>
+                            }
+                            <span class="text-muted small">
+                                <strong>@issue.AuthorName</strong> opened this issue @FormatRelativeDate(issue.CreatedUtc)
+                            </span>
+                        </div>
+                    </div>
+                </div>
+                @if (!string.IsNullOrEmpty(issue.Description))
+                {
+                    <hr />
+                    <p class="mb-0" style="white-space: pre-wrap;">@issue.Description</p>
+                }
+            </div>
+        </div>
+
+        <!-- Close / Reopen -->
+        @if (issue.Status == IssueStatus.Open)
+        {
+            <div class="card mb-3">
+                <div class="card-body">
+                    <button class="btn btn-outline-danger btn-sm" @onclick="CloseIssue">
+                        <i class="fa-duotone fa-check me-1"></i> Close Issue
+                    </button>
+                </div>
+            </div>
+        }
+        else
+        {
+            <div class="card mb-3">
+                <div class="card-body">
+                    <button class="btn btn-outline-success btn-sm" @onclick="ReopenIssue">
+                        <i class="fa-duotone fa-rotate-left me-1"></i> Reopen Issue
+                    </button>
+                </div>
+            </div>
+        }
+
+        <!-- Comments -->
+        <div class="mb-3">
+            <h6>Comments (@comments.Count)</h6>
+        </div>
+
+        @foreach (var comment in comments)
+        {
+            <div class="card mb-2">
+                <div class="card-body py-2 px-3">
+                    <div class="d-flex justify-content-between align-items-center mb-1">
+                        <strong class="small">@comment.AuthorName</strong>
+                        <span class="text-muted small">@FormatRelativeDate(comment.CreatedUtc)</span>
+                    </div>
+                    <p class="mb-0" style="white-space: pre-wrap;">@comment.Body</p>
+                </div>
+            </div>
+        }
+
+        <!-- Add comment -->
+        <div class="card mt-3">
+            <div class="card-body">
+                <textarea class="form-control mb-2" rows="3" @bind="newComment" placeholder="Leave a comment..."></textarea>
+                <button class="btn btn-sm btn-primary" @onclick="AddComment" disabled="@(string.IsNullOrWhiteSpace(newComment))">
+                    Comment
+                </button>
+            </div>
+        </div>
+    }
+    else if (!loading)
+    {
+        <div class="text-center py-4 text-muted">
+            <p>Issue not found.</p>
+        </div>
+    }
+</RepositoryLayout>
+
+@code {
+    [Parameter] public string Owner { get; set; } = "";
+    [Parameter] public string RepoSlug { get; set; } = "";
+    [Parameter] public int Number { get; set; }
+    [CascadingParameter(Name = "UserId")] public string? UserId { get; set; }
+    [CascadingParameter(Name = "UserName")] public string? UserName { get; set; }
+
+    private Issue? issue;
+    private GitRepository? repo;
+    private List<Comment> comments = [];
+    private bool loading = true;
+    private string newComment = "";
+
+    protected override async Task OnParametersSetAsync()
+    {
+        loading = true;
+        try
+        {
+            repo = await RepoService.GetRepositoryBySlugAsync(Owner, RepoSlug);
+            if (repo == null) { loading = false; return; }
+
+            issue = await IssueService.GetByNumberAsync(repo.id, Number);
+            if (issue != null)
+                comments = await CommentService.GetCommentsAsync(repo.id, issue.id);
+        }
+        catch { }
+        loading = false;
+    }
+
+    private async Task CloseIssue()
+    {
+        if (issue == null) return;
+        issue = await IssueService.CloseAsync(issue);
+    }
+
+    private async Task ReopenIssue()
+    {
+        if (issue == null) return;
+        issue = await IssueService.ReopenAsync(issue);
+    }
+
+    private async Task AddComment()
+    {
+        if (issue == null || repo == null || string.IsNullOrWhiteSpace(newComment)) return;
+        try
+        {
+            await CommentService.CreateAsync(
+                repo.id, issue.id, nameof(Issue),
+                newComment.Trim(), UserId ?? "", UserName ?? "anonymous");
+            newComment = "";
+            comments = await CommentService.GetCommentsAsync(repo.id, issue.id);
+        }
+        catch { }
+    }
+
+    private static string FormatRelativeDate(DateTime date)
+    {
+        var diff = DateTime.UtcNow - date;
+        if (diff.TotalMinutes < 1) return "just now";
+        if (diff.TotalHours < 1) return $"{(int)diff.TotalMinutes}m ago";
+        if (diff.TotalDays < 1) return $"{(int)diff.TotalHours}h ago";
+        if (diff.TotalDays < 30) return $"{(int)diff.TotalDays}d ago";
+        if (diff.TotalDays < 365) return $"{(int)(diff.TotalDays / 30)}mo ago";
+        return $"{(int)(diff.TotalDays / 365)}y ago";
+    }
+}

@@ -33,7 +33,8 @@ public static class GitSmartProtocolEndpoints
         string owner, string repo,
         string? service,
         RepositoryService repoService,
-        GitRefService refService)
+        GitRefService refService,
+        PermissionService permissionService)
     {
         if (string.IsNullOrEmpty(service) || (service != "git-upload-pack" && service != "git-receive-pack"))
         {
@@ -48,6 +49,27 @@ public static class GitSmartProtocolEndpoints
             ctx.Response.StatusCode = 404;
             await ctx.Response.WriteAsync("Repository not found");
             return;
+        }
+
+        // Permission check
+        var userId = ctx.Items["userId"] as string ?? "";
+        if (service == "git-receive-pack")
+        {
+            if (!await permissionService.CanWriteAsync(userId, repository))
+            {
+                ctx.Response.StatusCode = 403;
+                await ctx.Response.WriteAsync("Permission denied");
+                return;
+            }
+        }
+        else
+        {
+            if (!await permissionService.CanReadAsync(userId, repository))
+            {
+                ctx.Response.StatusCode = 403;
+                await ctx.Response.WriteAsync("Permission denied");
+                return;
+            }
         }
 
         ctx.Response.ContentType = $"application/x-{service}-advertisement";
@@ -109,12 +131,20 @@ public static class GitSmartProtocolEndpoints
         string owner, string repo,
         RepositoryService repoService,
         GitRefService refService,
-        GitObjectStore objectStore)
+        GitObjectStore objectStore,
+        PermissionService permissionService)
     {
         var repository = await repoService.GetRepositoryBySlugAsync(owner, repo);
         if (repository == null)
         {
             ctx.Response.StatusCode = 404;
+            return;
+        }
+
+        var userId = ctx.Items["userId"] as string ?? "";
+        if (!await permissionService.CanReadAsync(userId, repository))
+        {
+            ctx.Response.StatusCode = 403;
             return;
         }
 
@@ -175,12 +205,20 @@ public static class GitSmartProtocolEndpoints
         string owner, string repo,
         RepositoryService repoService,
         GitRefService refService,
-        GitObjectStore objectStore)
+        GitObjectStore objectStore,
+        PermissionService permissionService)
     {
         var repository = await repoService.GetRepositoryBySlugAsync(owner, repo);
         if (repository == null)
         {
             ctx.Response.StatusCode = 404;
+            return;
+        }
+
+        var userId = ctx.Items["userId"] as string ?? "";
+        if (!await permissionService.CanWriteAsync(userId, repository))
+        {
+            ctx.Response.StatusCode = 403;
             return;
         }
 

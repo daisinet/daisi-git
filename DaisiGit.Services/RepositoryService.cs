@@ -133,6 +133,181 @@ public partial class RepositoryService(
         return await cosmo.UpdateRepositoryAsync(repo);
     }
 
+    // ── Fork ──
+
+    /// <summary>
+    /// Forks a repository. Returns existing fork if user already forked it.
+    /// Copies object records (sharing Drive files) and refs, then increments upstream ForkCount.
+    /// </summary>
+    public async Task<GitRepository> ForkRepositoryAsync(
+        string accountId, string forkOwnerId, string forkOwnerName, GitRepository upstream)
+    {
+        // Duplicate check — return existing fork
+        var existingFork = await cosmo.GetExistingForkAsync(upstream.id, forkOwnerId);
+        if (existingFork != null)
+            return existingFork;
+
+        var slug = Slugify(upstream.Name);
+
+        // Deduplicate slug under the fork owner
+        var existing = await cosmo.GetRepositoryBySlugAsync(forkOwnerName, slug);
+        if (existing != null)
+            slug = $"{slug}-{Guid.NewGuid().ToString("N")[..4]}";
+
+        // Create Drive repo for the fork (future pushes go here)
+        var driveRepoId = await drive.CreateRepositoryAsync($"git-{forkOwnerName}-{slug}");
+
+        var fork = await cosmo.CreateRepositoryAsync(new GitRepository
+        {
+            AccountId = accountId,
+            OwnerId = forkOwnerId,
+            OwnerName = forkOwnerName,
+            Name = upstream.Name,
+            Slug = slug,
+            Description = upstream.Description,
+            Visibility = upstream.Visibility,
+            DriveRepositoryId = driveRepoId,
+            DefaultBranch = upstream.DefaultBranch,
+            IsEmpty = upstream.IsEmpty,
+            ForkedFromId = upstream.id,
+            ForkedFromOwnerName = upstream.OwnerName,
+            ForkedFromSlug = upstream.Slug
+        });
+
+        // Copy object records (same DriveFileId, new RepositoryId)
+        var objects = await cosmo.GetAllObjectRecordsAsync(upstream.id);
+        foreach (var obj in objects)
+        {
+            await cosmo.UpsertObjectRecordAsync(new GitObjectRecord
+            {
+                id = obj.id,
+                RepositoryId = fork.id,
+                DriveFileId = obj.DriveFileId,
+                ObjectType = obj.ObjectType,
+                SizeBytes = obj.SizeBytes
+            });
+        }
+
+        // Copy refs
+        var refs = await refService.GetAllRefsAsync(upstream.id);
+        foreach (var (refName, sha) in refs)
+        {
+            await refService.SetRefAsync(fork.id, refName, sha);
+        }
+
+        // Copy HEAD
+        var head = await refService.GetHeadAsync(upstream.id);
+        if (head != null)
+            await refService.SetHeadAsync(fork.id, head);
+
+        // Increment upstream ForkCount
+        upstream.ForkCount++;
+        await cosmo.UpdateRepositoryAsync(upstream);
+
+        return fork;
+    }
+
+    /// <summary>
+    /// Lists forks of a repository.
+    /// </summary>
+    public async Task<List<GitRepository>> GetForksAsync(string repositoryId)
+    {
+        return await cosmo.GetForksAsync(repositoryId);
+    }
+
+    // ── Stars ──
+
+    /// <summary>
+    /// Stars a repository. Idempotent — does nothing if already starred.
+    /// </summary>
+    public async Task StarAsync(string userId, string userName, string repositoryId)
+    {
+        var existing = await cosmo.GetStarAsync(repositoryId, userId);
+        if (existing != null)
+            return;
+
+        await cosmo.CreateStarAsync(new RepoStar
+        {
+            RepositoryId = repositoryId,
+            UserId = userId,
+            UserName = userName
+        });
+
+        await IncrementStarCountAsync(repositoryId, 1);
+    }
+
+    /// <summary>
+    /// Unstars a repository. Silently succeeds if not starred.
+    /// </summary>
+    public async Task UnstarAsync(string userId, string repositoryId)
+    {
+        var star = await cosmo.GetStarAsync(repositoryId, userId);
+        if (star == null)
+            return;
+
+        await cosmo.DeleteStarAsync(star.id, repositoryId);
+        await IncrementStarCountAsync(repositoryId, -1);
+    }
+
+    /// <summary>
+    /// Checks if a user has starred a repository.
+    /// </summary>
+    public async Task<bool> HasStarredAsync(string userId, string repositoryId)
+    {
+        var star = await cosmo.GetStarAsync(repositoryId, userId);
+        return star != null;
+    }
+
+    /// <summary>
+    /// Gets all repositories starred by a user, hydrated from star records.
+    /// </summary>
+    public async Task<List<GitRepository>> GetStarredReposAsync(string userId)
+    {
+        var stars = await cosmo.GetStarsByUserAsync(userId);
+        var repos = new List<GitRepository>();
+        foreach (var star in stars)
+        {
+            var repo = await GetRepositoryByIdAsync(star.RepositoryId);
+            if (repo != null)
+                repos.Add(repo);
+        }
+        return repos;
+    }
+
+    /// <summary>
+    /// Lists public repositories sorted by star count for the explore page.
+    /// </summary>
+    public async Task<List<GitRepository>> GetPublicReposAsync(int skip = 0, int take = 20)
+    {
+        return await cosmo.GetPublicRepositoriesAsync(skip, take);
+    }
+
+    private async Task IncrementStarCountAsync(string repositoryId, int delta)
+    {
+        var repo = await GetRepositoryByIdAsync(repositoryId);
+        if (repo == null) return;
+
+        repo.StarCount = Math.Max(0, repo.StarCount + delta);
+        await cosmo.UpdateRepositoryAsync(repo);
+    }
+
+    private async Task<GitRepository?> GetRepositoryByIdAsync(string repositoryId)
+    {
+        // Cross-partition query to find repo by id
+        var container = await cosmo.GetContainerAsync(DaisiGitCosmo.RepositoriesContainerName);
+        var query = new Microsoft.Azure.Cosmos.QueryDefinition(
+            "SELECT * FROM c WHERE c.id = @id AND c.Type = 'GitRepository'")
+            .WithParameter("@id", repositoryId);
+
+        using var iterator = container.GetItemQueryIterator<GitRepository>(query);
+        if (iterator.HasMoreResults)
+        {
+            var response = await iterator.ReadNextAsync();
+            return response.FirstOrDefault();
+        }
+        return null;
+    }
+
     internal static string Slugify(string name)
     {
         var slug = name.ToLowerInvariant().Trim();

@@ -1,6 +1,7 @@
 @inject RepositoryService RepoService
 @inject GitRefService RefService
 @inject BrowseService BrowseService
+@inject NavigationManager Nav
 
 @if (loading)
 {
@@ -33,10 +34,26 @@ else
                     <p class="text-muted mb-0">@Repository.Description</p>
                 }
             </div>
-            <span class="badge bg-@(Repository.Visibility == GitRepoVisibility.Public ? "success" : Repository.Visibility == GitRepoVisibility.Internal ? "warning" : "secondary")">
-                @Repository.Visibility
-            </span>
+            <div class="d-flex align-items-center gap-2">
+                <button class="btn btn-sm btn-outline-secondary" @onclick="ToggleStar" title="@(hasStarred ? "Unstar" : "Star")">
+                    <i class="@(hasStarred ? "fa-solid" : "fa-regular") fa-star me-1"></i> @Repository.StarCount
+                </button>
+                <button class="btn btn-sm btn-outline-secondary" @onclick="ForkRepo" title="Fork">
+                    <i class="fa-duotone fa-code-fork me-1"></i> @Repository.ForkCount
+                </button>
+                <span class="badge bg-@(Repository.Visibility == GitRepoVisibility.Public ? "success" : Repository.Visibility == GitRepoVisibility.Internal ? "warning" : "secondary")">
+                    @Repository.Visibility
+                </span>
+            </div>
         </div>
+
+        @if (!string.IsNullOrEmpty(Repository.ForkedFromId))
+        {
+            <p class="text-muted small mb-2">
+                <i class="fa-duotone fa-code-fork me-1"></i> Forked from
+                <a href="/@Repository.ForkedFromOwnerName/@Repository.ForkedFromSlug">@Repository.ForkedFromOwnerName/@Repository.ForkedFromSlug</a>
+            </p>
+        }
 
         <!-- Tabs -->
         <ul class="nav nav-tabs mb-0">
@@ -80,9 +97,13 @@ else
     [Parameter] public string ActiveTab { get; set; } = "code";
     [Parameter] public string SelectedBranch { get; set; } = "main";
     [Parameter] public RenderFragment? ChildContent { get; set; }
+    [CascadingParameter(Name = "UserId")] string UserId { get; set; } = "";
+    [CascadingParameter(Name = "UserName")] string UserName { get; set; } = "";
+    [CascadingParameter(Name = "AccountId")] string AccountId { get; set; } = "";
 
     public GitRepository? Repository { get; private set; }
     private bool loading = true;
+    private bool hasStarred;
 
     protected override async Task OnParametersSetAsync()
     {
@@ -92,8 +113,34 @@ else
             Repository = await RepoService.GetRepositoryBySlugAsync(Owner, RepoSlug);
             if (Repository != null && string.IsNullOrEmpty(SelectedBranch))
                 SelectedBranch = Repository.DefaultBranch;
+            if (Repository != null && !string.IsNullOrEmpty(UserId))
+                hasStarred = await RepoService.HasStarredAsync(UserId, Repository.id);
         }
         catch { }
         loading = false;
+    }
+
+    private async Task ToggleStar()
+    {
+        if (Repository == null) return;
+        if (hasStarred)
+        {
+            await RepoService.UnstarAsync(UserId, Repository.id);
+            Repository.StarCount = Math.Max(0, Repository.StarCount - 1);
+            hasStarred = false;
+        }
+        else
+        {
+            await RepoService.StarAsync(UserId, UserName, Repository.id);
+            Repository.StarCount++;
+            hasStarred = true;
+        }
+    }
+
+    private async Task ForkRepo()
+    {
+        if (Repository == null) return;
+        var fork = await RepoService.ForkRepositoryAsync(AccountId, UserId, UserName, Repository);
+        Nav.NavigateTo($"/{fork.OwnerName}/{fork.Slug}");
     }
 }

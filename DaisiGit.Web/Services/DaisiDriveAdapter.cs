@@ -6,11 +6,13 @@ namespace DaisiGit.Web.Services;
 /// <summary>
 /// Adapts the Daisi Drive SDK client for git object storage.
 /// </summary>
-public class DaisiDriveAdapter(DriveClient driveClient) : IDriveAdapter
+public class DaisiDriveAdapter(DriveClientFactory driveClientFactory) : IDriveAdapter
 {
+    private readonly DriveClient _driveClient = driveClientFactory.Create();
+
     public async Task<string> CreateRepositoryAsync(string name)
     {
-        var response = await driveClient.CreateRepositoryAsync(name);
+        var response = await _driveClient.CreateRepositoryAsync(name);
         return response.Repository.Id;
     }
 
@@ -18,7 +20,7 @@ public class DaisiDriveAdapter(DriveClient driveClient) : IDriveAdapter
     {
         using var stream = new MemoryStream(data);
         var fileName = Path.GetFileName(path);
-        var response = await driveClient.UploadFileAsync(
+        var response = await _driveClient.UploadFileAsync(
             stream, fileName, repositoryId, null, path,
             "application/octet-stream", isSystemFile: true);
         return response.File.Id;
@@ -26,11 +28,11 @@ public class DaisiDriveAdapter(DriveClient driveClient) : IDriveAdapter
 
     public async Task<byte[]> DownloadAsync(string fileId)
     {
-        return await driveClient.DownloadFileAsync(fileId);
+        return await _driveClient.DownloadFileAsync(fileId);
     }
 
     public async Task DeleteRepositoryAsync(string repositoryId)
     {
-        await driveClient.DeleteRepositoryAsync(repositoryId);
+        await _driveClient.DeleteRepositoryAsync(repositoryId);
     }
 }

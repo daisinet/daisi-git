@@ -222,6 +222,52 @@ public class DaisiGitClient : IDisposable
         return await GetAsync<List<DiffCommentDto>>($"api/git/repos/{owner}/{slug}/pulls/{prNumber}/diff-comments");
     }
 
+    // ── Forks ──
+
+    /// <summary>
+    /// Forks a repository to the current user's account.
+    /// </summary>
+    public async Task<GitRepository> ForkRepositoryAsync(string owner, string slug)
+    {
+        return await PostAsync<GitRepository>($"api/git/repos/{owner}/{slug}/forks", new { });
+    }
+
+    /// <summary>
+    /// Lists forks of a repository.
+    /// </summary>
+    public async Task<List<GitRepository>> ListForksAsync(string owner, string slug)
+    {
+        return await GetAsync<List<GitRepository>>($"api/git/repos/{owner}/{slug}/forks");
+    }
+
+    // ── Stars ──
+
+    /// <summary>
+    /// Stars a repository. Idempotent.
+    /// </summary>
+    public async Task StarRepositoryAsync(string owner, string slug)
+    {
+        await PutAsync($"api/git/repos/{owner}/{slug}/star");
+    }
+
+    /// <summary>
+    /// Unstars a repository.
+    /// </summary>
+    public async Task UnstarRepositoryAsync(string owner, string slug)
+    {
+        await DeleteAsync($"api/git/repos/{owner}/{slug}/star");
+    }
+
+    // ── Explore ──
+
+    /// <summary>
+    /// Lists public repositories sorted by star count.
+    /// </summary>
+    public async Task<List<GitRepository>> ExploreRepositoriesAsync(int skip = 0, int take = 20)
+    {
+        return await GetAsync<List<GitRepository>>($"api/git/explore?skip={skip}&take={take}");
+    }
+
     // ── Comments ──
 
     /// <summary>
@@ -279,6 +325,18 @@ public class DaisiGitClient : IDisposable
         var response = await _http.PatchAsJsonAsync(path, body, JsonOptions);
         response.EnsureSuccessStatusCode();
         return (await response.Content.ReadFromJsonAsync<T>(JsonOptions))!;
+    }
+
+    private async Task PutAsync(string path)
+    {
+        var response = await _http.PutAsync(path, null);
+        response.EnsureSuccessStatusCode();
+    }
+
+    private async Task DeleteAsync(string path)
+    {
+        var response = await _http.DeleteAsync(path);
+        response.EnsureSuccessStatusCode();
     }
 
     public void Dispose() => _http.Dispose();

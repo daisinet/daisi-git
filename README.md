@@ -50,6 +50,11 @@ All endpoints are prefixed with `/api/git/` and require Daisi SSO authentication
 | `GET /repos/{owner}/{slug}/pulls/{n}/reviews` | List reviews |
 | `POST /repos/{owner}/{slug}/pulls/{n}/reviews` | Submit review |
 | `GET /repos/{owner}/{slug}/pulls/{n}/diff-comments` | List inline diff comments |
+| `POST /repos/{owner}/{slug}/forks` | Fork a repository |
+| `GET /repos/{owner}/{slug}/forks` | List forks |
+| `PUT /repos/{owner}/{slug}/star` | Star a repository |
+| `DELETE /repos/{owner}/{slug}/star` | Unstar a repository |
+| `GET /explore` | Explore public repos by stars |
 
 ### Ref Storage
 
@@ -150,3 +155,18 @@ dotnet run --project DaisiGit.Web
 - SDK: `ListReviewsAsync`, `SubmitReviewAsync`, `ListDiffCommentsAsync`
 - Bot tools: `ListReviews` (information) and `SubmitReview` (action) in marketplace catalog
 - 8 new unit tests for review models, enums, and field defaults
+
+### Phase 7 — Forks & Stars
+- `RepoStar` model for starring repositories, stored in Cosmos DB `Stars` container partitioned by `RepositoryId`
+- `ForkedFromId`, `ForkedFromOwnerName`, `ForkedFromSlug`, `StarCount`, `ForkCount` fields on `GitRepository`
+- Fork implementation: copies `GitObjectRecord` entries (sharing Drive files, no duplication), copies refs and HEAD, creates new Drive repo for future pushes
+- Duplicate fork prevention: returns existing fork if user already forked the repo
+- Star/unstar with idempotency and denormalized `StarCount` on the repository document
+- Explore page (`/explore`) showing public repositories sorted by star count with pagination
+- Dashboard "Starred" tab alongside "Your Repositories"
+- Star and Fork buttons in repository header with live counts
+- "Forked from owner/slug" subtitle on forked repositories
+- REST API: `POST/GET /repos/{owner}/{slug}/forks`, `PUT/DELETE /repos/{owner}/{slug}/star`, `GET /explore`
+- SDK: `ForkRepositoryAsync`, `ListForksAsync`, `StarRepositoryAsync`, `UnstarRepositoryAsync`, `ExploreRepositoriesAsync`
+- Bot tools: `ForkRepository` (action) and `StarRepository` (action with star/unstar) in marketplace catalog
+- 9 new unit tests for fork fields, star model, and counter behavior

@@ -48,7 +48,40 @@ builder.Services.ConfigureHttpJsonOptions(options =>
     options.SerializerOptions.Converters.Add(new JsonStringEnumConverter()));
 
 var app = builder.Build();
+
+DaisiStaticSettings.LoadFromConfiguration(
+    builder.Configuration.AsEnumerable().ToDictionary(
+        keySelector: x => x.Key, elementSelector: x => x.Value));
+
 app.UseDaisiMiddleware();
+
+// Redirect unauthenticated users to SSO (skip static files, API, git endpoints, and SSO callbacks)
+app.Use(async (context, next) =>
+{
+    var path = context.Request.Path.Value?.ToLower() ?? "";
+    if (!path.StartsWith("/_") && !path.StartsWith("/api/") && !path.Contains(".git/")
+        && !path.StartsWith("/sso/") && !path.StartsWith("/account/")
+        && !Path.HasExtension(path))
+    {
+        var authService = context.RequestServices.GetRequiredService<Daisi.SDK.Web.Services.AuthService>();
+        var isAuthenticated = false;
+        try { isAuthenticated = await authService.IsAuthenticatedAsync(); } catch { }
+
+        if (!isAuthenticated)
+        {
+            var appUrl = DaisiStaticSettings.SsoAppUrl;
+            var authorityUrl = DaisiStaticSettings.SsoAuthorityUrl;
+            if (!string.IsNullOrEmpty(appUrl) && !string.IsNullOrEmpty(authorityUrl))
+            {
+                var callbackUrl = Uri.EscapeDataString($"{appUrl}/sso/callback");
+                var origin = Uri.EscapeDataString(appUrl);
+                context.Response.Redirect($"{authorityUrl}/sso/authorize?returnUrl={callbackUrl}&origin={origin}");
+                return;
+            }
+        }
+    }
+    await next();
+});
 
 if (!app.Environment.IsDevelopment())
 {
@@ -69,9 +102,5 @@ app.MapDaisiGitApiEndpoints();
 
 app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode();
-
-DaisiStaticSettings.LoadFromConfiguration(
-    builder.Configuration.AsEnumerable().ToDictionary(
-        keySelector: x => x.Key, elementSelector: x => x.Value));
 
 app.Run();

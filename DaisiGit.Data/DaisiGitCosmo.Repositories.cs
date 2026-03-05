@@ -103,4 +103,56 @@ public partial class DaisiGitCosmo
         var container = await GetContainerAsync(RepositoriesContainerName);
         await container.DeleteItemAsync<GitRepository>(id, GetRepositoryPartitionKey(accountId));
     }
+
+    public virtual async Task<List<GitRepository>> GetForksAsync(string forkedFromId)
+    {
+        var container = await GetContainerAsync(RepositoriesContainerName);
+        var query = new QueryDefinition(
+            "SELECT * FROM c WHERE c.ForkedFromId = @forkedFromId AND c.Type = 'GitRepository' ORDER BY c.CreatedUtc DESC")
+            .WithParameter("@forkedFromId", forkedFromId);
+
+        var results = new List<GitRepository>();
+        using var iterator = container.GetItemQueryIterator<GitRepository>(query);
+        while (iterator.HasMoreResults)
+        {
+            var response = await iterator.ReadNextAsync();
+            results.AddRange(response);
+        }
+        return results;
+    }
+
+    public virtual async Task<GitRepository?> GetExistingForkAsync(string forkedFromId, string ownerId)
+    {
+        var container = await GetContainerAsync(RepositoriesContainerName);
+        var query = new QueryDefinition(
+            "SELECT * FROM c WHERE c.ForkedFromId = @forkedFromId AND c.OwnerId = @ownerId AND c.Type = 'GitRepository'")
+            .WithParameter("@forkedFromId", forkedFromId)
+            .WithParameter("@ownerId", ownerId);
+
+        using var iterator = container.GetItemQueryIterator<GitRepository>(query);
+        if (iterator.HasMoreResults)
+        {
+            var response = await iterator.ReadNextAsync();
+            return response.FirstOrDefault();
+        }
+        return null;
+    }
+
+    public virtual async Task<List<GitRepository>> GetPublicRepositoriesAsync(int skip, int take)
+    {
+        var container = await GetContainerAsync(RepositoriesContainerName);
+        var query = new QueryDefinition(
+            "SELECT * FROM c WHERE c.Visibility = 2 AND c.Type = 'GitRepository' ORDER BY c.StarCount DESC OFFSET @skip LIMIT @take")
+            .WithParameter("@skip", skip)
+            .WithParameter("@take", take);
+
+        var results = new List<GitRepository>();
+        using var iterator = container.GetItemQueryIterator<GitRepository>(query);
+        while (iterator.HasMoreResults)
+        {
+            var response = await iterator.ReadNextAsync();
+            results.AddRange(response);
+        }
+        return results;
+    }
 }

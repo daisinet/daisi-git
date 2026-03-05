@@ -54,6 +54,17 @@ public static class DaisiGitApiEndpoints
         api.MapGet("/repos/{owner}/{slug}/pulls/{number:int}/reviews", ListReviews);
         api.MapPost("/repos/{owner}/{slug}/pulls/{number:int}/reviews", SubmitReview);
         api.MapGet("/repos/{owner}/{slug}/pulls/{number:int}/diff-comments", ListDiffComments);
+
+        // Forks
+        api.MapPost("/repos/{owner}/{slug}/forks", ForkRepository);
+        api.MapGet("/repos/{owner}/{slug}/forks", ListForks);
+
+        // Stars
+        api.MapPut("/repos/{owner}/{slug}/star", StarRepository);
+        api.MapDelete("/repos/{owner}/{slug}/star", UnstarRepository);
+
+        // Explore
+        api.MapGet("/explore", ExploreRepositories);
     }
 
     // ── Repository endpoints ──
@@ -462,6 +473,60 @@ public static class DaisiGitApiEndpoints
         return Results.Ok(comments);
     }
 
+    // ── Fork endpoints ──
+
+    private static async Task<IResult> ForkRepository(
+        HttpContext ctx, string owner, string slug, RepositoryService repoService)
+    {
+        var repo = await repoService.GetRepositoryBySlugAsync(owner, slug);
+        if (repo == null) return Results.NotFound();
+
+        var fork = await repoService.ForkRepositoryAsync(
+            GetAccountId(ctx), GetUserId(ctx), GetUserName(ctx), repo);
+        return Results.Created($"/api/git/repos/{fork.OwnerName}/{fork.Slug}", RepoDto(fork));
+    }
+
+    private static async Task<IResult> ListForks(
+        string owner, string slug, RepositoryService repoService)
+    {
+        var repo = await repoService.GetRepositoryBySlugAsync(owner, slug);
+        if (repo == null) return Results.NotFound();
+
+        var forks = await repoService.GetForksAsync(repo.id);
+        return Results.Ok(forks.Select(RepoDto));
+    }
+
+    // ── Star endpoints ──
+
+    private static async Task<IResult> StarRepository(
+        HttpContext ctx, string owner, string slug, RepositoryService repoService)
+    {
+        var repo = await repoService.GetRepositoryBySlugAsync(owner, slug);
+        if (repo == null) return Results.NotFound();
+
+        await repoService.StarAsync(GetUserId(ctx), GetUserName(ctx), repo.id);
+        return Results.NoContent();
+    }
+
+    private static async Task<IResult> UnstarRepository(
+        HttpContext ctx, string owner, string slug, RepositoryService repoService)
+    {
+        var repo = await repoService.GetRepositoryBySlugAsync(owner, slug);
+        if (repo == null) return Results.NotFound();
+
+        await repoService.UnstarAsync(GetUserId(ctx), repo.id);
+        return Results.NoContent();
+    }
+
+    // ── Explore endpoint ──
+
+    private static async Task<IResult> ExploreRepositories(
+        int? skip, int? take, RepositoryService repoService)
+    {
+        var repos = await repoService.GetPublicReposAsync(skip ?? 0, take ?? 20);
+        return Results.Ok(repos.Select(RepoDto));
+    }
+
     // ── Helpers ──
 
     private static string GetUserId(HttpContext ctx) => ctx.Items["userId"] as string ?? "";
@@ -478,6 +543,11 @@ public static class DaisiGitApiEndpoints
         r.DefaultBranch,
         Visibility = r.Visibility.ToString(),
         r.IsEmpty,
+        r.StarCount,
+        r.ForkCount,
+        r.ForkedFromId,
+        r.ForkedFromOwnerName,
+        r.ForkedFromSlug,
         r.CreatedUtc
     };
 }

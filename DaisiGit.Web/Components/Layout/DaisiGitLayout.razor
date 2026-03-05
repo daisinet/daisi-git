@@ -12,8 +12,8 @@
     <nav class="dg-sidebar">
         <div class="dg-sidebar-header">
             <a href="/" class="dg-logo">
-                <img src="images/daisi-logo-white.svg" alt="Daisi" style="height: 24px;" />
-                <span class="ms-2">Daisi Git</span>
+                <img src="images/daisi-logo-color-white.svg" alt="Daisi Git" style="height: 24px;" />
+                <span class="ms-2" style="font-family: 'Anta', system-ui; color: #F78C1D;">GIT</span>
             </a>
         </div>
 
@@ -26,9 +26,9 @@
                 <i class="fa-duotone fa-code-branch"></i>
                 <span>Repositories</span>
             </NavLink>
-            <NavLink class="dg-nav-item" href="new">
-                <i class="fa-duotone fa-plus"></i>
-                <span>New Repository</span>
+<NavLink class="dg-nav-item" href="explore">
+                <i class="fa-duotone fa-compass"></i>
+                <span>Explore</span>
             </NavLink>
             <NavLink class="dg-nav-item" href="organizations">
                 <i class="fa-duotone fa-building"></i>
@@ -97,12 +97,6 @@
             isAuthenticated = await Auth.IsAuthenticatedAsync();
             if (!isAuthenticated)
             {
-                var appUrl = DaisiStaticSettings.SsoAppUrl;
-                var authorityUrl = DaisiStaticSettings.SsoAuthorityUrl;
-                var callbackUrl = Uri.EscapeDataString($"{appUrl}/sso/callback");
-                var origin = Uri.EscapeDataString(appUrl ?? "");
-                Nav.NavigateTo(
-                    $"{authorityUrl}/sso/authorize?returnUrl={callbackUrl}&origin={origin}", true);
                 return;
             }
 

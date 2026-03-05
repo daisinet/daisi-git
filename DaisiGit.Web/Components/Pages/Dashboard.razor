@@ -5,7 +5,20 @@
 <PageTitle>Repositories - Daisi Git</PageTitle>
 
 <div class="d-flex justify-content-between align-items-center mb-4">
-    <h3>Your Repositories</h3>
+    <div>
+        <ul class="nav nav-pills">
+            <li class="nav-item">
+                <button class="nav-link @(activeTab == "repos" ? "active" : "")" @onclick='() => SwitchTab("repos")'>
+                    <i class="fa-duotone fa-code-branch me-1"></i> Your Repositories
+                </button>
+            </li>
+            <li class="nav-item">
+                <button class="nav-link @(activeTab == "starred" ? "active" : "")" @onclick='() => SwitchTab("starred")'>
+                    <i class="fa-solid fa-star me-1"></i> Starred
+                </button>
+            </li>
+        </ul>
+    </div>
     <a href="/new" class="btn btn-primary">
         <i class="fa-duotone fa-plus me-1"></i> New Repository
     </a>
@@ -19,19 +32,29 @@
         </div>
     </div>
 }
-else if (repositories.Count == 0)
+else if (displayedRepos.Count == 0)
 {
     <div class="text-center py-5">
-        <i class="fa-duotone fa-code-branch fa-3x text-muted mb-3"></i>
-        <h5 class="text-muted">No repositories yet</h5>
-        <p class="text-muted">Create your first repository to get started.</p>
-        <a href="/new" class="btn btn-primary">Create Repository</a>
+        @if (activeTab == "starred")
+        {
+            <i class="fa-solid fa-star fa-3x text-muted mb-3"></i>
+            <h5 class="text-muted">No starred repositories</h5>
+            <p class="text-muted">Star repositories to bookmark them here.</p>
+            <a href="/explore" class="btn btn-outline-primary">Explore Repositories</a>
+        }
+        else
+        {
+            <i class="fa-duotone fa-code-branch fa-3x text-muted mb-3"></i>
+            <h5 class="text-muted">No repositories yet</h5>
+            <p class="text-muted">Create your first repository to get started.</p>
+            <a href="/new" class="btn btn-primary">Create Repository</a>
+        }
     </div>
 }
 else
 {
     <div class="list-group">
-        @foreach (var repo in repositories)
+        @foreach (var repo in displayedRepos)
         {
             <a href="/@repo.OwnerName/@repo.Slug" class="list-group-item list-group-item-action">
                 <div class="d-flex w-100 justify-content-between">
@@ -43,11 +66,19 @@ else
                         {
                             <p class="mb-1 text-muted">@repo.Description</p>
                         }
+                        @if (!string.IsNullOrEmpty(repo.ForkedFromOwnerName))
+                        {
+                            <small class="text-muted"><i class="fa-duotone fa-code-fork me-1"></i> Forked from @repo.ForkedFromOwnerName/@repo.ForkedFromSlug</small>
+                        }
                     </div>
                     <div class="text-end">
                         <span class="badge bg-@(repo.Visibility == GitRepoVisibility.Public ? "success" : repo.Visibility == GitRepoVisibility.Internal ? "warning" : "secondary")">
                             @repo.Visibility
                         </span>
+                        @if (repo.StarCount > 0)
+                        {
+                            <span class="ms-2"><i class="fa-solid fa-star text-warning"></i> @repo.StarCount</span>
+                        }
                         <br />
                         <small class="text-muted">@repo.CreatedUtc.ToString("MMM d, yyyy")</small>
                     </div>
@@ -59,7 +90,11 @@ else
 
 @code {
     [CascadingParameter(Name = "AccountId")] string AccountId { get; set; } = "";
+    [CascadingParameter(Name = "UserId")] string UserId { get; set; } = "";
     private List<GitRepository> repositories = [];
+    private List<GitRepository> starredRepos = [];
+    private List<GitRepository> displayedRepos = [];
+    private string activeTab = "repos";
     private bool loading = true;
 
     protected override async Task OnParametersSetAsync()
@@ -69,9 +104,26 @@ else
             try
             {
                 repositories = await RepoService.GetRepositoriesAsync(AccountId);
+                displayedRepos = repositories;
             }
             catch { }
             loading = false;
         }
+    }
+
+    private async Task SwitchTab(string tab)
+    {
+        activeTab = tab;
+        if (tab == "starred" && starredRepos.Count == 0 && !string.IsNullOrEmpty(UserId))
+        {
+            loading = true;
+            try
+            {
+                starredRepos = await RepoService.GetStarredReposAsync(UserId);
+            }
+            catch { }
+            loading = false;
+        }
+        displayedRepos = tab == "starred" ? starredRepos : repositories;
     }
 }

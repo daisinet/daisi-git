@@ -19,6 +19,11 @@ public class GitRepository
     public GitRepoVisibility Visibility { get; set; } = GitRepoVisibility.Private;
     public string DriveRepositoryId { get; set; } = "";
     public bool IsEmpty { get; set; } = true;
+    public string? ForkedFromId { get; set; }
+    public string? ForkedFromOwnerName { get; set; }
+    public string? ForkedFromSlug { get; set; }
+    public int StarCount { get; set; }
+    public int ForkCount { get; set; }
     public DateTime CreatedUtc { get; set; } = DateTime.UtcNow;
     public DateTime? UpdatedUtc { get; set; }
 }

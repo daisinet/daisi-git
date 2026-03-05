@@ -1,113 +1,17 @@
 @page "/{Owner}/{RepoSlug}"
-@inject RepositoryService RepoService
-@inject GitRefService RefService
 @inject NavigationManager Nav
+@inject RepositoryService RepoService
 
 <PageTitle>@Owner/@RepoSlug - Daisi Git</PageTitle>
-
-@if (loading)
-{
-    <div class="text-center py-5">
-        <div class="spinner-border text-primary" role="status">
-            <span class="visually-hidden">Loading...</span>
-        </div>
-    </div>
-}
-else if (repository == null)
-{
-    <div class="text-center py-5">
-        <h4 class="text-muted">Repository not found</h4>
-        <p class="text-muted">@Owner/@RepoSlug does not exist or you don't have access.</p>
-    </div>
-}
-else
-{
-    <div class="repo-header">
-        <div class="d-flex justify-content-between align-items-start">
-            <div>
-                <h3 class="mb-1">
-                    <a href="/@Owner" class="text-muted text-decoration-none">@Owner</a>
-                    <span class="text-muted">/</span>
-                    <strong>@repository.Name</strong>
-                </h3>
-                @if (!string.IsNullOrEmpty(repository.Description))
-                {
-                    <p class="text-muted mb-0">@repository.Description</p>
-                }
-            </div>
-            <span class="badge bg-@(repository.Visibility == GitRepoVisibility.Public ? "success" : repository.Visibility == GitRepoVisibility.Internal ? "warning" : "secondary")">
-                @repository.Visibility
-            </span>
-        </div>
-    </div>
-
-    <!-- Clone URL -->
-    <div class="mb-4">
-        <label class="form-label fw-semibold">Clone</label>
-        <div class="repo-clone-url">
-            <i class="fa-duotone fa-terminal"></i>
-            <code>git clone @(Nav.BaseUri)@Owner/@(RepoSlug).git</code>
-        </div>
-    </div>
-
-    <!-- Branches -->
-    @if (refs.Count > 0)
-    {
-        <div class="card">
-            <div class="card-header">
-                <i class="fa-duotone fa-code-branch me-1"></i> Branches
-            </div>
-            <ul class="list-group list-group-flush">
-                @foreach (var (refName, sha) in refs.OrderBy(r => r.Key))
-                {
-                    @if (refName.StartsWith("refs/heads/"))
-                    {
-                        var branchName = refName["refs/heads/".Length..];
-                        <li class="list-group-item d-flex justify-content-between align-items-center">
-                            <span>
-                                @if (branchName == repository.DefaultBranch)
-                                {
-                                    <i class="fa-duotone fa-star text-warning me-1"></i>
-                                }
-                                @branchName
-                            </span>
-                            <code class="text-muted">@sha[..7]</code>
-                        </li>
-                    }
-                }
-            </ul>
-        </div>
-    }
-    else
-    {
-        <div class="text-center py-4">
-            <p class="text-muted">This repository is empty. Push some code to get started:</p>
-            <pre class="text-start d-inline-block bg-light p-3 rounded">git remote add origin @(Nav.BaseUri)@Owner/@(RepoSlug).git
-git push -u origin main</pre>
-        </div>
-    }
-}
 
 @code {
     [Parameter] public string Owner { get; set; } = "";
     [Parameter] public string RepoSlug { get; set; } = "";
 
-    private GitRepository? repository;
-    private Dictionary<string, string> refs = new();
-    private bool loading = true;
-
     protected override async Task OnParametersSetAsync()
     {
-        loading = true;
-        try
-        {
-            repository = await RepoService.GetRepositoryBySlugAsync(Owner, RepoSlug);
-            if (repository != null)
-            {
-                refs = await RefService.GetAllRefsAsync(repository.id);
-            }
-        }
-        catch { }
-        loading = false;
+        var repo = await RepoService.GetRepositoryBySlugAsync(Owner, RepoSlug);
+        var branch = repo?.DefaultBranch ?? "main";
+        Nav.NavigateTo($"/{Owner}/{RepoSlug}/tree/{branch}", replace: true);
     }
 }

@@ -32,6 +32,7 @@ builder.Services.AddScoped<IDriveAdapter, DaisiDriveAdapter>();
 builder.Services.AddScoped<GitObjectStore>();
 builder.Services.AddScoped<GitRefService>();
 builder.Services.AddScoped<RepositoryService>();
+builder.Services.AddScoped<BrowseService>();
 
 // JSON enum serialization for API endpoints
 builder.Services.ConfigureHttpJsonOptions(options =>

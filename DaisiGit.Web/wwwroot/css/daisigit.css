@@ -156,3 +156,132 @@ body {
     flex: 1;
     word-break: break-all;
 }
+
+/* Repository tabs */
+.repo-header .nav-tabs {
+    border-bottom: none;
+    margin: 0 -24px -24px -24px;
+    padding: 0 24px;
+}
+
+.repo-header .nav-tabs .nav-link {
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
+}
+
+/* Tree (file browser) */
+.dg-tree-entry {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 16px;
+    font-size: 0.9rem;
+}
+
+.dg-tree-icon {
+    width: 18px;
+    text-align: center;
+}
+
+/* File viewer */
+.dg-file-content {
+    overflow-x: auto;
+}
+
+.dg-code-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-family: 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', monospace;
+    font-size: 0.8rem;
+    line-height: 1.5;
+}
+
+.dg-code-table pre {
+    margin: 0;
+    white-space: pre;
+    display: inline;
+}
+
+.dg-line-num {
+    width: 60px;
+    min-width: 60px;
+    padding: 0 12px;
+    text-align: right;
+    color: #94a3b8;
+    user-select: none;
+    background: #f8fafc;
+    border-right: 1px solid #e2e8f0;
+    vertical-align: top;
+}
+
+.dg-line-content {
+    padding: 0 16px;
+    white-space: pre;
+}
+
+/* Commit list */
+.dg-commit-date-header {
+    font-weight: 600;
+    font-size: 0.85rem;
+    color: #64748b;
+    padding: 12px 0 6px 0;
+}
+
+.dg-commit-body {
+    font-size: 0.85rem;
+    background: #f8fafc;
+    padding: 8px 12px;
+    border-radius: 4px;
+    white-space: pre-wrap;
+}
+
+/* Diff view */
+.dg-diff-content {
+    overflow-x: auto;
+}
+
+.dg-diff-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-family: 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', monospace;
+    font-size: 0.8rem;
+    line-height: 1.5;
+}
+
+.dg-diff-table pre {
+    margin: 0;
+    white-space: pre;
+    display: inline;
+}
+
+.dg-diff-num {
+    width: 50px;
+    min-width: 50px;
+    padding: 0 8px;
+    text-align: right;
+    color: #94a3b8;
+    user-select: none;
+    border-right: 1px solid #e2e8f0;
+    vertical-align: top;
+}
+
+.dg-diff-line {
+    padding: 0 12px;
+    white-space: pre;
+}
+
+.dg-diff-added {
+    background: #dcfce7;
+}
+
+.dg-diff-added .dg-diff-num {
+    background: #bbf7d0;
+}
+
+.dg-diff-removed {
+    background: #fee2e2;
+}
+
+.dg-diff-removed .dg-diff-num {
+    background: #fecaca;
+}

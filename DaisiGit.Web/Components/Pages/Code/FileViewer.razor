@@ -1,0 +1,122 @@
+@page "/{Owner}/{RepoSlug}/blob/{Branch}/{**Path}"
+@inject BrowseService BrowseService
+@inject RepositoryService RepoService
+
+<PageTitle>@Path - @Owner/@RepoSlug - Daisi Git</PageTitle>
+
+<RepositoryLayout Owner="@Owner" RepoSlug="@RepoSlug" ActiveTab="code" SelectedBranch="@Branch">
+    @if (fileContent != null)
+    {
+        <!-- Breadcrumb -->
+        <nav aria-label="breadcrumb" class="mb-3">
+            <ol class="breadcrumb">
+                <li class="breadcrumb-item">
+                    <a href="/@Owner/@RepoSlug/tree/@Branch">@RepoSlug</a>
+                </li>
+                @{
+                    var segments = (Path ?? "").Trim('/').Split('/');
+                    var accumulated = "";
+                    for (var i = 0; i < segments.Length; i++)
+                    {
+                        accumulated = string.IsNullOrEmpty(accumulated) ? segments[i] : $"{accumulated}/{segments[i]}";
+                        var isLast = i == segments.Length - 1;
+                        if (isLast)
+                        {
+                            <li class="breadcrumb-item active">@segments[i]</li>
+                        }
+                        else
+                        {
+                            var linkPath = accumulated;
+                            <li class="breadcrumb-item">
+                                <a href="/@Owner/@RepoSlug/tree/@Branch/@linkPath">@segments[i]</a>
+                            </li>
+                        }
+                    }
+                }
+            </ol>
+        </nav>
+
+        <!-- File content card -->
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span>
+                    <i class="fa-duotone fa-file-code me-1"></i>
+                    @GetFileName()
+                </span>
+                <span class="text-muted">@FormatFileSize(fileContent.SizeBytes)</span>
+            </div>
+
+            @if (fileContent.IsBinary)
+            {
+                <div class="card-body text-center text-muted">
+                    <i class="fa-duotone fa-file-binary fa-3x mb-2"></i>
+                    <p>Binary file (@FormatFileSize(fileContent.SizeBytes))</p>
+                </div>
+            }
+            else
+            {
+                <div class="dg-file-content">
+                    <table class="dg-code-table">
+                        @{
+                            var lines = (fileContent.Text ?? "").Split('\n');
+                            for (var i = 0; i < lines.Length; i++)
+                            {
+                                var lineNum = i + 1;
+                                <tr>
+                                    <td class="dg-line-num" id="L@lineNum">@lineNum</td>
+                                    <td class="dg-line-content"><pre>@lines[i]</pre></td>
+                                </tr>
+                            }
+                        }
+                    </table>
+                </div>
+            }
+        </div>
+    }
+    else if (!loading)
+    {
+        <div class="text-center py-4 text-muted">
+            <p>File not found.</p>
+        </div>
+    }
+</RepositoryLayout>
+
+@code {
+    [Parameter] public string Owner { get; set; } = "";
+    [Parameter] public string RepoSlug { get; set; } = "";
+    [Parameter] public string Branch { get; set; } = "main";
+    [Parameter] public string? Path { get; set; }
+
+    private FileContent? fileContent;
+    private bool loading = true;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        loading = true;
+        try
+        {
+            var repo = await RepoService.GetRepositoryBySlugAsync(Owner, RepoSlug);
+            if (repo == null) { loading = false; return; }
+
+            var commitSha = await BrowseService.ResolveRefAsync(repo.id, Branch);
+            if (commitSha == null) { loading = false; return; }
+
+            var browseResult = await BrowseService.GetTreeAtPathAsync(repo.id, commitSha, Path ?? "");
+            if (browseResult is { IsFile: true, FileSha: not null })
+            {
+                fileContent = await BrowseService.GetFileContentAsync(repo.id, browseResult.FileSha);
+            }
+        }
+        catch { }
+        loading = false;
+    }
+
+    private string GetFileName() => (Path ?? "").Split('/').LastOrDefault() ?? "";
+
+    private static string FormatFileSize(long bytes)
+    {
+        if (bytes < 1024) return $"{bytes} B";
+        if (bytes < 1024 * 1024) return $"{bytes / 1024.0:F1} KB";
+        return $"{bytes / (1024.0 * 1024.0):F1} MB";
+    }
+}

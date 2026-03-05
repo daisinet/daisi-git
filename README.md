@@ -61,7 +61,7 @@ dotnet run --project DaisiGit.Web
 
 ## Development Status
 
-### Phase 1 (Current) — Core Git Engine + Push/Pull
+### Phase 1 — Core Git Engine + Push/Pull
 - Git object model (blob, tree, commit, tag)
 - Pack file generation and parsing
 - Pkt-line wire protocol
@@ -69,10 +69,14 @@ dotnet run --project DaisiGit.Web
 - Repository creation with initial commit
 - Web UI: dashboard, create repository, repository detail
 
-### Phase 2 (Planned) — Web File Browser + Commit History
-- Tree traversal and file browsing
-- Commit history and diffs
-- Syntax-highlighted file viewer
+### Phase 2 (Current) — Web File Browser + Commit History
+- `BrowseService` — tree traversal, path resolution, commit log walking, tree diffing
+- `RepositoryLayout` — shared layout with Code/Commits/Branches tab navigation
+- `FileBrowser` — directory listing at any branch/path with breadcrumb navigation
+- `FileViewer` — file content display with line numbers
+- `CommitHistory` — paginated commit log grouped by date, with branch selector
+- `CommitDetail` — single commit view with full file diffs (added/modified/deleted)
+- `BranchList` — all branches with last commit info
 
 ### Phase 3 (Planned) — Pull Requests + Issues
 - PR creation, review, and merge

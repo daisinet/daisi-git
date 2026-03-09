@@ -1,0 +1,86 @@
+@page "/{Owner}/{RepoSlug}/branches"
+@inject BrowseService BrowseService
+@inject RepositoryService RepoService
+
+<PageTitle>Branches - @Owner/@RepoSlug - Daisi Git</PageTitle>
+
+<RepositoryLayout Owner="@Owner" RepoSlug="@RepoSlug" ActiveTab="branches">
+    @if (branches.Count > 0)
+    {
+        <h5 class="mb-3">@branches.Count branch@(branches.Count != 1 ? "es" : "")</h5>
+
+        <div class="list-group">
+            @foreach (var branch in branches)
+            {
+                <div class="list-group-item d-flex justify-content-between align-items-center">
+                    <div>
+                        <a href="/@Owner/@RepoSlug/tree/@branch.Name" class="fw-semibold text-decoration-none">
+                            <i class="fa-duotone fa-code-branch me-1"></i>
+                            @branch.Name
+                        </a>
+                        @if (branch.IsDefault)
+                        {
+                            <span class="badge bg-primary ms-2">default</span>
+                        }
+                        @if (branch.LastCommit != null)
+                        {
+                            <div class="text-muted small mt-1">
+                                Updated @FormatRelativeDate(branch.LastCommit.AuthorDate) by @branch.LastCommit.AuthorName
+                            </div>
+                        }
+                    </div>
+                    <div class="text-nowrap">
+                        @if (branch.LastCommit != null)
+                        {
+                            <a href="/@Owner/@RepoSlug/commit/@branch.Sha" class="btn btn-sm btn-outline-secondary">
+                                <code>@branch.Sha[..7]</code>
+                            </a>
+                        }
+                        <a href="/@Owner/@RepoSlug/commits/@branch.Name" class="btn btn-sm btn-outline-secondary" title="View commits">
+                            <i class="fa-duotone fa-clock-rotate-left"></i>
+                        </a>
+                    </div>
+                </div>
+            }
+        </div>
+    }
+    else if (!loading)
+    {
+        <div class="text-center py-4 text-muted">
+            <p>No branches found.</p>
+        </div>
+    }
+</RepositoryLayout>
+
+@code {
+    [Parameter] public string Owner { get; set; } = "";
+    [Parameter] public string RepoSlug { get; set; } = "";
+
+    private List<BranchInfo> branches = [];
+    private bool loading = true;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        loading = true;
+        try
+        {
+            var repo = await RepoService.GetRepositoryBySlugAsync(Owner, RepoSlug);
+            if (repo == null) { loading = false; return; }
+
+            branches = await BrowseService.GetBranchesAsync(repo.id, repo.DefaultBranch);
+        }
+        catch { }
+        loading = false;
+    }
+
+    private static string FormatRelativeDate(DateTimeOffset date)
+    {
+        var diff = DateTimeOffset.UtcNow - date;
+        if (diff.TotalMinutes < 1) return "just now";
+        if (diff.TotalHours < 1) return $"{(int)diff.TotalMinutes}m ago";
+        if (diff.TotalDays < 1) return $"{(int)diff.TotalHours}h ago";
+        if (diff.TotalDays < 30) return $"{(int)diff.TotalDays}d ago";
+        if (diff.TotalDays < 365) return $"{(int)(diff.TotalDays / 30)}mo ago";
+        return $"{(int)(diff.TotalDays / 365)}y ago";
+    }
+}

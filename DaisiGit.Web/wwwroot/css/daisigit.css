@@ -1,0 +1,343 @@
+/* Daisi Git — App Layout */
+
+:root {
+    --dg-sidebar-width: 240px;
+    --dg-header-height: 56px;
+    --dg-primary: #2563eb;
+    --dg-sidebar-bg: #1e293b;
+    --dg-sidebar-text: #cbd5e1;
+    --dg-sidebar-active: #3b82f6;
+}
+
+body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    margin: 0;
+    background: #f8fafc;
+}
+
+.dg-app {
+    display: flex;
+    min-height: 100vh;
+}
+
+/* Sidebar */
+.dg-sidebar {
+    width: var(--dg-sidebar-width);
+    background: var(--dg-sidebar-bg);
+    color: var(--dg-sidebar-text);
+    display: flex;
+    flex-direction: column;
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    z-index: 1000;
+}
+
+.dg-sidebar-header {
+    padding: 16px 20px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.dg-logo {
+    color: white;
+    text-decoration: none;
+    font-weight: 600;
+    font-size: 1.1rem;
+    display: flex;
+    align-items: center;
+}
+
+.dg-logo:hover {
+    color: white;
+}
+
+.dg-sidebar-nav {
+    padding: 12px 8px;
+    flex: 1;
+    overflow-y: auto;
+}
+
+.dg-nav-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px;
+    color: var(--dg-sidebar-text);
+    text-decoration: none;
+    border-radius: 6px;
+    margin-bottom: 2px;
+    font-size: 0.9rem;
+    transition: background 0.15s;
+}
+
+.dg-nav-item:hover {
+    background: rgba(255, 255, 255, 0.08);
+    color: white;
+}
+
+.dg-nav-item.active {
+    background: var(--dg-sidebar-active);
+    color: white;
+}
+
+.dg-nav-item i {
+    width: 20px;
+    text-align: center;
+}
+
+/* Main content */
+.dg-main {
+    margin-left: var(--dg-sidebar-width);
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 100vh;
+}
+
+.dg-header {
+    height: var(--dg-header-height);
+    background: white;
+    border-bottom: 1px solid #e2e8f0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 24px;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+}
+
+.dg-header-left,
+.dg-header-right {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.dg-content {
+    flex: 1;
+    padding: 24px;
+    max-width: 1200px;
+    width: 100%;
+    margin: 0 auto;
+}
+
+.dg-footer {
+    padding: 16px 24px;
+    text-align: center;
+    color: #94a3b8;
+    font-size: 0.85rem;
+    border-top: 1px solid #e2e8f0;
+}
+
+/* Repository page */
+.repo-header {
+    background: white;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    padding: 24px;
+    margin-bottom: 24px;
+}
+
+.repo-clone-url {
+    background: #f1f5f9;
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+    padding: 8px 12px;
+    font-family: monospace;
+    font-size: 0.85rem;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.repo-clone-url code {
+    flex: 1;
+    word-break: break-all;
+}
+
+/* Repository tabs */
+.repo-header .nav-tabs {
+    border-bottom: none;
+    margin: 0 -24px -24px -24px;
+    padding: 0 24px;
+}
+
+.repo-header .nav-tabs .nav-link {
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
+}
+
+/* Tree (file browser) */
+.dg-tree-entry {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 16px;
+    font-size: 0.9rem;
+}
+
+.dg-tree-icon {
+    width: 18px;
+    text-align: center;
+}
+
+/* File viewer */
+.dg-file-content {
+    overflow-x: auto;
+}
+
+.dg-code-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-family: 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', monospace;
+    font-size: 0.8rem;
+    line-height: 1.5;
+}
+
+.dg-code-table pre {
+    margin: 0;
+    white-space: pre;
+    display: inline;
+}
+
+.dg-line-num {
+    width: 60px;
+    min-width: 60px;
+    padding: 0 12px;
+    text-align: right;
+    color: #94a3b8;
+    user-select: none;
+    background: #f8fafc;
+    border-right: 1px solid #e2e8f0;
+    vertical-align: top;
+}
+
+.dg-line-content {
+    padding: 0 16px;
+    white-space: pre;
+}
+
+/* Commit list */
+.dg-commit-date-header {
+    font-weight: 600;
+    font-size: 0.85rem;
+    color: #64748b;
+    padding: 12px 0 6px 0;
+}
+
+.dg-commit-body {
+    font-size: 0.85rem;
+    background: #f8fafc;
+    padding: 8px 12px;
+    border-radius: 4px;
+    white-space: pre-wrap;
+}
+
+/* Diff view */
+.dg-diff-content {
+    overflow-x: auto;
+}
+
+.dg-diff-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-family: 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', monospace;
+    font-size: 0.8rem;
+    line-height: 1.5;
+}
+
+.dg-diff-table pre {
+    margin: 0;
+    white-space: pre;
+    display: inline;
+}
+
+.dg-diff-num {
+    width: 50px;
+    min-width: 50px;
+    padding: 0 8px;
+    text-align: right;
+    color: #94a3b8;
+    user-select: none;
+    border-right: 1px solid #e2e8f0;
+    vertical-align: top;
+}
+
+.dg-diff-line {
+    padding: 0 12px;
+    white-space: pre;
+}
+
+.dg-diff-added {
+    background: #dcfce7;
+}
+
+.dg-diff-added .dg-diff-num {
+    background: #bbf7d0;
+}
+
+.dg-diff-removed {
+    background: #fee2e2;
+}
+
+.dg-diff-removed .dg-diff-num {
+    background: #fecaca;
+}
+
+/* PR/Issue colors */
+.bg-purple {
+    background-color: #8b5cf6 !important;
+}
+
+.text-purple {
+    color: #8b5cf6 !important;
+}
+
+.border-purple {
+    border-color: #8b5cf6 !important;
+}
+
+/* Settings grid */
+.dg-settings-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 20px;
+}
+
+.dg-settings-card {
+    background: white;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    padding: 24px;
+    cursor: pointer;
+    transition: box-shadow 0.15s, border-color 0.15s;
+    text-decoration: none;
+    color: inherit;
+    width: 280px;
+}
+
+.dg-settings-card:hover {
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+    border-color: var(--dg-primary);
+    color: inherit;
+    text-decoration: none;
+}
+
+.dg-settings-card i {
+    font-size: 1.5rem;
+    color: var(--dg-primary);
+    margin-bottom: 12px;
+}
+
+.dg-settings-card h6 {
+    margin: 0 0 6px 0;
+    font-weight: 600;
+}
+
+.dg-settings-card p {
+    margin: 0;
+    color: #64748b;
+    font-size: 0.875rem;
+}

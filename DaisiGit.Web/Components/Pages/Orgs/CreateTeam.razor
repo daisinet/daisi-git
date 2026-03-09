@@ -1,0 +1,89 @@
+@page "/org/{Slug}/teams/new"
+@inject OrganizationService OrgService
+@inject TeamService TeamService
+@inject NavigationManager Navigation
+
+<PageTitle>New Team - Daisi Git</PageTitle>
+
+@if (org != null)
+{
+    <h4 class="mb-3">
+        <a href="/org/@Slug" class="text-decoration-none text-muted">@org.Name</a>
+        <span class="text-muted">/</span> New Team
+    </h4>
+
+    <div class="card" style="max-width: 600px;">
+        <div class="card-body">
+            <div class="mb-3">
+                <label class="form-label fw-semibold">Team name</label>
+                <input type="text" class="form-control" @bind="name" placeholder="Backend Devs" />
+            </div>
+
+            <div class="mb-3">
+                <label class="form-label fw-semibold">Description <span class="text-muted fw-normal">(optional)</span></label>
+                <textarea class="form-control" rows="3" @bind="description" placeholder="What does this team do?"></textarea>
+            </div>
+
+            <div class="mb-3">
+                <label class="form-label fw-semibold">Default permission</label>
+                <select class="form-select" @bind="defaultPermission">
+                    <option value="@GitRole.Read">Read</option>
+                    <option value="@GitRole.Write">Write</option>
+                    <option value="@GitRole.Maintain">Maintain</option>
+                    <option value="@GitRole.Admin">Admin</option>
+                </select>
+                <div class="form-text">Default access level for repositories assigned to this team.</div>
+            </div>
+
+            @if (!string.IsNullOrEmpty(error))
+            {
+                <div class="alert alert-danger">@error</div>
+            }
+
+            <button class="btn btn-success" @onclick="Submit" disabled="@submitting">
+                @if (submitting)
+                {
+                    <span class="spinner-border spinner-border-sm me-1"></span>
+                }
+                Create Team
+            </button>
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public string Slug { get; set; } = "";
+
+    private GitOrganization? org;
+    private string name = "";
+    private string? description;
+    private GitRole defaultPermission = GitRole.Read;
+    private string? error;
+    private bool submitting;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        org = await OrgService.GetBySlugAsync(Slug);
+    }
+
+    private async Task Submit()
+    {
+        error = null;
+        if (org == null || string.IsNullOrWhiteSpace(name)) { error = "Team name is required."; return; }
+
+        submitting = true;
+        try
+        {
+            var team = await TeamService.CreateAsync(org.id, name.Trim(), description?.Trim(), defaultPermission);
+            Navigation.NavigateTo($"/org/{Slug}/team/{team.Slug}");
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+        }
+        finally
+        {
+            submitting = false;
+        }
+    }
+}

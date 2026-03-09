@@ -1,0 +1,477 @@
+@page "/{Owner}/{RepoSlug}/pull/{Number:int}"
+@inject PullRequestService PrService
+@inject RepositoryService RepoService
+@inject BrowseService BrowseService
+@inject CommentService CommentService
+@inject MergeService MergeService
+@inject ReviewService ReviewService
+
+<PageTitle>#@Number - @Owner/@RepoSlug - Daisi Git</PageTitle>
+
+<RepositoryLayout Owner="@Owner" RepoSlug="@RepoSlug" ActiveTab="pulls">
+    @if (pr != null)
+    {
+        <!-- PR header -->
+        <div class="card mb-3">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-start">
+                    <div>
+                        <h4 class="mb-1">@pr.Title <span class="text-muted fw-normal">#@pr.Number</span></h4>
+                        <div class="d-flex align-items-center gap-2">
+                            @if (pr.Status == PullRequestStatus.Open)
+                            {
+                                <span class="badge bg-success"><i class="fa-duotone fa-code-pull-request me-1"></i> Open</span>
+                            }
+                            else if (pr.Status == PullRequestStatus.Merged)
+                            {
+                                <span class="badge bg-purple"><i class="fa-duotone fa-code-merge me-1"></i> Merged</span>
+                            }
+                            else
+                            {
+                                <span class="badge bg-danger"><i class="fa-duotone fa-code-pull-request me-1"></i> Closed</span>
+                            }
+                            <span class="text-muted small">
+                                <strong>@pr.AuthorName</strong> wants to merge
+                                <code>@pr.SourceBranch</code> into <code>@pr.TargetBranch</code>
+                            </span>
+                        </div>
+                    </div>
+                </div>
+                @if (!string.IsNullOrEmpty(pr.Description))
+                {
+                    <hr />
+                    <p class="mb-0" style="white-space: pre-wrap;">@pr.Description</p>
+                }
+            </div>
+        </div>
+
+        <!-- Review summary -->
+        @if (reviewSummary != null && (reviewSummary.Approvals > 0 || reviewSummary.ChangesRequested > 0 || reviewSummary.Commented > 0))
+        {
+            <div class="d-flex gap-2 mb-3">
+                @if (reviewSummary.Approvals > 0)
+                {
+                    <span class="badge bg-success">
+                        <i class="fa-duotone fa-check me-1"></i> @reviewSummary.Approvals approval@(reviewSummary.Approvals != 1 ? "s" : "")
+                    </span>
+                }
+                @if (reviewSummary.ChangesRequested > 0)
+                {
+                    <span class="badge bg-warning text-dark">
+                        <i class="fa-duotone fa-exclamation-triangle me-1"></i> @reviewSummary.ChangesRequested changes requested
+                    </span>
+                }
+                @if (reviewSummary.Commented > 0)
+                {
+                    <span class="badge bg-secondary">
+                        <i class="fa-duotone fa-comment me-1"></i> @reviewSummary.Commented comment@(reviewSummary.Commented != 1 ? "s" : "")
+                    </span>
+                }
+            </div>
+        }
+
+        <!-- Merge / Close actions -->
+        @if (pr.Status == PullRequestStatus.Open)
+        {
+            <div class="card mb-3">
+                <div class="card-body d-flex gap-2 align-items-center">
+                    <button class="btn btn-success" @onclick="Merge" disabled="@merging">
+                        @if (merging)
+                        {
+                            <span class="spinner-border spinner-border-sm me-1"></span>
+                        }
+                        <i class="fa-duotone fa-code-merge me-1"></i> Merge Pull Request
+                    </button>
+                    <button class="btn btn-outline-danger" @onclick="Close" disabled="@merging">
+                        Close
+                    </button>
+                    @if (!string.IsNullOrEmpty(mergeError))
+                    {
+                        <span class="text-danger ms-2">@mergeError</span>
+                    }
+                </div>
+            </div>
+        }
+        else if (pr.Status == PullRequestStatus.Closed)
+        {
+            <div class="card mb-3">
+                <div class="card-body">
+                    <button class="btn btn-outline-success" @onclick="Reopen">
+                        <i class="fa-duotone fa-rotate-left me-1"></i> Reopen
+                    </button>
+                </div>
+            </div>
+        }
+        else if (pr.Status == PullRequestStatus.Merged)
+        {
+            <div class="card mb-3 border-purple">
+                <div class="card-body text-muted">
+                    <i class="fa-duotone fa-code-merge me-1"></i>
+                    Merged via <a href="/@Owner/@RepoSlug/commit/@pr.MergeCommitSha"><code>@pr.MergeCommitSha?[..7]</code></a>
+                    @if (pr.MergedUtc.HasValue)
+                    {
+                        <span> on @pr.MergedUtc.Value.ToString("MMMM d, yyyy")</span>
+                    }
+                </div>
+            </div>
+        }
+
+        <!-- Diff tab -->
+        @if (diffs.Count > 0)
+        {
+            <div class="mb-3">
+                <h6 class="text-muted">
+                    <strong>@diffs.Count file@(diffs.Count != 1 ? "s" : "") changed</strong>
+                </h6>
+            </div>
+
+            @foreach (var diff in diffs)
+            {
+                <div class="card mb-3">
+                    <div class="card-header">
+                        @if (diff.Status == DiffStatus.Added)
+                        {
+                            <span class="badge bg-success me-1">A</span>
+                        }
+                        else if (diff.Status == DiffStatus.Deleted)
+                        {
+                            <span class="badge bg-danger me-1">D</span>
+                        }
+                        else
+                        {
+                            <span class="badge bg-warning me-1">M</span>
+                        }
+                        @diff.Path
+                    </div>
+                    <div class="dg-diff-content">
+                        @if (diff.OldContent == null && diff.NewContent == null)
+                        {
+                            <div class="p-3 text-muted">Binary file</div>
+                        }
+                        else
+                        {
+                            <table class="dg-diff-table">
+                                @if (diff.Status == DiffStatus.Added && diff.NewContent != null)
+                                {
+                                    var lines = diff.NewContent.Split('\n');
+                                    for (var i = 0; i < lines.Length; i++)
+                                    {
+                                        <tr class="dg-diff-added">
+                                            <td class="dg-diff-num"></td>
+                                            <td class="dg-diff-num">@(i + 1)</td>
+                                            <td class="dg-diff-line"><pre>+@lines[i]</pre></td>
+                                        </tr>
+                                        @foreach (var dc in diffComments.Where(c => c.Path == diff.Path && c.Line == i + 1))
+                                        {
+                                            <tr class="dg-diff-comment">
+                                                <td colspan="3" class="px-3 py-1">
+                                                    <div class="d-flex align-items-center gap-2 small">
+                                                        <strong>@dc.AuthorName</strong>
+                                                        <span class="text-muted">@FormatRelativeDate(dc.CreatedUtc)</span>
+                                                    </div>
+                                                    <div class="small" style="white-space: pre-wrap;">@dc.Body</div>
+                                                </td>
+                                            </tr>
+                                        }
+                                    }
+                                }
+                                else if (diff.Status == DiffStatus.Deleted && diff.OldContent != null)
+                                {
+                                    var lines = diff.OldContent.Split('\n');
+                                    for (var i = 0; i < lines.Length; i++)
+                                    {
+                                        <tr class="dg-diff-removed">
+                                            <td class="dg-diff-num">@(i + 1)</td>
+                                            <td class="dg-diff-num"></td>
+                                            <td class="dg-diff-line"><pre>-@lines[i]</pre></td>
+                                        </tr>
+                                        @foreach (var dc in diffComments.Where(c => c.Path == diff.Path && c.Line == i + 1))
+                                        {
+                                            <tr class="dg-diff-comment">
+                                                <td colspan="3" class="px-3 py-1">
+                                                    <div class="d-flex align-items-center gap-2 small">
+                                                        <strong>@dc.AuthorName</strong>
+                                                        <span class="text-muted">@FormatRelativeDate(dc.CreatedUtc)</span>
+                                                    </div>
+                                                    <div class="small" style="white-space: pre-wrap;">@dc.Body</div>
+                                                </td>
+                                            </tr>
+                                        }
+                                    }
+                                }
+                                else
+                                {
+                                    @if (diff.OldContent != null)
+                                    {
+                                        var oldLines = diff.OldContent.Split('\n');
+                                        for (var i = 0; i < oldLines.Length; i++)
+                                        {
+                                            <tr class="dg-diff-removed">
+                                                <td class="dg-diff-num">@(i + 1)</td>
+                                                <td class="dg-diff-num"></td>
+                                                <td class="dg-diff-line"><pre>-@oldLines[i]</pre></td>
+                                            </tr>
+                                            @foreach (var dc in diffComments.Where(c => c.Path == diff.Path && c.Line == i + 1))
+                                        {
+                                            <tr class="dg-diff-comment">
+                                                <td colspan="3" class="px-3 py-1">
+                                                    <div class="d-flex align-items-center gap-2 small">
+                                                        <strong>@dc.AuthorName</strong>
+                                                        <span class="text-muted">@FormatRelativeDate(dc.CreatedUtc)</span>
+                                                    </div>
+                                                    <div class="small" style="white-space: pre-wrap;">@dc.Body</div>
+                                                </td>
+                                            </tr>
+                                        }
+                                        }
+                                    }
+                                    @if (diff.NewContent != null)
+                                    {
+                                        var newLines = diff.NewContent.Split('\n');
+                                        for (var i = 0; i < newLines.Length; i++)
+                                        {
+                                            <tr class="dg-diff-added">
+                                                <td class="dg-diff-num"></td>
+                                                <td class="dg-diff-num">@(i + 1)</td>
+                                                <td class="dg-diff-line"><pre>+@newLines[i]</pre></td>
+                                            </tr>
+                                            @foreach (var dc in diffComments.Where(c => c.Path == diff.Path && c.Line == i + 1))
+                                        {
+                                            <tr class="dg-diff-comment">
+                                                <td colspan="3" class="px-3 py-1">
+                                                    <div class="d-flex align-items-center gap-2 small">
+                                                        <strong>@dc.AuthorName</strong>
+                                                        <span class="text-muted">@FormatRelativeDate(dc.CreatedUtc)</span>
+                                                    </div>
+                                                    <div class="small" style="white-space: pre-wrap;">@dc.Body</div>
+                                                </td>
+                                            </tr>
+                                        }
+                                        }
+                                    }
+                                }
+                            </table>
+                        }
+                    </div>
+                </div>
+            }
+        }
+
+        <!-- Reviews -->
+        @if (reviews.Count > 0)
+        {
+            <div class="mb-3">
+                <h6>Reviews (@reviews.Count)</h6>
+            </div>
+
+            @foreach (var review in reviews)
+            {
+                <div class="card mb-2">
+                    <div class="card-body py-2 px-3">
+                        <div class="d-flex justify-content-between align-items-center mb-1">
+                            <div class="d-flex align-items-center gap-2">
+                                <strong class="small">@review.AuthorName</strong>
+                                @if (review.State == ReviewState.Approved)
+                                {
+                                    <span class="badge bg-success"><i class="fa-duotone fa-check me-1"></i> Approved</span>
+                                }
+                                else if (review.State == ReviewState.ChangesRequested)
+                                {
+                                    <span class="badge bg-warning text-dark"><i class="fa-duotone fa-exclamation-triangle me-1"></i> Changes Requested</span>
+                                }
+                                else if (review.State == ReviewState.Dismissed)
+                                {
+                                    <span class="badge bg-secondary"><i class="fa-duotone fa-ban me-1"></i> Dismissed</span>
+                                }
+                                else
+                                {
+                                    <span class="badge bg-secondary"><i class="fa-duotone fa-comment me-1"></i> Commented</span>
+                                }
+                            </div>
+                            <span class="text-muted small">@FormatRelativeDate(review.CreatedUtc)</span>
+                        </div>
+                        @if (!string.IsNullOrEmpty(review.Body))
+                        {
+                            <p class="mb-0" style="white-space: pre-wrap;">@review.Body</p>
+                        }
+                    </div>
+                </div>
+            }
+        }
+
+        <!-- Submit review button / form -->
+        @if (pr.Status == PullRequestStatus.Open)
+        {
+            @if (showReviewForm)
+            {
+                <ReviewForm OnSubmit="HandleReviewSubmit" OnCancel="() => showReviewForm = false" />
+            }
+            else
+            {
+                <div class="mb-3">
+                    <button class="btn btn-outline-primary" @onclick="() => showReviewForm = true">
+                        <i class="fa-duotone fa-clipboard-check me-1"></i> Submit Review
+                    </button>
+                </div>
+            }
+        }
+
+        <!-- Comments -->
+        <div class="mb-3">
+            <h6>Comments (@comments.Count)</h6>
+        </div>
+
+        @foreach (var comment in comments)
+        {
+            <div class="card mb-2">
+                <div class="card-body py-2 px-3">
+                    <div class="d-flex justify-content-between align-items-center mb-1">
+                        <strong class="small">@comment.AuthorName</strong>
+                        <span class="text-muted small">@FormatRelativeDate(comment.CreatedUtc)</span>
+                    </div>
+                    <p class="mb-0" style="white-space: pre-wrap;">@comment.Body</p>
+                </div>
+            </div>
+        }
+
+        <!-- Add comment -->
+        <div class="card mt-3">
+            <div class="card-body">
+                <textarea class="form-control mb-2" rows="3" @bind="newComment" placeholder="Leave a comment..."></textarea>
+                <button class="btn btn-sm btn-primary" @onclick="AddComment" disabled="@(string.IsNullOrWhiteSpace(newComment))">
+                    Comment
+                </button>
+            </div>
+        </div>
+    }
+    else if (!loading)
+    {
+        <div class="text-center py-4 text-muted">
+            <p>Pull request not found.</p>
+        </div>
+    }
+</RepositoryLayout>
+
+@code {
+    [Parameter] public string Owner { get; set; } = "";
+    [Parameter] public string RepoSlug { get; set; } = "";
+    [Parameter] public int Number { get; set; }
+    [CascadingParameter(Name = "UserId")] public string? UserId { get; set; }
+    [CascadingParameter(Name = "UserName")] public string? UserName { get; set; }
+
+    private PullRequest? pr;
+    private GitRepository? repo;
+    private List<FileDiff> diffs = [];
+    private List<Comment> comments = [];
+    private List<Review> reviews = [];
+    private List<DiffComment> diffComments = [];
+    private ReviewSummary? reviewSummary;
+    private bool loading = true;
+    private bool merging;
+    private string? mergeError;
+    private string newComment = "";
+    private bool showReviewForm;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        loading = true;
+        try
+        {
+            repo = await RepoService.GetRepositoryBySlugAsync(Owner, RepoSlug);
+            if (repo == null) { loading = false; return; }
+
+            pr = await PrService.GetByNumberAsync(repo.id, Number);
+            if (pr == null) { loading = false; return; }
+
+            comments = await CommentService.GetCommentsAsync(repo.id, pr.id);
+            reviews = await ReviewService.ListReviewsAsync(repo.id, Number);
+            reviewSummary = await ReviewService.GetReviewSummaryAsync(repo.id, Number);
+            diffComments = await ReviewService.GetDiffCommentsAsync(repo.id, Number);
+
+            // Compute diff between target and source
+            var sourceSha = await BrowseService.ResolveRefAsync(repo.id, pr.SourceBranch);
+            var targetSha = await BrowseService.ResolveRefAsync(repo.id, pr.TargetBranch);
+            if (sourceSha != null && targetSha != null)
+                diffs = await BrowseService.GetCommitDiffAsync(repo.id, sourceSha);
+        }
+        catch { }
+        loading = false;
+    }
+
+    private async Task HandleReviewSubmit((ReviewState State, string? Body) args)
+    {
+        if (pr == null || repo == null) return;
+        try
+        {
+            await ReviewService.SubmitReviewAsync(
+                repo.id, pr.id, Number,
+                UserId ?? "", UserName ?? "anonymous",
+                args.State, args.Body);
+
+            showReviewForm = false;
+            reviews = await ReviewService.ListReviewsAsync(repo.id, Number);
+            reviewSummary = await ReviewService.GetReviewSummaryAsync(repo.id, Number);
+        }
+        catch { }
+    }
+
+    private async Task Merge()
+    {
+        if (pr == null || repo == null) return;
+        merging = true;
+        mergeError = null;
+        try
+        {
+            var result = await MergeService.MergeAsync(
+                pr, repo,
+                UserName ?? "anonymous", $"{UserName ?? "anonymous"}@daisigit.local");
+
+            if (!result.Success)
+                mergeError = result.Error;
+            else
+                pr = await PrService.GetByNumberAsync(repo.id, Number);
+        }
+        catch (Exception ex)
+        {
+            mergeError = ex.Message;
+        }
+        merging = false;
+    }
+
+    private async Task Close()
+    {
+        if (pr == null) return;
+        pr = await PrService.CloseAsync(pr);
+    }
+
+    private async Task Reopen()
+    {
+        if (pr == null) return;
+        pr = await PrService.ReopenAsync(pr);
+    }
+
+    private async Task AddComment()
+    {
+        if (pr == null || repo == null || string.IsNullOrWhiteSpace(newComment)) return;
+        try
+        {
+            await CommentService.CreateAsync(
+                repo.id, pr.id, nameof(PullRequest),
+                newComment.Trim(), UserId ?? "", UserName ?? "anonymous");
+            newComment = "";
+            comments = await CommentService.GetCommentsAsync(repo.id, pr.id);
+        }
+        catch { }
+    }
+
+    private static string FormatRelativeDate(DateTime date)
+    {
+        var diff = DateTime.UtcNow - date;
+        if (diff.TotalMinutes < 1) return "just now";
+        if (diff.TotalHours < 1) return $"{(int)diff.TotalMinutes}m ago";
+        if (diff.TotalDays < 1) return $"{(int)diff.TotalHours}h ago";
+        if (diff.TotalDays < 30) return $"{(int)diff.TotalDays}d ago";
+        if (diff.TotalDays < 365) return $"{(int)(diff.TotalDays / 30)}mo ago";
+        return $"{(int)(diff.TotalDays / 365)}y ago";
+    }
+}

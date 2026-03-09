@@ -1,0 +1,175 @@
+@page "/{Owner}/{RepoSlug}/commit/{CommitSha}"
+@inject BrowseService BrowseService
+@inject RepositoryService RepoService
+
+<PageTitle>@(commit?.ShortSha ?? "Commit") - @Owner/@RepoSlug - Daisi Git</PageTitle>
+
+<RepositoryLayout Owner="@Owner" RepoSlug="@RepoSlug" ActiveTab="commits">
+    @if (commit != null)
+    {
+        <!-- Commit header -->
+        <div class="card mb-3">
+            <div class="card-body">
+                <h5 class="mb-2">@commit.MessageFirstLine</h5>
+                @{
+                    var extraLines = commit.Message.Contains('\n')
+                        ? commit.Message[(commit.Message.IndexOf('\n') + 1)..].Trim()
+                        : null;
+                }
+                @if (!string.IsNullOrEmpty(extraLines))
+                {
+                    <pre class="text-muted mb-2 dg-commit-body">@extraLines</pre>
+                }
+                <div class="d-flex gap-3 text-muted small">
+                    <span>
+                        <strong>@commit.AuthorName</strong> &lt;@commit.AuthorEmail&gt;
+                    </span>
+                    <span>@commit.AuthorDate.ToString("MMMM d, yyyy 'at' HH:mm UTC")</span>
+                </div>
+                <div class="mt-2">
+                    <code class="text-muted">@commit.Sha</code>
+                    @if (commit.ParentShas.Count > 0)
+                    {
+                        <span class="ms-3 text-muted">
+                            Parent@(commit.ParentShas.Count > 1 ? "s" : ""):
+                            @foreach (var parent in commit.ParentShas)
+                            {
+                                <a href="/@Owner/@RepoSlug/commit/@parent" class="me-1"><code>@parent[..7]</code></a>
+                            }
+                        </span>
+                    }
+                </div>
+            </div>
+        </div>
+
+        <!-- Changed files -->
+        @if (diffs.Count > 0)
+        {
+            <div class="mb-3 text-muted">
+                <strong>@diffs.Count file@(diffs.Count != 1 ? "s" : "") changed</strong>
+                <span class="text-success ms-2">+@diffs.Sum(d => CountLines(d.NewContent))</span>
+                <span class="text-danger ms-1">-@diffs.Sum(d => CountLines(d.OldContent))</span>
+            </div>
+
+            @foreach (var diff in diffs)
+            {
+                <div class="card mb-3">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <span>
+                            @if (diff.Status == DiffStatus.Added)
+                            {
+                                <span class="badge bg-success me-1">A</span>
+                            }
+                            else if (diff.Status == DiffStatus.Deleted)
+                            {
+                                <span class="badge bg-danger me-1">D</span>
+                            }
+                            else
+                            {
+                                <span class="badge bg-warning me-1">M</span>
+                            }
+                            @diff.Path
+                        </span>
+                    </div>
+                    <div class="dg-diff-content">
+                        @if (diff.OldContent == null && diff.NewContent == null)
+                        {
+                            <div class="p-3 text-muted">Binary file</div>
+                        }
+                        else
+                        {
+                            <table class="dg-diff-table">
+                                @if (diff.Status == DiffStatus.Added && diff.NewContent != null)
+                                {
+                                    var lines = diff.NewContent.Split('\n');
+                                    for (var i = 0; i < lines.Length; i++)
+                                    {
+                                        <tr class="dg-diff-added">
+                                            <td class="dg-diff-num"></td>
+                                            <td class="dg-diff-num">@(i + 1)</td>
+                                            <td class="dg-diff-line"><pre>+@lines[i]</pre></td>
+                                        </tr>
+                                    }
+                                }
+                                else if (diff.Status == DiffStatus.Deleted && diff.OldContent != null)
+                                {
+                                    var lines = diff.OldContent.Split('\n');
+                                    for (var i = 0; i < lines.Length; i++)
+                                    {
+                                        <tr class="dg-diff-removed">
+                                            <td class="dg-diff-num">@(i + 1)</td>
+                                            <td class="dg-diff-num"></td>
+                                            <td class="dg-diff-line"><pre>-@lines[i]</pre></td>
+                                        </tr>
+                                    }
+                                }
+                                else
+                                {
+                                    @* Simple side-by-side: show old lines as removed, new lines as added *@
+                                    @if (diff.OldContent != null)
+                                    {
+                                        var oldLines = diff.OldContent.Split('\n');
+                                        for (var i = 0; i < oldLines.Length; i++)
+                                        {
+                                            <tr class="dg-diff-removed">
+                                                <td class="dg-diff-num">@(i + 1)</td>
+                                                <td class="dg-diff-num"></td>
+                                                <td class="dg-diff-line"><pre>-@oldLines[i]</pre></td>
+                                            </tr>
+                                        }
+                                    }
+                                    @if (diff.NewContent != null)
+                                    {
+                                        var newLines = diff.NewContent.Split('\n');
+                                        for (var i = 0; i < newLines.Length; i++)
+                                        {
+                                            <tr class="dg-diff-added">
+                                                <td class="dg-diff-num"></td>
+                                                <td class="dg-diff-num">@(i + 1)</td>
+                                                <td class="dg-diff-line"><pre>+@newLines[i]</pre></td>
+                                            </tr>
+                                        }
+                                    }
+                                }
+                            </table>
+                        }
+                    </div>
+                </div>
+            }
+        }
+    }
+    else if (!loading)
+    {
+        <div class="text-center py-4 text-muted">
+            <p>Commit not found.</p>
+        </div>
+    }
+</RepositoryLayout>
+
+@code {
+    [Parameter] public string Owner { get; set; } = "";
+    [Parameter] public string RepoSlug { get; set; } = "";
+    [Parameter] public string CommitSha { get; set; } = "";
+
+    private CommitInfo? commit;
+    private List<FileDiff> diffs = [];
+    private bool loading = true;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        loading = true;
+        try
+        {
+            var repo = await RepoService.GetRepositoryBySlugAsync(Owner, RepoSlug);
+            if (repo == null) { loading = false; return; }
+
+            commit = await BrowseService.GetCommitAsync(repo.id, CommitSha);
+            if (commit != null)
+                diffs = await BrowseService.GetCommitDiffAsync(repo.id, CommitSha);
+        }
+        catch { }
+        loading = false;
+    }
+
+    private static int CountLines(string? content) => content?.Split('\n').Length ?? 0;
+}

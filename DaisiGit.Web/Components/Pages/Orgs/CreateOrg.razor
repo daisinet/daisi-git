@@ -1,0 +1,73 @@
+@page "/organizations/new"
+@inject OrganizationService OrgService
+@inject NavigationManager Navigation
+
+<PageTitle>New Organization - Daisi Git</PageTitle>
+
+<h4 class="mb-3">Create a new organization</h4>
+
+<div class="card" style="max-width: 600px;">
+    <div class="card-body">
+        <div class="mb-3">
+            <label class="form-label fw-semibold">Organization name</label>
+            <input type="text" class="form-control" @bind="name" placeholder="My Org" />
+        </div>
+
+        <div class="mb-3">
+            <label class="form-label fw-semibold">Description <span class="text-muted fw-normal">(optional)</span></label>
+            <textarea class="form-control" rows="3" @bind="description" placeholder="What is this organization about?"></textarea>
+        </div>
+
+        @if (!string.IsNullOrEmpty(error))
+        {
+            <div class="alert alert-danger">@error</div>
+        }
+
+        <button class="btn btn-success" @onclick="Submit" disabled="@submitting">
+            @if (submitting)
+            {
+                <span class="spinner-border spinner-border-sm me-1"></span>
+            }
+            Create Organization
+        </button>
+    </div>
+</div>
+
+@code {
+    [CascadingParameter(Name = "AccountId")] public string? AccountId { get; set; }
+    [CascadingParameter(Name = "UserId")] public string? UserId { get; set; }
+    [CascadingParameter(Name = "UserName")] public string? UserName { get; set; }
+
+    private string name = "";
+    private string? description;
+    private string? error;
+    private bool submitting;
+
+    private async Task Submit()
+    {
+        error = null;
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            error = "Organization name is required.";
+            return;
+        }
+
+        submitting = true;
+        try
+        {
+            var org = await OrgService.CreateAsync(
+                AccountId ?? "", name.Trim(), description?.Trim(),
+                UserId ?? "", UserName ?? "anonymous");
+
+            Navigation.NavigateTo($"/org/{org.Slug}");
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+        }
+        finally
+        {
+            submitting = false;
+        }
+    }
+}

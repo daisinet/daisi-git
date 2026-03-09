@@ -1,0 +1,129 @@
+@page "/{Owner}/{RepoSlug}/pulls"
+@inject PullRequestService PrService
+@inject RepositoryService RepoService
+
+<PageTitle>Pull Requests - @Owner/@RepoSlug - Daisi Git</PageTitle>
+
+<RepositoryLayout Owner="@Owner" RepoSlug="@RepoSlug" ActiveTab="pulls">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <div class="btn-group btn-group-sm">
+            <button class="btn @(showOpen ? "btn-primary" : "btn-outline-secondary")" @onclick="() => SetFilter(true)">
+                <i class="fa-duotone fa-code-pull-request me-1"></i> Open
+                @if (openCount > 0) { <span class="badge bg-light text-dark ms-1">@openCount</span> }
+            </button>
+            <button class="btn @(!showOpen ? "btn-primary" : "btn-outline-secondary")" @onclick="() => SetFilter(false)">
+                <i class="fa-duotone fa-check me-1"></i> Closed
+                @if (closedCount > 0) { <span class="badge bg-light text-dark ms-1">@closedCount</span> }
+            </button>
+        </div>
+        <a href="/@Owner/@RepoSlug/pulls/new" class="btn btn-sm btn-success">
+            <i class="fa-duotone fa-plus me-1"></i> New Pull Request
+        </a>
+    </div>
+
+    @if (pullRequests.Count > 0)
+    {
+        <div class="list-group">
+            @foreach (var pr in pullRequests)
+            {
+                <a href="/@Owner/@RepoSlug/pull/@pr.Number" class="list-group-item list-group-item-action">
+                    <div class="d-flex justify-content-between align-items-start">
+                        <div>
+                            <div class="fw-semibold">
+                                @if (pr.Status == PullRequestStatus.Open)
+                                {
+                                    <i class="fa-duotone fa-code-pull-request text-success me-1"></i>
+                                }
+                                else if (pr.Status == PullRequestStatus.Merged)
+                                {
+                                    <i class="fa-duotone fa-code-merge text-purple me-1"></i>
+                                }
+                                else
+                                {
+                                    <i class="fa-duotone fa-code-pull-request text-danger me-1"></i>
+                                }
+                                @pr.Title
+                                @foreach (var label in pr.Labels)
+                                {
+                                    <span class="badge bg-secondary ms-1">@label</span>
+                                }
+                            </div>
+                            <div class="text-muted small mt-1">
+                                #@pr.Number opened @FormatRelativeDate(pr.CreatedUtc) by @pr.AuthorName
+                                · @pr.SourceBranch → @pr.TargetBranch
+                            </div>
+                        </div>
+                        <div class="text-muted small text-nowrap">
+                            @if (pr.CommentCount > 0)
+                            {
+                                <i class="fa-duotone fa-comment me-1"></i>@pr.CommentCount
+                            }
+                        </div>
+                    </div>
+                </a>
+            }
+        </div>
+    }
+    else if (!loading)
+    {
+        <div class="text-center py-4 text-muted">
+            <i class="fa-duotone fa-code-pull-request fa-2x mb-2"></i>
+            <p>No @(showOpen ? "open" : "closed") pull requests.</p>
+        </div>
+    }
+</RepositoryLayout>
+
+@code {
+    [Parameter] public string Owner { get; set; } = "";
+    [Parameter] public string RepoSlug { get; set; } = "";
+
+    private List<PullRequest> pullRequests = [];
+    private bool loading = true;
+    private bool showOpen = true;
+    private int openCount;
+    private int closedCount;
+    private string? repoId;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        loading = true;
+        try
+        {
+            var repo = await RepoService.GetRepositoryBySlugAsync(Owner, RepoSlug);
+            if (repo == null) { loading = false; return; }
+            repoId = repo.id;
+
+            var open = await PrService.ListAsync(repo.id, PullRequestStatus.Open);
+            var closed = await PrService.ListAsync(repo.id, PullRequestStatus.Closed);
+            var merged = await PrService.ListAsync(repo.id, PullRequestStatus.Merged);
+
+            openCount = open.Count;
+            closedCount = closed.Count + merged.Count;
+
+            pullRequests = showOpen ? open : [..closed, ..merged];
+        }
+        catch { }
+        loading = false;
+    }
+
+    private async Task SetFilter(bool open)
+    {
+        showOpen = open;
+        if (repoId == null) return;
+
+        pullRequests = showOpen
+            ? await PrService.ListAsync(repoId, PullRequestStatus.Open)
+            : [..await PrService.ListAsync(repoId, PullRequestStatus.Closed), ..await PrService.ListAsync(repoId, PullRequestStatus.Merged)];
+    }
+
+    private static string FormatRelativeDate(DateTime date)
+    {
+        var diff = DateTime.UtcNow - date;
+        if (diff.TotalMinutes < 1) return "just now";
+        if (diff.TotalHours < 1) return $"{(int)diff.TotalMinutes}m ago";
+        if (diff.TotalDays < 1) return $"{(int)diff.TotalHours}h ago";
+        if (diff.TotalDays < 30) return $"{(int)diff.TotalDays}d ago";
+        if (diff.TotalDays < 365) return $"{(int)(diff.TotalDays / 30)}mo ago";
+        return $"{(int)(diff.TotalDays / 365)}y ago";
+    }
+}

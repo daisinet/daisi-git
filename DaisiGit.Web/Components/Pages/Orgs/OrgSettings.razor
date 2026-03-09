@@ -1,0 +1,99 @@
+@page "/org/{Slug}/settings"
+@inject OrganizationService OrgService
+@inject NavigationManager Navigation
+
+<PageTitle>Settings - @(org?.Name ?? "Organization") - Daisi Git</PageTitle>
+
+@if (org != null)
+{
+    <h4 class="mb-3">
+        <a href="/org/@Slug" class="text-decoration-none text-muted">@org.Name</a>
+        <span class="text-muted">/</span> Settings
+    </h4>
+
+    <div class="card" style="max-width: 600px;">
+        <div class="card-body">
+            <div class="mb-3">
+                <label class="form-label fw-semibold">Organization name</label>
+                <input type="text" class="form-control" @bind="name" />
+            </div>
+
+            <div class="mb-3">
+                <label class="form-label fw-semibold">Description</label>
+                <textarea class="form-control" rows="3" @bind="description"></textarea>
+            </div>
+
+            @if (!string.IsNullOrEmpty(error))
+            {
+                <div class="alert alert-danger">@error</div>
+            }
+            @if (saved)
+            {
+                <div class="alert alert-success">Settings saved.</div>
+            }
+
+            <button class="btn btn-primary" @onclick="Save" disabled="@saving">
+                @if (saving)
+                {
+                    <span class="spinner-border spinner-border-sm me-1"></span>
+                }
+                Save Changes
+            </button>
+        </div>
+    </div>
+}
+else if (!loading)
+{
+    <div class="text-center py-4 text-muted">
+        <p>Organization not found.</p>
+    </div>
+}
+
+@code {
+    [Parameter] public string Slug { get; set; } = "";
+
+    private GitOrganization? org;
+    private string name = "";
+    private string? description;
+    private string? error;
+    private bool loading = true;
+    private bool saving;
+    private bool saved;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        loading = true;
+        try
+        {
+            org = await OrgService.GetBySlugAsync(Slug);
+            if (org != null)
+            {
+                name = org.Name;
+                description = org.Description;
+            }
+        }
+        catch { }
+        loading = false;
+    }
+
+    private async Task Save()
+    {
+        error = null;
+        saved = false;
+        if (org == null || string.IsNullOrWhiteSpace(name)) { error = "Name is required."; return; }
+
+        saving = true;
+        try
+        {
+            org.Name = name.Trim();
+            org.Description = description?.Trim();
+            org = await OrgService.UpdateAsync(org);
+            saved = true;
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+        }
+        saving = false;
+    }
+}

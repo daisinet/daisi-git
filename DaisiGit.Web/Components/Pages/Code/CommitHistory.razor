@@ -1,0 +1,146 @@
+@page "/{Owner}/{RepoSlug}/commits/{Branch}"
+@inject BrowseService BrowseService
+@inject RepositoryService RepoService
+
+<PageTitle>Commits - @Owner/@RepoSlug - Daisi Git</PageTitle>
+
+<RepositoryLayout Owner="@Owner" RepoSlug="@RepoSlug" ActiveTab="commits" SelectedBranch="@Branch">
+    @if (commits.Count > 0)
+    {
+        <div class="d-flex align-items-center gap-2 mb-3">
+            <div class="dropdown">
+                <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown">
+                    <i class="fa-duotone fa-code-branch me-1"></i> @Branch
+                </button>
+                <ul class="dropdown-menu">
+                    @foreach (var b in branches)
+                    {
+                        <li>
+                            <a class="dropdown-item @(b == Branch ? "active" : "")"
+                               href="/@Owner/@RepoSlug/commits/@b">@b</a>
+                        </li>
+                    }
+                </ul>
+            </div>
+            <span class="text-muted">@commits.Count commit@(commits.Count != 1 ? "s" : "")</span>
+        </div>
+
+        <div class="dg-commit-list">
+            @{
+                string? lastDate = null;
+            }
+            @foreach (var commit in commits)
+            {
+                var dateGroup = commit.AuthorDate.ToString("MMMM d, yyyy");
+                if (dateGroup != lastDate)
+                {
+                    lastDate = dateGroup;
+                    <div class="dg-commit-date-header">
+                        <i class="fa-duotone fa-calendar me-1"></i> @dateGroup
+                    </div>
+                }
+                <div class="card mb-2">
+                    <div class="card-body py-2 px-3 d-flex justify-content-between align-items-center">
+                        <div class="text-truncate me-3">
+                            <a href="/@Owner/@RepoSlug/commit/@commit.Sha" class="fw-semibold text-decoration-none">
+                                @commit.MessageFirstLine
+                            </a>
+                            <div class="text-muted small">
+                                <strong>@commit.AuthorName</strong> committed @FormatRelativeDate(commit.AuthorDate)
+                            </div>
+                        </div>
+                        <div class="text-nowrap">
+                            <a href="/@Owner/@RepoSlug/commit/@commit.Sha" class="btn btn-sm btn-outline-secondary">
+                                <code>@commit.ShortSha</code>
+                            </a>
+                            <a href="/@Owner/@RepoSlug/tree/@commit.Sha" class="btn btn-sm btn-outline-secondary" title="Browse files at this commit">
+                                <i class="fa-duotone fa-code"></i>
+                            </a>
+                        </div>
+                    </div>
+                </div>
+            }
+        </div>
+
+        @if (hasMore)
+        {
+            <div class="text-center mt-3">
+                <button class="btn btn-outline-primary" @onclick="LoadMore" disabled="@loadingMore">
+                    @if (loadingMore)
+                    {
+                        <span class="spinner-border spinner-border-sm me-1"></span>
+                    }
+                    Load more
+                </button>
+            </div>
+        }
+    }
+    else if (!loading)
+    {
+        <div class="text-center py-4 text-muted">
+            <p>No commits found.</p>
+        </div>
+    }
+</RepositoryLayout>
+
+@code {
+    [Parameter] public string Owner { get; set; } = "";
+    [Parameter] public string RepoSlug { get; set; } = "";
+    [Parameter] public string Branch { get; set; } = "main";
+
+    private List<CommitInfo> commits = [];
+    private List<string> branches = [];
+    private bool loading = true;
+    private bool loadingMore;
+    private bool hasMore;
+    private string? repoId;
+    private string? startSha;
+    private const int PageSize = 30;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        loading = true;
+        try
+        {
+            var repo = await RepoService.GetRepositoryBySlugAsync(Owner, RepoSlug);
+            if (repo == null) { loading = false; return; }
+            repoId = repo.id;
+
+            var branchInfos = await BrowseService.GetBranchesAsync(repo.id, repo.DefaultBranch);
+            branches = branchInfos.Select(b => b.Name).ToList();
+
+            startSha = await BrowseService.ResolveRefAsync(repo.id, Branch);
+            if (startSha == null) { loading = false; return; }
+
+            commits = await BrowseService.GetCommitLogAsync(repo.id, startSha, PageSize);
+            hasMore = commits.Count == PageSize;
+        }
+        catch { }
+        loading = false;
+    }
+
+    private async Task LoadMore()
+    {
+        if (repoId == null || startSha == null) return;
+        loadingMore = true;
+        try
+        {
+            var more = await BrowseService.GetCommitLogAsync(repoId, startSha, PageSize, commits.Count);
+            commits.AddRange(more);
+            hasMore = more.Count == PageSize;
+        }
+        catch { }
+        loadingMore = false;
+    }
+
+    private static string FormatRelativeDate(DateTimeOffset date)
+    {
+        var diff = DateTimeOffset.UtcNow - date;
+        if (diff.TotalMinutes < 1) return "just now";
+        if (diff.TotalHours < 1) return $"{(int)diff.TotalMinutes}m ago";
+        if (diff.TotalDays < 1) return $"{(int)diff.TotalHours}h ago";
+        if (diff.TotalDays < 30) return $"{(int)diff.TotalDays}d ago";
+        if (diff.TotalDays < 365) return $"{(int)(diff.TotalDays / 30)}mo ago";
+        return $"{(int)(diff.TotalDays / 365)}y ago";
+    }
+}

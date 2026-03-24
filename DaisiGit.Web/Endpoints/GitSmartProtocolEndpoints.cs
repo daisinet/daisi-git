@@ -247,7 +247,7 @@ public static class GitSmartProtocolEndpoints
         if (packData.Length > 0)
         {
             var entries = PackFile.Parse(packData);
-            await StorePackEntriesAsync(repository.id, repository.DriveRepositoryId, entries, objectStore);
+            await StorePackEntriesAsync(repository, entries, objectStore);
         }
 
         // Apply ref updates
@@ -357,7 +357,7 @@ public static class GitSmartProtocolEndpoints
     /// Stores all entries from a parsed pack file.
     /// </summary>
     private static async Task StorePackEntriesAsync(
-        string repositoryId, string driveRepositoryId,
+        GitRepository repository,
         List<PackEntry> entries, GitObjectStore objectStore)
     {
         // First pass: store non-delta objects and build SHA map
@@ -385,7 +385,7 @@ public static class GitSmartProtocolEndpoints
 
                 entry.Sha = ObjectHasher.HashRaw(raw);
                 resolved[entry.Sha] = entry.Data;
-                await objectStore.StoreRawObjectAsync(repositoryId, driveRepositoryId, raw, typeStr);
+                await objectStore.StoreRawObjectAsync(repository, raw, typeStr);
             }
         }
 
@@ -404,7 +404,7 @@ public static class GitSmartProtocolEndpoints
                 else if (entry.BaseSha != null)
                 {
                     // Try to fetch from store
-                    var baseObj = await objectStore.GetObjectAsync(repositoryId, entry.BaseSha);
+                    var baseObj = await objectStore.GetObjectAsync(repository.id, entry.BaseSha);
                     if (baseObj != null)
                         baseData = baseObj.SerializeContent();
                 }
@@ -416,7 +416,7 @@ public static class GitSmartProtocolEndpoints
                     var typeStr = "blob"; // Default
                     if (entry.BaseSha != null)
                     {
-                        var baseRaw = await objectStore.GetRawObjectAsync(repositoryId, entry.BaseSha);
+                        var baseRaw = await objectStore.GetRawObjectAsync(repository.id, entry.BaseSha);
                         if (baseRaw != null)
                         {
                             var (baseType, _, _) = ObjectHasher.ParseRawObject(baseRaw);
@@ -431,7 +431,7 @@ public static class GitSmartProtocolEndpoints
 
                     entry.Sha = ObjectHasher.HashRaw(raw);
                     resolved[entry.Sha] = result;
-                    await objectStore.StoreRawObjectAsync(repositoryId, driveRepositoryId, raw, typeStr);
+                    await objectStore.StoreRawObjectAsync(repository, raw, typeStr);
                 }
             }
         }

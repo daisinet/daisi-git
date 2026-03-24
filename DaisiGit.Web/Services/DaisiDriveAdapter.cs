@@ -1,4 +1,5 @@
 using Daisi.SDK.Clients.V1.Orc;
+using DaisiGit.Core.Enums;
 using DaisiGit.Services;
 
 namespace DaisiGit.Web.Services;
@@ -6,8 +7,9 @@ namespace DaisiGit.Web.Services;
 /// <summary>
 /// Adapts the Daisi Drive SDK client for git object storage.
 /// </summary>
-public class DaisiDriveAdapter(DriveClientFactory driveClientFactory) : IDriveAdapter
+public class DaisiDriveAdapter(DriveClientFactory driveClientFactory) : IStorageAdapter
 {
+    public StorageProvider ProviderType => StorageProvider.DaisiDrive;
     private readonly DriveClient _driveClient = driveClientFactory.Create();
 
     public async Task<string> CreateRepositoryAsync(string name)

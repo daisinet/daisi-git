@@ -1,5 +1,6 @@
 @page "/new"
 @inject RepositoryService RepoService
+@inject AccountSettingsService SettingsService
 @inject NavigationManager Nav
 
 <PageTitle>New Repository - Daisi Git</PageTitle>
@@ -25,7 +26,7 @@
                 <InputText @bind-Value="model.Description" class="form-control" placeholder="A short description of your project" />
             </div>
 
-            <div class="mb-4">
+            <div class="mb-3">
                 <label class="form-label">Visibility</label>
                 <InputSelect @bind-Value="model.Visibility" class="form-select">
                     <option value="@GitRepoVisibility.Private">Private</option>
@@ -45,6 +46,18 @@
                             <text>Anyone can see this repository.</text>
                             break;
                     }
+                </div>
+            </div>
+
+            <div class="mb-4">
+                <label class="form-label">Storage provider</label>
+                <InputSelect @bind-Value="model.StorageProvider" class="form-select">
+                    <option value="">Account default (@accountDefault)</option>
+                    <option value="@StorageProvider.DaisiDrive">Daisi Drive</option>
+                    <option value="@StorageProvider.AzureBlob">Azure Blob Storage</option>
+                </InputSelect>
+                <div class="form-text">
+                    Where git objects are stored. Leave as account default unless you have a specific need.
                 </div>
             </div>
 
@@ -71,6 +84,7 @@
 
     private CreateRepoModel model = new();
     private string slug = "";
+    private string accountDefault = "Daisi Drive";
     private string? errorMessage;
     private bool submitting;
 
@@ -81,9 +95,19 @@
             name.ToLowerInvariant().Trim(), @"[^a-z0-9\-]", "-").Trim('-');
     }
 
-    protected override void OnInitialized()
+    protected override async Task OnInitializedAsync()
     {
         model.PropertyChanged += (_, _) => { slug = ComputeSlug(model.Name); StateHasChanged(); };
+
+        if (!string.IsNullOrEmpty(AccountId))
+        {
+            var settings = await SettingsService.GetSettingsAsync(AccountId);
+            accountDefault = settings.DefaultStorageProvider switch
+            {
+                StorageProvider.AzureBlob => "Azure Blob Storage",
+                _ => "Daisi Drive"
+            };
+        }
     }
 
     private async Task HandleSubmit()
@@ -101,7 +125,8 @@
         {
             var repo = await RepoService.CreateRepositoryAsync(
                 AccountId, UserId, userName,
-                model.Name.Trim(), model.Description?.Trim(), model.Visibility);
+                model.Name.Trim(), model.Description?.Trim(), model.Visibility,
+                model.StorageProvider);
 
             Nav.NavigateTo($"/{repo.OwnerName}/{repo.Slug}");
         }
@@ -142,6 +167,8 @@
             get => _visibility;
             set { _visibility = value; PropertyChanged?.Invoke(this, new(nameof(Visibility))); }
         }
+
+        public StorageProvider? StorageProvider { get; set; }
 
         public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
     }

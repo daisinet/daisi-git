@@ -64,7 +64,7 @@ public class MergeService(
                 Committer = signature,
                 Message = $"{pr.Title} (#{pr.Number})\n\nSquash merge of '{pr.SourceBranch}' into '{pr.TargetBranch}'\n"
             };
-            mergeCommitSha = await objectStore.StoreObjectAsync(repo.id, repo.DriveRepositoryId, squashCommit);
+            mergeCommitSha = await objectStore.StoreObjectAsync(repo, squashCommit);
         }
         else
         {
@@ -84,7 +84,7 @@ public class MergeService(
                 Committer = signature,
                 Message = $"Merge pull request #{pr.Number} from {pr.SourceBranch}\n\n{pr.Title}\n"
             };
-            mergeCommitSha = await objectStore.StoreObjectAsync(repo.id, repo.DriveRepositoryId, mergeCommit);
+            mergeCommitSha = await objectStore.StoreObjectAsync(repo, mergeCommit);
         }
 
         // Update target branch ref

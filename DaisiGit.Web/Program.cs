@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using Azure.Storage.Blobs;
 using DaisiGit.Data;
 using DaisiGit.Services;
 using DaisiGit.Web.Components;
@@ -25,8 +26,15 @@ builder.Services.AddDaisiForWeb()
 builder.Services.AddSingleton<DaisiGitCosmo>(sp =>
     new DaisiGitCosmo(builder.Configuration));
 
-// Drive adapter
-builder.Services.AddScoped<IDriveAdapter, DaisiDriveAdapter>();
+// Storage adapters
+builder.Services.AddScoped<IStorageAdapter, DaisiDriveAdapter>();
+var azureBlobConnectionString = builder.Configuration["AzureBlob:ConnectionString"];
+if (!string.IsNullOrEmpty(azureBlobConnectionString))
+{
+    builder.Services.AddSingleton(new BlobServiceClient(azureBlobConnectionString));
+    builder.Services.AddScoped<IStorageAdapter, AzureBlobStorageAdapter>();
+}
+builder.Services.AddScoped<StorageAdapterFactory>();
 
 // Git services
 builder.Services.AddScoped<GitObjectStore>();
@@ -41,6 +49,7 @@ builder.Services.AddScoped<OrganizationService>();
 builder.Services.AddScoped<TeamService>();
 builder.Services.AddScoped<PermissionService>();
 builder.Services.AddScoped<ReviewService>();
+builder.Services.AddScoped<AccountSettingsService>();
 builder.Services.AddScoped<DaisiUserService>();
 
 // JSON enum serialization for API endpoints

@@ -65,6 +65,10 @@ public static class DaisiGitApiEndpoints
 
         // Explore
         api.MapGet("/explore", ExploreRepositories);
+
+        // Account settings
+        api.MapGet("/account/settings", GetAccountSettings);
+        api.MapPut("/account/settings/storage", SetDefaultStorageProvider);
     }
 
     // ── Repository endpoints ──
@@ -91,7 +95,7 @@ public static class DaisiGitApiEndpoints
         var userName = GetUserName(ctx);
         var repo = await repoService.CreateRepositoryAsync(
             GetAccountId(ctx), userId, userName,
-            req.Name, req.Description, req.Visibility);
+            req.Name, req.Description, req.Visibility, req.StorageProvider);
         return Results.Created($"/api/git/repos/{repo.OwnerName}/{repo.Slug}", RepoDto(repo));
     }
 
@@ -527,6 +531,32 @@ public static class DaisiGitApiEndpoints
         return Results.Ok(repos.Select(RepoDto));
     }
 
+    // ── Account settings endpoints ──
+
+    private static async Task<IResult> GetAccountSettings(
+        HttpContext ctx, AccountSettingsService settingsService)
+    {
+        var settings = await settingsService.GetSettingsAsync(GetAccountId(ctx));
+        return Results.Ok(new
+        {
+            settings.DefaultStorageProvider,
+            settings.CreatedUtc,
+            settings.UpdatedUtc
+        });
+    }
+
+    private static async Task<IResult> SetDefaultStorageProvider(
+        HttpContext ctx, SetStorageProviderRequest req, AccountSettingsService settingsService)
+    {
+        var settings = await settingsService.SetDefaultStorageProviderAsync(
+            GetAccountId(ctx), req.Provider);
+        return Results.Ok(new
+        {
+            settings.DefaultStorageProvider,
+            settings.UpdatedUtc
+        });
+    }
+
     // ── Helpers ──
 
     private static string GetUserId(HttpContext ctx) => ctx.Items["userId"] as string ?? "";
@@ -542,6 +572,7 @@ public static class DaisiGitApiEndpoints
         r.Description,
         r.DefaultBranch,
         Visibility = r.Visibility.ToString(),
+        StorageProvider = r.StorageProvider?.ToString(),
         r.IsEmpty,
         r.StarCount,
         r.ForkCount,
@@ -554,7 +585,8 @@ public static class DaisiGitApiEndpoints
 
 // ── Request DTOs ──
 
-public record CreateRepoRequest(string Name, string? Description, GitRepoVisibility Visibility = GitRepoVisibility.Private);
+public record CreateRepoRequest(string Name, string? Description, GitRepoVisibility Visibility = GitRepoVisibility.Private, StorageProvider? StorageProvider = null);
+public record SetStorageProviderRequest(StorageProvider Provider);
 public record CreateIssueRequest(string Title, string? Description, List<string>? Labels = null);
 public record UpdateIssueRequest(string? Title = null, string? Description = null, string? Action = null);
 public record CreatePrRequest(string Title, string? Description, string SourceBranch, string TargetBranch, List<string>? Labels = null);

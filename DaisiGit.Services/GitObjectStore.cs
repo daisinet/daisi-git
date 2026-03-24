@@ -1,3 +1,4 @@
+using DaisiGit.Core.Enums;
 using DaisiGit.Core.Git;
 using DaisiGit.Core.Models;
 using DaisiGit.Data;
@@ -5,40 +6,39 @@ using DaisiGit.Data;
 namespace DaisiGit.Services;
 
 /// <summary>
-/// Stores and retrieves git objects via Drive (storage) + Cosmos (SHA→FileId mapping).
+/// Stores and retrieves git objects via a storage backend + Cosmos (SHA→FileId mapping).
+/// Writes resolve the storage backend per-repository; reads use the provider stored on each object record.
 /// </summary>
-public class GitObjectStore(DaisiGitCosmo cosmo, IDriveAdapter drive)
+public class GitObjectStore(DaisiGitCosmo cosmo, StorageAdapterFactory storageFactory)
 {
     /// <summary>
-    /// Stores a git object: zlib-compress, upload to Drive, record SHA→FileId in Cosmos.
+    /// Stores a git object: zlib-compress, upload to storage, record SHA→FileId in Cosmos.
     /// Returns the SHA.
     /// </summary>
-    public async Task<string> StoreObjectAsync(string repositoryId, string driveRepositoryId, GitObject obj)
+    public async Task<string> StoreObjectAsync(GitRepository repo, GitObject obj)
     {
         var sha = ObjectHasher.HashObject(obj);
         obj.Sha = sha;
 
-        // Check if already exists
-        var existing = await cosmo.GetObjectRecordAsync(sha, repositoryId);
+        var existing = await cosmo.GetObjectRecordAsync(sha, repo.id);
         if (existing != null)
             return sha;
 
-        // Serialize and compress
         var raw = obj.Serialize();
         var compressed = ObjectHasher.ZlibCompress(raw);
 
-        // Upload to Drive
+        var drive = await storageFactory.GetAdapterAsync(repo);
         var path = $"/objects/{sha[..2]}/{sha[2..]}";
-        var driveFileId = await drive.UploadAsync(driveRepositoryId, path, compressed);
+        var fileId = await drive.UploadAsync(repo.DriveRepositoryId, path, compressed);
 
-        // Record mapping
         await cosmo.UpsertObjectRecordAsync(new GitObjectRecord
         {
             id = sha,
-            RepositoryId = repositoryId,
-            DriveFileId = driveFileId,
+            RepositoryId = repo.id,
+            DriveFileId = fileId,
             ObjectType = obj.TypeString,
-            SizeBytes = compressed.Length
+            SizeBytes = compressed.Length,
+            StorageProvider = drive.ProviderType
         });
 
         return sha;
@@ -47,25 +47,27 @@ public class GitObjectStore(DaisiGitCosmo cosmo, IDriveAdapter drive)
     /// <summary>
     /// Stores a raw git object (already serialized with header, not yet compressed).
     /// </summary>
-    public async Task<string> StoreRawObjectAsync(string repositoryId, string driveRepositoryId, byte[] rawObject, string objectType)
+    public async Task<string> StoreRawObjectAsync(GitRepository repo, byte[] rawObject, string objectType)
     {
         var sha = ObjectHasher.HashRaw(rawObject);
 
-        var existing = await cosmo.GetObjectRecordAsync(sha, repositoryId);
+        var existing = await cosmo.GetObjectRecordAsync(sha, repo.id);
         if (existing != null)
             return sha;
 
         var compressed = ObjectHasher.ZlibCompress(rawObject);
+        var drive = await storageFactory.GetAdapterAsync(repo);
         var path = $"/objects/{sha[..2]}/{sha[2..]}";
-        var driveFileId = await drive.UploadAsync(driveRepositoryId, path, compressed);
+        var fileId = await drive.UploadAsync(repo.DriveRepositoryId, path, compressed);
 
         await cosmo.UpsertObjectRecordAsync(new GitObjectRecord
         {
             id = sha,
-            RepositoryId = repositoryId,
-            DriveFileId = driveFileId,
+            RepositoryId = repo.id,
+            DriveFileId = fileId,
             ObjectType = objectType,
-            SizeBytes = compressed.Length
+            SizeBytes = compressed.Length,
+            StorageProvider = drive.ProviderType
         });
 
         return sha;
@@ -73,6 +75,7 @@ public class GitObjectStore(DaisiGitCosmo cosmo, IDriveAdapter drive)
 
     /// <summary>
     /// Retrieves a git object by SHA. Returns null if not found.
+    /// Uses the StorageProvider recorded on the object to select the correct adapter.
     /// </summary>
     public async Task<GitObject?> GetObjectAsync(string repositoryId, string sha)
     {
@@ -80,6 +83,7 @@ public class GitObjectStore(DaisiGitCosmo cosmo, IDriveAdapter drive)
         if (record == null)
             return null;
 
+        var drive = storageFactory.GetAdapter(record.StorageProvider);
         var compressed = await drive.DownloadAsync(record.DriveFileId);
         var raw = ObjectHasher.ZlibDecompress(compressed);
         return ObjectHasher.ParseObject(raw);
@@ -94,6 +98,7 @@ public class GitObjectStore(DaisiGitCosmo cosmo, IDriveAdapter drive)
         if (record == null)
             return null;
 
+        var drive = storageFactory.GetAdapter(record.StorageProvider);
         var compressed = await drive.DownloadAsync(record.DriveFileId);
         return ObjectHasher.ZlibDecompress(compressed);
     }

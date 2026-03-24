@@ -1,4 +1,5 @@
 using System.Text;
+using DaisiGit.Core.Enums;
 using DaisiGit.Core.Git;
 using DaisiGit.Core.Git.Pack;
 using DaisiGit.Core.Git.Protocol;
@@ -206,7 +207,8 @@ public static class GitSmartProtocolEndpoints
         RepositoryService repoService,
         GitRefService refService,
         GitObjectStore objectStore,
-        PermissionService permissionService)
+        PermissionService permissionService,
+        GitEventService events)
     {
         var repository = await repoService.GetRepositoryBySlugAsync(owner, repo);
         if (repository == null)
@@ -274,6 +276,42 @@ public static class GitSmartProtocolEndpoints
         {
             repository.IsEmpty = false;
             await repoService.UpdateRepositoryAsync(repository);
+        }
+
+        // Emit events for each successful ref update
+        var zeroSha = new string('0', 40);
+        var userName = ctx.Items["userName"] as string ?? "";
+        foreach (var (oldSha, newSha, refName) in refUpdates)
+        {
+            var isCreate = oldSha == zeroSha;
+            var isDelete = newSha == zeroSha;
+            var isBranch = refName.StartsWith("refs/heads/");
+            var isTag = refName.StartsWith("refs/tags/");
+            var shortName = refName.Replace("refs/heads/", "").Replace("refs/tags/", "");
+
+            var eventType = (isBranch, isCreate, isDelete) switch
+            {
+                (true, true, false) => GitTriggerType.BranchCreated,
+                (true, false, true) => GitTriggerType.BranchDeleted,
+                (true, false, false) => GitTriggerType.PushToRef,
+                _ when isTag && isCreate => GitTriggerType.TagCreated,
+                _ when isTag && isDelete => GitTriggerType.TagDeleted,
+                _ => GitTriggerType.PushToRef
+            };
+
+            var payload = new Dictionary<string, string>
+            {
+                ["push.ref"] = refName,
+                ["push.branch"] = isBranch ? shortName : "",
+                ["push.tag"] = isTag ? shortName : "",
+                ["push.oldSha"] = oldSha,
+                ["push.newSha"] = newSha,
+                ["push.isCreate"] = isCreate.ToString(),
+                ["push.isDelete"] = isDelete.ToString()
+            };
+
+            await events.EmitAsync(repository.AccountId, repository.id, eventType,
+                userId, userName, payload);
         }
 
         // Send report

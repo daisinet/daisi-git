@@ -7,68 +7,89 @@ namespace DaisiGit.Web.Endpoints;
 
 /// <summary>
 /// REST API endpoints for DaisiGit. Used by the SDK and secure tool provider.
-/// All endpoints are prefixed with /api/git/.
+/// All repo-scoped endpoints verify the authenticated user has appropriate permissions.
 /// </summary>
 public static class DaisiGitApiEndpoints
 {
     public static void MapDaisiGitApiEndpoints(this WebApplication app)
     {
+        // Authenticated endpoints (mutations + user-specific)
         var api = app.MapGroup("/api/git").RequireAuthorization();
 
-        // Repositories
-        api.MapGet("/repos", ListRepositories);
-        api.MapGet("/repos/{owner}/{slug}", GetRepository);
+        // Repositories (create requires auth; get/list allow anonymous for public repos)
         api.MapPost("/repos", CreateRepository);
+        api.MapGet("/repos", ListRepositories);
 
-        // Branches
-        api.MapGet("/repos/{owner}/{slug}/branches", ListBranches);
-
-        // File browsing
-        api.MapGet("/repos/{owner}/{slug}/tree/{branch}/{**path}", GetTree);
-        api.MapGet("/repos/{owner}/{slug}/blob/{branch}/{**path}", GetBlob);
-
-        // Commits
-        api.MapGet("/repos/{owner}/{slug}/commits/{branch}", ListCommits);
-        api.MapGet("/repos/{owner}/{slug}/commit/{sha}", GetCommit);
-
-        // Issues
-        api.MapGet("/repos/{owner}/{slug}/issues", ListIssues);
-        api.MapGet("/repos/{owner}/{slug}/issues/{number:int}", GetIssue);
+        // Issues (create/update require auth)
         api.MapPost("/repos/{owner}/{slug}/issues", CreateIssue);
         api.MapPatch("/repos/{owner}/{slug}/issues/{number:int}", UpdateIssue);
 
-        // Pull requests
-        api.MapGet("/repos/{owner}/{slug}/pulls", ListPullRequests);
-        api.MapGet("/repos/{owner}/{slug}/pulls/{number:int}", GetPullRequest);
+        // Pull requests (create/update/merge require auth)
         api.MapPost("/repos/{owner}/{slug}/pulls", CreatePullRequest);
         api.MapPatch("/repos/{owner}/{slug}/pulls/{number:int}", UpdatePullRequest);
         api.MapPost("/repos/{owner}/{slug}/pulls/{number:int}/merge", MergePullRequest);
 
-        // Comments (on issues and PRs)
-        api.MapGet("/repos/{owner}/{slug}/issues/{number:int}/comments", ListIssueComments);
+        // Comments (create requires auth)
         api.MapPost("/repos/{owner}/{slug}/issues/{number:int}/comments", CreateIssueComment);
-        api.MapGet("/repos/{owner}/{slug}/pulls/{number:int}/comments", ListPrComments);
         api.MapPost("/repos/{owner}/{slug}/pulls/{number:int}/comments", CreatePrComment);
 
-        // Reviews
-        api.MapGet("/repos/{owner}/{slug}/pulls/{number:int}/reviews", ListReviews);
+        // Reviews (submit requires auth)
         api.MapPost("/repos/{owner}/{slug}/pulls/{number:int}/reviews", SubmitReview);
-        api.MapGet("/repos/{owner}/{slug}/pulls/{number:int}/diff-comments", ListDiffComments);
 
-        // Forks
+        // Forks (create requires auth)
         api.MapPost("/repos/{owner}/{slug}/forks", ForkRepository);
-        api.MapGet("/repos/{owner}/{slug}/forks", ListForks);
 
-        // Stars
+        // Stars (require auth)
         api.MapPut("/repos/{owner}/{slug}/star", StarRepository);
         api.MapDelete("/repos/{owner}/{slug}/star", UnstarRepository);
 
-        // Explore
-        api.MapGet("/explore", ExploreRepositories);
-
-        // Account settings
+        // Account settings (require auth)
         api.MapGet("/account/settings", GetAccountSettings);
         api.MapPut("/account/settings/storage", SetDefaultStorageProvider);
+
+        // Anonymous-allowed endpoints (read-only; permission check handles public vs private)
+        var pub = app.MapGroup("/api/git");
+
+        pub.MapGet("/repos/{owner}/{slug}", GetRepository);
+        pub.MapGet("/repos/{owner}/{slug}/branches", ListBranches);
+        pub.MapGet("/repos/{owner}/{slug}/tree/{branch}/{**path}", GetTree);
+        pub.MapGet("/repos/{owner}/{slug}/blob/{branch}/{**path}", GetBlob);
+        pub.MapGet("/repos/{owner}/{slug}/commits/{branch}", ListCommits);
+        pub.MapGet("/repos/{owner}/{slug}/commit/{sha}", GetCommit);
+        pub.MapGet("/repos/{owner}/{slug}/issues", ListIssues);
+        pub.MapGet("/repos/{owner}/{slug}/issues/{number:int}", GetIssue);
+        pub.MapGet("/repos/{owner}/{slug}/issues/{number:int}/comments", ListIssueComments);
+        pub.MapGet("/repos/{owner}/{slug}/pulls", ListPullRequests);
+        pub.MapGet("/repos/{owner}/{slug}/pulls/{number:int}", GetPullRequest);
+        pub.MapGet("/repos/{owner}/{slug}/pulls/{number:int}/comments", ListPrComments);
+        pub.MapGet("/repos/{owner}/{slug}/pulls/{number:int}/reviews", ListReviews);
+        pub.MapGet("/repos/{owner}/{slug}/pulls/{number:int}/diff-comments", ListDiffComments);
+        pub.MapGet("/repos/{owner}/{slug}/forks", ListForks);
+        pub.MapGet("/explore", ExploreRepositories);
+    }
+
+    // ── Permission helpers ──
+
+    private static async Task<(GitRepository? Repo, IResult? Error)> RequireRead(
+        HttpContext ctx, string owner, string slug,
+        RepositoryService repoService, PermissionService permissionService)
+    {
+        var repo = await repoService.GetRepositoryBySlugAsync(owner, slug);
+        if (repo == null) return (null, Results.NotFound());
+        if (!await permissionService.CanReadAsync(GetUserId(ctx), repo))
+            return (null, Results.Forbid());
+        return (repo, null);
+    }
+
+    private static async Task<(GitRepository? Repo, IResult? Error)> RequireWrite(
+        HttpContext ctx, string owner, string slug,
+        RepositoryService repoService, PermissionService permissionService)
+    {
+        var repo = await repoService.GetRepositoryBySlugAsync(owner, slug);
+        if (repo == null) return (null, Results.NotFound());
+        if (!await permissionService.CanWriteAsync(GetUserId(ctx), repo))
+            return (null, Results.Forbid());
+        return (repo, null);
     }
 
     // ── Repository endpoints ──
@@ -82,10 +103,12 @@ public static class DaisiGitApiEndpoints
     }
 
     private static async Task<IResult> GetRepository(
-        string owner, string slug, RepositoryService repoService)
+        HttpContext ctx, string owner, string slug,
+        RepositoryService repoService, PermissionService permissionService)
     {
-        var repo = await repoService.GetRepositoryBySlugAsync(owner, slug);
-        return repo == null ? Results.NotFound() : Results.Ok(RepoDto(repo));
+        var (repo, error) = await RequireRead(ctx, owner, slug, repoService, permissionService);
+        if (error != null) return error;
+        return Results.Ok(RepoDto(repo!));
     }
 
     private static async Task<IResult> CreateRepository(
@@ -102,25 +125,25 @@ public static class DaisiGitApiEndpoints
     // ── Branch endpoints ──
 
     private static async Task<IResult> ListBranches(
-        string owner, string slug,
-        RepositoryService repoService, BrowseService browseService)
+        HttpContext ctx, string owner, string slug,
+        RepositoryService repoService, BrowseService browseService, PermissionService permissionService)
     {
-        var repo = await repoService.GetRepositoryBySlugAsync(owner, slug);
-        if (repo == null) return Results.NotFound();
-        var branches = await browseService.GetBranchesAsync(repo.id, repo.DefaultBranch);
+        var (repo, error) = await RequireRead(ctx, owner, slug, repoService, permissionService);
+        if (error != null) return error;
+        var branches = await browseService.GetBranchesAsync(repo!.id, repo.DefaultBranch);
         return Results.Ok(branches);
     }
 
     // ── File browsing endpoints ──
 
     private static async Task<IResult> GetTree(
-        string owner, string slug, string branch, string? path,
-        RepositoryService repoService, BrowseService browseService)
+        HttpContext ctx, string owner, string slug, string branch, string? path,
+        RepositoryService repoService, BrowseService browseService, PermissionService permissionService)
     {
-        var repo = await repoService.GetRepositoryBySlugAsync(owner, slug);
-        if (repo == null) return Results.NotFound();
+        var (repo, error) = await RequireRead(ctx, owner, slug, repoService, permissionService);
+        if (error != null) return error;
 
-        var sha = await browseService.ResolveRefAsync(repo.id, branch);
+        var sha = await browseService.ResolveRefAsync(repo!.id, branch);
         if (sha == null) return Results.NotFound("Branch not found");
 
         var result = await browseService.GetTreeAtPathAsync(repo.id, sha, path ?? "");
@@ -137,13 +160,13 @@ public static class DaisiGitApiEndpoints
     }
 
     private static async Task<IResult> GetBlob(
-        string owner, string slug, string branch, string? path,
-        RepositoryService repoService, BrowseService browseService)
+        HttpContext ctx, string owner, string slug, string branch, string? path,
+        RepositoryService repoService, BrowseService browseService, PermissionService permissionService)
     {
-        var repo = await repoService.GetRepositoryBySlugAsync(owner, slug);
-        if (repo == null) return Results.NotFound();
+        var (repo, error) = await RequireRead(ctx, owner, slug, repoService, permissionService);
+        if (error != null) return error;
 
-        var sha = await browseService.ResolveRefAsync(repo.id, branch);
+        var sha = await browseService.ResolveRefAsync(repo!.id, branch);
         if (sha == null) return Results.NotFound("Branch not found");
 
         var result = await browseService.GetTreeAtPathAsync(repo.id, sha, path ?? "");
@@ -166,14 +189,14 @@ public static class DaisiGitApiEndpoints
     // ── Commit endpoints ──
 
     private static async Task<IResult> ListCommits(
-        string owner, string slug, string branch,
+        HttpContext ctx, string owner, string slug, string branch,
         int? skip, int? take,
-        RepositoryService repoService, BrowseService browseService)
+        RepositoryService repoService, BrowseService browseService, PermissionService permissionService)
     {
-        var repo = await repoService.GetRepositoryBySlugAsync(owner, slug);
-        if (repo == null) return Results.NotFound();
+        var (repo, error) = await RequireRead(ctx, owner, slug, repoService, permissionService);
+        if (error != null) return error;
 
-        var sha = await browseService.ResolveRefAsync(repo.id, branch);
+        var sha = await browseService.ResolveRefAsync(repo!.id, branch);
         if (sha == null) return Results.NotFound("Branch not found");
 
         var commits = await browseService.GetCommitLogAsync(repo.id, sha, take ?? 50, skip ?? 0);
@@ -181,13 +204,13 @@ public static class DaisiGitApiEndpoints
     }
 
     private static async Task<IResult> GetCommit(
-        string owner, string slug, string sha,
-        RepositoryService repoService, BrowseService browseService)
+        HttpContext ctx, string owner, string slug, string sha,
+        RepositoryService repoService, BrowseService browseService, PermissionService permissionService)
     {
-        var repo = await repoService.GetRepositoryBySlugAsync(owner, slug);
-        if (repo == null) return Results.NotFound();
+        var (repo, error) = await RequireRead(ctx, owner, slug, repoService, permissionService);
+        if (error != null) return error;
 
-        var commit = await browseService.GetCommitAsync(repo.id, sha);
+        var commit = await browseService.GetCommitAsync(repo!.id, sha);
         if (commit == null) return Results.NotFound();
 
         var diffs = await browseService.GetCommitDiffAsync(repo.id, sha);
@@ -197,11 +220,11 @@ public static class DaisiGitApiEndpoints
     // ── Issue endpoints ──
 
     private static async Task<IResult> ListIssues(
-        string owner, string slug, string? status,
-        RepositoryService repoService, IssueService issueService)
+        HttpContext ctx, string owner, string slug, string? status,
+        RepositoryService repoService, IssueService issueService, PermissionService permissionService)
     {
-        var repo = await repoService.GetRepositoryBySlugAsync(owner, slug);
-        if (repo == null) return Results.NotFound();
+        var (repo, error) = await RequireRead(ctx, owner, slug, repoService, permissionService);
+        if (error != null) return error;
 
         IssueStatus? filter = status?.ToLowerInvariant() switch
         {
@@ -210,48 +233,74 @@ public static class DaisiGitApiEndpoints
             _ => null
         };
 
-        var issues = await issueService.ListAsync(repo.id, filter);
+        var issues = await issueService.ListAsync(repo!.id, filter);
         return Results.Ok(issues);
     }
 
     private static async Task<IResult> GetIssue(
-        string owner, string slug, int number,
-        RepositoryService repoService, IssueService issueService)
+        HttpContext ctx, string owner, string slug, int number,
+        RepositoryService repoService, IssueService issueService, PermissionService permissionService)
     {
-        var repo = await repoService.GetRepositoryBySlugAsync(owner, slug);
-        if (repo == null) return Results.NotFound();
+        var (repo, error) = await RequireRead(ctx, owner, slug, repoService, permissionService);
+        if (error != null) return error;
 
-        var issue = await issueService.GetByNumberAsync(repo.id, number);
+        var issue = await issueService.GetByNumberAsync(repo!.id, number);
         return issue == null ? Results.NotFound() : Results.Ok(issue);
     }
 
     private static async Task<IResult> CreateIssue(
         HttpContext ctx, string owner, string slug, CreateIssueRequest req,
-        RepositoryService repoService, IssueService issueService)
+        RepositoryService repoService, IssueService issueService, PermissionService permissionService,
+        GitEventService events)
     {
-        var repo = await repoService.GetRepositoryBySlugAsync(owner, slug);
-        if (repo == null) return Results.NotFound();
+        var (repo, error) = await RequireWrite(ctx, owner, slug, repoService, permissionService);
+        if (error != null) return error;
 
         var issue = await issueService.CreateAsync(
-            repo.id, req.Title, req.Description,
+            repo!.id, req.Title, req.Description,
             GetUserId(ctx), GetUserName(ctx), req.Labels);
+
+        await events.EmitAsync(repo.AccountId, repo.id, GitTriggerType.IssueCreated,
+            GetUserId(ctx), GetUserName(ctx), new Dictionary<string, string>
+            {
+                ["issue.number"] = issue.Number.ToString(),
+                ["issue.title"] = issue.Title
+            });
+
         return Results.Created($"/api/git/repos/{owner}/{slug}/issues/{issue.Number}", issue);
     }
 
     private static async Task<IResult> UpdateIssue(
         HttpContext ctx, string owner, string slug, int number, UpdateIssueRequest req,
-        RepositoryService repoService, IssueService issueService)
+        RepositoryService repoService, IssueService issueService, PermissionService permissionService,
+        GitEventService events)
     {
-        var repo = await repoService.GetRepositoryBySlugAsync(owner, slug);
-        if (repo == null) return Results.NotFound();
+        var (repo, error) = await RequireWrite(ctx, owner, slug, repoService, permissionService);
+        if (error != null) return error;
 
-        var issue = await issueService.GetByNumberAsync(repo.id, number);
+        var issue = await issueService.GetByNumberAsync(repo!.id, number);
         if (issue == null) return Results.NotFound();
 
         if (req.Action?.ToLowerInvariant() == "close")
+        {
             issue = await issueService.CloseAsync(issue);
+            await events.EmitAsync(repo.AccountId, repo.id, GitTriggerType.IssueClosed,
+                GetUserId(ctx), GetUserName(ctx), new Dictionary<string, string>
+                {
+                    ["issue.number"] = issue.Number.ToString(),
+                    ["issue.title"] = issue.Title
+                });
+        }
         else if (req.Action?.ToLowerInvariant() == "reopen")
+        {
             issue = await issueService.ReopenAsync(issue);
+            await events.EmitAsync(repo.AccountId, repo.id, GitTriggerType.IssueReopened,
+                GetUserId(ctx), GetUserName(ctx), new Dictionary<string, string>
+                {
+                    ["issue.number"] = issue.Number.ToString(),
+                    ["issue.title"] = issue.Title
+                });
+        }
 
         if (req.Title != null) issue.Title = req.Title;
         if (req.Description != null) issue.Description = req.Description;
@@ -263,11 +312,11 @@ public static class DaisiGitApiEndpoints
     // ── Pull Request endpoints ──
 
     private static async Task<IResult> ListPullRequests(
-        string owner, string slug, string? status,
-        RepositoryService repoService, PullRequestService prService)
+        HttpContext ctx, string owner, string slug, string? status,
+        RepositoryService repoService, PullRequestService prService, PermissionService permissionService)
     {
-        var repo = await repoService.GetRepositoryBySlugAsync(owner, slug);
-        if (repo == null) return Results.NotFound();
+        var (repo, error) = await RequireRead(ctx, owner, slug, repoService, permissionService);
+        if (error != null) return error;
 
         PullRequestStatus? filter = status?.ToLowerInvariant() switch
         {
@@ -277,49 +326,71 @@ public static class DaisiGitApiEndpoints
             _ => null
         };
 
-        var prs = await prService.ListAsync(repo.id, filter);
+        var prs = await prService.ListAsync(repo!.id, filter);
         return Results.Ok(prs);
     }
 
     private static async Task<IResult> GetPullRequest(
-        string owner, string slug, int number,
-        RepositoryService repoService, PullRequestService prService)
+        HttpContext ctx, string owner, string slug, int number,
+        RepositoryService repoService, PullRequestService prService, PermissionService permissionService)
     {
-        var repo = await repoService.GetRepositoryBySlugAsync(owner, slug);
-        if (repo == null) return Results.NotFound();
+        var (repo, error) = await RequireRead(ctx, owner, slug, repoService, permissionService);
+        if (error != null) return error;
 
-        var pr = await prService.GetByNumberAsync(repo.id, number);
+        var pr = await prService.GetByNumberAsync(repo!.id, number);
         return pr == null ? Results.NotFound() : Results.Ok(pr);
     }
 
     private static async Task<IResult> CreatePullRequest(
         HttpContext ctx, string owner, string slug, CreatePrRequest req,
-        RepositoryService repoService, PullRequestService prService)
+        RepositoryService repoService, PullRequestService prService, PermissionService permissionService,
+        GitEventService events)
     {
-        var repo = await repoService.GetRepositoryBySlugAsync(owner, slug);
-        if (repo == null) return Results.NotFound();
+        var (repo, error) = await RequireWrite(ctx, owner, slug, repoService, permissionService);
+        if (error != null) return error;
 
         var pr = await prService.CreateAsync(
-            repo.id, req.Title, req.Description,
+            repo!.id, req.Title, req.Description,
             req.SourceBranch, req.TargetBranch,
             GetUserId(ctx), GetUserName(ctx), req.Labels);
+
+        await events.EmitAsync(repo.AccountId, repo.id, GitTriggerType.PullRequestCreated,
+            GetUserId(ctx), GetUserName(ctx), new Dictionary<string, string>
+            {
+                ["pr.number"] = pr.Number.ToString(),
+                ["pr.title"] = pr.Title,
+                ["pr.sourceBranch"] = pr.SourceBranch,
+                ["pr.targetBranch"] = pr.TargetBranch
+            });
+
         return Results.Created($"/api/git/repos/{owner}/{slug}/pulls/{pr.Number}", pr);
     }
 
     private static async Task<IResult> UpdatePullRequest(
         HttpContext ctx, string owner, string slug, int number, UpdatePrRequest req,
-        RepositoryService repoService, PullRequestService prService)
+        RepositoryService repoService, PullRequestService prService, PermissionService permissionService,
+        GitEventService events)
     {
-        var repo = await repoService.GetRepositoryBySlugAsync(owner, slug);
-        if (repo == null) return Results.NotFound();
+        var (repo, error) = await RequireWrite(ctx, owner, slug, repoService, permissionService);
+        if (error != null) return error;
 
-        var pr = await prService.GetByNumberAsync(repo.id, number);
+        var pr = await prService.GetByNumberAsync(repo!.id, number);
         if (pr == null) return Results.NotFound();
 
         if (req.Action?.ToLowerInvariant() == "close")
+        {
             pr = await prService.CloseAsync(pr);
+            await events.EmitAsync(repo.AccountId, repo.id, GitTriggerType.PullRequestClosed,
+                GetUserId(ctx), GetUserName(ctx), new Dictionary<string, string>
+                {
+                    ["pr.number"] = pr.Number.ToString(),
+                    ["pr.title"] = pr.Title
+                });
+        }
         else if (req.Action?.ToLowerInvariant() == "reopen")
+        {
             pr = await prService.ReopenAsync(pr);
+        }
 
         if (req.Title != null) pr.Title = req.Title;
         if (req.Description != null) pr.Description = req.Description;
@@ -331,12 +402,13 @@ public static class DaisiGitApiEndpoints
     private static async Task<IResult> MergePullRequest(
         HttpContext ctx, string owner, string slug, int number,
         MergePrRequest? req,
-        RepositoryService repoService, PullRequestService prService, MergeService mergeService)
+        RepositoryService repoService, PullRequestService prService, MergeService mergeService,
+        PermissionService permissionService, GitEventService events)
     {
-        var repo = await repoService.GetRepositoryBySlugAsync(owner, slug);
-        if (repo == null) return Results.NotFound();
+        var (repo, error) = await RequireWrite(ctx, owner, slug, repoService, permissionService);
+        if (error != null) return error;
 
-        var pr = await prService.GetByNumberAsync(repo.id, number);
+        var pr = await prService.GetByNumberAsync(repo!.id, number);
         if (pr == null) return Results.NotFound();
 
         var strategy = req?.Strategy?.ToLowerInvariant() switch
@@ -347,6 +419,21 @@ public static class DaisiGitApiEndpoints
 
         var userName = GetUserName(ctx);
         var result = await mergeService.MergeAsync(pr, repo, userName, $"{userName}@daisinet", strategy);
+
+        if (result.Success)
+        {
+            await events.EmitAsync(repo.AccountId, repo.id, GitTriggerType.PullRequestMerged,
+                GetUserId(ctx), userName, new Dictionary<string, string>
+                {
+                    ["pr.number"] = pr.Number.ToString(),
+                    ["pr.title"] = pr.Title,
+                    ["pr.sourceBranch"] = pr.SourceBranch,
+                    ["pr.targetBranch"] = pr.TargetBranch,
+                    ["pr.mergeCommitSha"] = result.MergeCommitSha ?? "",
+                    ["pr.mergeStrategy"] = strategy.ToString()
+                });
+        }
+
         return result.Success
             ? Results.Ok(result)
             : Results.Conflict(result);
@@ -355,13 +442,14 @@ public static class DaisiGitApiEndpoints
     // ── Comment endpoints ──
 
     private static async Task<IResult> ListIssueComments(
-        string owner, string slug, int number,
-        RepositoryService repoService, IssueService issueService, CommentService commentService)
+        HttpContext ctx, string owner, string slug, int number,
+        RepositoryService repoService, IssueService issueService, CommentService commentService,
+        PermissionService permissionService)
     {
-        var repo = await repoService.GetRepositoryBySlugAsync(owner, slug);
-        if (repo == null) return Results.NotFound();
+        var (repo, error) = await RequireRead(ctx, owner, slug, repoService, permissionService);
+        if (error != null) return error;
 
-        var issue = await issueService.GetByNumberAsync(repo.id, number);
+        var issue = await issueService.GetByNumberAsync(repo!.id, number);
         if (issue == null) return Results.NotFound();
 
         var comments = await commentService.GetCommentsAsync(repo.id, issue.id);
@@ -370,28 +458,39 @@ public static class DaisiGitApiEndpoints
 
     private static async Task<IResult> CreateIssueComment(
         HttpContext ctx, string owner, string slug, int number, CreateCommentRequest req,
-        RepositoryService repoService, IssueService issueService, CommentService commentService)
+        RepositoryService repoService, IssueService issueService, CommentService commentService,
+        PermissionService permissionService, GitEventService events)
     {
-        var repo = await repoService.GetRepositoryBySlugAsync(owner, slug);
-        if (repo == null) return Results.NotFound();
+        var (repo, error) = await RequireWrite(ctx, owner, slug, repoService, permissionService);
+        if (error != null) return error;
 
-        var issue = await issueService.GetByNumberAsync(repo.id, number);
+        var issue = await issueService.GetByNumberAsync(repo!.id, number);
         if (issue == null) return Results.NotFound();
 
         var comment = await commentService.CreateAsync(
             repo.id, issue.id, nameof(Issue),
             req.Body, GetUserId(ctx), GetUserName(ctx));
+
+        await events.EmitAsync(repo.AccountId, repo.id, GitTriggerType.CommentCreated,
+            GetUserId(ctx), GetUserName(ctx), new Dictionary<string, string>
+            {
+                ["comment.parentType"] = "Issue",
+                ["comment.parentNumber"] = number.ToString(),
+                ["comment.body"] = req.Body
+            });
+
         return Results.Created("", comment);
     }
 
     private static async Task<IResult> ListPrComments(
-        string owner, string slug, int number,
-        RepositoryService repoService, PullRequestService prService, CommentService commentService)
+        HttpContext ctx, string owner, string slug, int number,
+        RepositoryService repoService, PullRequestService prService, CommentService commentService,
+        PermissionService permissionService)
     {
-        var repo = await repoService.GetRepositoryBySlugAsync(owner, slug);
-        if (repo == null) return Results.NotFound();
+        var (repo, error) = await RequireRead(ctx, owner, slug, repoService, permissionService);
+        if (error != null) return error;
 
-        var pr = await prService.GetByNumberAsync(repo.id, number);
+        var pr = await prService.GetByNumberAsync(repo!.id, number);
         if (pr == null) return Results.NotFound();
 
         var comments = await commentService.GetCommentsAsync(repo.id, pr.id);
@@ -400,30 +499,41 @@ public static class DaisiGitApiEndpoints
 
     private static async Task<IResult> CreatePrComment(
         HttpContext ctx, string owner, string slug, int number, CreateCommentRequest req,
-        RepositoryService repoService, PullRequestService prService, CommentService commentService)
+        RepositoryService repoService, PullRequestService prService, CommentService commentService,
+        PermissionService permissionService, GitEventService events)
     {
-        var repo = await repoService.GetRepositoryBySlugAsync(owner, slug);
-        if (repo == null) return Results.NotFound();
+        var (repo, error) = await RequireWrite(ctx, owner, slug, repoService, permissionService);
+        if (error != null) return error;
 
-        var pr = await prService.GetByNumberAsync(repo.id, number);
+        var pr = await prService.GetByNumberAsync(repo!.id, number);
         if (pr == null) return Results.NotFound();
 
         var comment = await commentService.CreateAsync(
             repo.id, pr.id, nameof(PullRequest),
             req.Body, GetUserId(ctx), GetUserName(ctx));
+
+        await events.EmitAsync(repo.AccountId, repo.id, GitTriggerType.CommentCreated,
+            GetUserId(ctx), GetUserName(ctx), new Dictionary<string, string>
+            {
+                ["comment.parentType"] = "PullRequest",
+                ["comment.parentNumber"] = number.ToString(),
+                ["comment.body"] = req.Body
+            });
+
         return Results.Created("", comment);
     }
 
     // ── Review endpoints ──
 
     private static async Task<IResult> ListReviews(
-        string owner, string slug, int number,
-        RepositoryService repoService, PullRequestService prService, ReviewService reviewService)
+        HttpContext ctx, string owner, string slug, int number,
+        RepositoryService repoService, PullRequestService prService, ReviewService reviewService,
+        PermissionService permissionService)
     {
-        var repo = await repoService.GetRepositoryBySlugAsync(owner, slug);
-        if (repo == null) return Results.NotFound();
+        var (repo, error) = await RequireRead(ctx, owner, slug, repoService, permissionService);
+        if (error != null) return error;
 
-        var pr = await prService.GetByNumberAsync(repo.id, number);
+        var pr = await prService.GetByNumberAsync(repo!.id, number);
         if (pr == null) return Results.NotFound();
 
         var reviews = await reviewService.ListReviewsAsync(repo.id, number);
@@ -432,12 +542,13 @@ public static class DaisiGitApiEndpoints
 
     private static async Task<IResult> SubmitReview(
         HttpContext ctx, string owner, string slug, int number, SubmitReviewRequest req,
-        RepositoryService repoService, PullRequestService prService, ReviewService reviewService)
+        RepositoryService repoService, PullRequestService prService, ReviewService reviewService,
+        PermissionService permissionService, GitEventService events)
     {
-        var repo = await repoService.GetRepositoryBySlugAsync(owner, slug);
-        if (repo == null) return Results.NotFound();
+        var (repo, error) = await RequireWrite(ctx, owner, slug, repoService, permissionService);
+        if (error != null) return error;
 
-        var pr = await prService.GetByNumberAsync(repo.id, number);
+        var pr = await prService.GetByNumberAsync(repo!.id, number);
         if (pr == null) return Results.NotFound();
 
         var state = req.State?.ToLowerInvariant() switch
@@ -460,17 +571,25 @@ public static class DaisiGitApiEndpoints
             GetUserId(ctx), GetUserName(ctx),
             state, req.Body, diffComments);
 
+        await events.EmitAsync(repo.AccountId, repo.id, GitTriggerType.ReviewSubmitted,
+            GetUserId(ctx), GetUserName(ctx), new Dictionary<string, string>
+            {
+                ["review.state"] = state.ToString(),
+                ["review.prNumber"] = number.ToString()
+            });
+
         return Results.Created($"/api/git/repos/{owner}/{slug}/pulls/{number}/reviews", review);
     }
 
     private static async Task<IResult> ListDiffComments(
-        string owner, string slug, int number,
-        RepositoryService repoService, PullRequestService prService, ReviewService reviewService)
+        HttpContext ctx, string owner, string slug, int number,
+        RepositoryService repoService, PullRequestService prService, ReviewService reviewService,
+        PermissionService permissionService)
     {
-        var repo = await repoService.GetRepositoryBySlugAsync(owner, slug);
-        if (repo == null) return Results.NotFound();
+        var (repo, error) = await RequireRead(ctx, owner, slug, repoService, permissionService);
+        if (error != null) return error;
 
-        var pr = await prService.GetByNumberAsync(repo.id, number);
+        var pr = await prService.GetByNumberAsync(repo!.id, number);
         if (pr == null) return Results.NotFound();
 
         var comments = await reviewService.GetDiffCommentsAsync(repo.id, number);
@@ -480,45 +599,57 @@ public static class DaisiGitApiEndpoints
     // ── Fork endpoints ──
 
     private static async Task<IResult> ForkRepository(
-        HttpContext ctx, string owner, string slug, RepositoryService repoService)
+        HttpContext ctx, string owner, string slug, RepositoryService repoService,
+        PermissionService permissionService, GitEventService events)
     {
-        var repo = await repoService.GetRepositoryBySlugAsync(owner, slug);
-        if (repo == null) return Results.NotFound();
+        var (repo, error) = await RequireRead(ctx, owner, slug, repoService, permissionService);
+        if (error != null) return error;
 
         var fork = await repoService.ForkRepositoryAsync(
-            GetAccountId(ctx), GetUserId(ctx), GetUserName(ctx), repo);
+            GetAccountId(ctx), GetUserId(ctx), GetUserName(ctx), repo!);
+
+        await events.EmitAsync(repo.AccountId, repo.id, GitTriggerType.RepositoryForked,
+            GetUserId(ctx), GetUserName(ctx), new Dictionary<string, string>
+            {
+                ["fork.ownerName"] = fork.OwnerName,
+                ["fork.slug"] = fork.Slug
+            });
+
         return Results.Created($"/api/git/repos/{fork.OwnerName}/{fork.Slug}", RepoDto(fork));
     }
 
     private static async Task<IResult> ListForks(
-        string owner, string slug, RepositoryService repoService)
+        HttpContext ctx, string owner, string slug,
+        RepositoryService repoService, PermissionService permissionService)
     {
-        var repo = await repoService.GetRepositoryBySlugAsync(owner, slug);
-        if (repo == null) return Results.NotFound();
+        var (repo, error) = await RequireRead(ctx, owner, slug, repoService, permissionService);
+        if (error != null) return error;
 
-        var forks = await repoService.GetForksAsync(repo.id);
+        var forks = await repoService.GetForksAsync(repo!.id);
         return Results.Ok(forks.Select(RepoDto));
     }
 
     // ── Star endpoints ──
 
     private static async Task<IResult> StarRepository(
-        HttpContext ctx, string owner, string slug, RepositoryService repoService)
+        HttpContext ctx, string owner, string slug,
+        RepositoryService repoService, PermissionService permissionService)
     {
-        var repo = await repoService.GetRepositoryBySlugAsync(owner, slug);
-        if (repo == null) return Results.NotFound();
+        var (repo, error) = await RequireRead(ctx, owner, slug, repoService, permissionService);
+        if (error != null) return error;
 
-        await repoService.StarAsync(GetUserId(ctx), GetUserName(ctx), repo.id);
+        await repoService.StarAsync(GetUserId(ctx), GetUserName(ctx), repo!.id);
         return Results.NoContent();
     }
 
     private static async Task<IResult> UnstarRepository(
-        HttpContext ctx, string owner, string slug, RepositoryService repoService)
+        HttpContext ctx, string owner, string slug,
+        RepositoryService repoService, PermissionService permissionService)
     {
-        var repo = await repoService.GetRepositoryBySlugAsync(owner, slug);
-        if (repo == null) return Results.NotFound();
+        var (repo, error) = await RequireRead(ctx, owner, slug, repoService, permissionService);
+        if (error != null) return error;
 
-        await repoService.UnstarAsync(GetUserId(ctx), repo.id);
+        await repoService.UnstarAsync(GetUserId(ctx), repo!.id);
         return Results.NoContent();
     }
 

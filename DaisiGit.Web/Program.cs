@@ -50,6 +50,14 @@ builder.Services.AddScoped<TeamService>();
 builder.Services.AddScoped<PermissionService>();
 builder.Services.AddScoped<ReviewService>();
 builder.Services.AddScoped<AccountSettingsService>();
+
+// Workflow services
+builder.Services.AddScoped<GitEventService>();
+builder.Services.AddScoped<WorkflowTriggerService>();
+builder.Services.AddScoped<WorkflowEngine>();
+builder.Services.AddScoped<WorkflowService>();
+builder.Services.AddHostedService<GitWorkflowBackgroundWorker>();
+
 builder.Services.AddScoped<DaisiUserService>();
 
 // JSON enum serialization for API endpoints
@@ -108,6 +116,7 @@ app.MapGitSmartProtocolEndpoints();
 
 // REST API endpoints
 app.MapDaisiGitApiEndpoints();
+app.MapWorkflowApiEndpoints();
 
 app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode();

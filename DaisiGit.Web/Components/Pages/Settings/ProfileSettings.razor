@@ -1,0 +1,129 @@
+@page "/settings/profile"
+@inject UserProfileService ProfileService
+@inject NavigationManager Nav
+
+<PageTitle>Personal Profile - Daisi Git</PageTitle>
+
+<h4 class="mb-3">
+    <a href="/settings" class="text-muted text-decoration-none">Settings</a>
+    <span class="text-muted">/</span> Personal Profile
+</h4>
+
+<div class="card" style="max-width: 600px;">
+    <div class="card-body">
+        <div class="mb-3">
+            <label class="form-label fw-semibold">Handle</label>
+            <div class="input-group">
+                <span class="input-group-text text-muted">@@</span>
+                <input type="text" class="form-control" @bind="handle" placeholder="my-handle" />
+            </div>
+            <div class="form-text">Your unique URL handle. Lowercase letters, numbers, and hyphens. Must be unique across all users and organizations.</div>
+        </div>
+
+        <div class="mb-3">
+            <label class="form-label fw-semibold">Display Name</label>
+            <input type="text" class="form-control" @bind="displayName" placeholder="Your Name" />
+        </div>
+
+        <div class="mb-3">
+            <label class="form-label fw-semibold">Email</label>
+            <input type="email" class="form-control" @bind="email" placeholder="you@example.com" />
+            <div class="form-text">Used for commit attribution.</div>
+        </div>
+
+        <div class="mb-3">
+            <label class="form-label fw-semibold">Bio <span class="text-muted fw-normal">(optional)</span></label>
+            <textarea class="form-control" rows="3" @bind="bio" placeholder="Tell us about yourself"></textarea>
+        </div>
+
+        @if (!string.IsNullOrEmpty(error))
+        {
+            <div class="alert alert-danger">@error</div>
+        }
+        @if (saved)
+        {
+            <div class="alert alert-success">Profile saved.</div>
+        }
+
+        <button class="btn btn-primary" @onclick="Save" disabled="@saving">
+            @if (saving) { <span class="spinner-border spinner-border-sm me-1"></span> }
+            Save Profile
+        </button>
+    </div>
+</div>
+
+@code {
+    [CascadingParameter(Name = "AccountId")] string AccountId { get; set; } = "";
+    [CascadingParameter(Name = "UserId")] string UserId { get; set; } = "";
+    [CascadingParameter(Name = "UserName")] string UserName { get; set; } = "";
+
+    private string handle = "";
+    private string? displayName;
+    private string? email;
+    private string? bio;
+    private string? error;
+    private bool saving;
+    private bool saved;
+    private bool loaded;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (loaded || string.IsNullOrEmpty(UserId)) return;
+        loaded = true;
+
+        try
+        {
+            var profile = await ProfileService.GetProfileAsync(UserId, AccountId);
+            if (profile != null)
+            {
+                handle = profile.Handle;
+                displayName = profile.DisplayName;
+                email = profile.Email;
+                bio = profile.Bio;
+            }
+            else
+            {
+                // Default handle from SSO username
+                handle = UserName.ToLowerInvariant();
+                displayName = UserName;
+            }
+        }
+        catch { }
+    }
+
+    private async Task Save()
+    {
+        error = null;
+        saved = false;
+
+        if (string.IsNullOrWhiteSpace(handle))
+        {
+            error = "Handle is required.";
+            return;
+        }
+
+        saving = true;
+        try
+        {
+            var profile = await ProfileService.GetProfileAsync(UserId, AccountId)
+                ?? new DaisiGit.Core.Models.UserProfile
+                {
+                    AccountId = AccountId,
+                    UserId = UserId
+                };
+
+            profile.Handle = handle.Trim();
+            profile.DisplayName = displayName?.Trim();
+            profile.Email = email?.Trim();
+            profile.Bio = bio?.Trim();
+
+            await ProfileService.SaveProfileAsync(profile);
+            saved = true;
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+        }
+        saving = false;
+    }
+}

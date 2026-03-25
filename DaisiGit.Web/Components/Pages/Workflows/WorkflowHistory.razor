@@ -1,0 +1,161 @@
+@page "/{Owner}/{RepoSlug}/workflows/{WorkflowId}/history"
+@inject WorkflowService WorkflowService
+@inject RepositoryService RepoService
+
+<PageTitle>Workflow History - @Owner/@RepoSlug - Daisi Git</PageTitle>
+
+<RepositoryLayout Owner="@Owner" RepoSlug="@RepoSlug" ActiveTab="workflows">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <div>
+            <a href="/@Owner/@RepoSlug/workflows" class="text-muted text-decoration-none">
+                <i class="fa-duotone fa-arrow-left me-1"></i> Workflows
+            </a>
+            @if (workflowName != null)
+            {
+                <span class="text-muted mx-1">/</span>
+                <span class="fw-semibold">@workflowName</span>
+            }
+        </div>
+    </div>
+
+    <h5 class="mb-3">Execution History</h5>
+
+    @if (loading)
+    {
+        <div class="text-center py-4"><div class="spinner-border spinner-border-sm text-primary"></div></div>
+    }
+    else if (executions.Count == 0)
+    {
+        <div class="text-center py-5 text-muted">
+            <i class="fa-duotone fa-clock-rotate-left fa-2x mb-2 d-block"></i>
+            <p>No executions yet. This workflow hasn't been triggered.</p>
+        </div>
+    }
+    else
+    {
+        <div class="list-group">
+            @foreach (var exec in executions)
+            {
+                <div class="list-group-item">
+                    <div class="d-flex justify-content-between align-items-start">
+                        <div>
+                            <div class="fw-semibold">
+                                @StatusBadge(exec.Status)
+                                <span class="ms-1">@exec.WorkflowName</span>
+                                <span class="text-muted small ms-2">@exec.TriggerType</span>
+                            </div>
+                            <div class="text-muted small mt-1">
+                                Step @exec.CurrentStepIndex / @exec.TotalSteps
+                                @if (!string.IsNullOrEmpty(exec.Error))
+                                {
+                                    <span class="text-danger ms-2">@exec.Error</span>
+                                }
+                            </div>
+                        </div>
+                        <div class="text-muted small text-end">
+                            @exec.CreatedUtc.ToString("yyyy-MM-dd HH:mm")
+                            <button class="btn btn-sm btn-link p-0 ms-2" @onclick="() => ToggleDetail(exec.id)">
+                                <i class="fa-duotone fa-chevron-@(expandedId == exec.id ? "up" : "down")"></i>
+                            </button>
+                        </div>
+                    </div>
+
+                    @if (expandedId == exec.id && exec.StepResults.Count > 0)
+                    {
+                        <div class="mt-2 border-top pt-2">
+                            <table class="table table-sm table-borderless mb-0">
+                                <thead>
+                                    <tr class="text-muted small">
+                                        <th>#</th>
+                                        <th>Type</th>
+                                        <th>Result</th>
+                                        <th>Detail</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (var result in exec.StepResults)
+                                    {
+                                        <tr>
+                                            <td>@(result.StepIndex + 1)</td>
+                                            <td>@result.StepType</td>
+                                            <td>
+                                                @if (result.Success)
+                                                {
+                                                    <span class="text-success"><i class="fa-solid fa-check"></i></span>
+                                                }
+                                                else
+                                                {
+                                                    <span class="text-danger"><i class="fa-solid fa-xmark"></i></span>
+                                                }
+                                            </td>
+                                            <td class="text-muted small">
+                                                @if (result.HttpStatusCode.HasValue)
+                                                {
+                                                    <span>HTTP @result.HttpStatusCode</span>
+                                                }
+                                                @if (!string.IsNullOrEmpty(result.Error))
+                                                {
+                                                    <span class="text-danger">@result.Error</span>
+                                                }
+                                                @if (!string.IsNullOrEmpty(result.RenderedBody))
+                                                {
+                                                    <code class="ms-1">@Truncate(result.RenderedBody, 80)</code>
+                                                }
+                                            </td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                    }
+                </div>
+            }
+        </div>
+    }
+</RepositoryLayout>
+
+@code {
+    [Parameter] public string Owner { get; set; } = "";
+    [Parameter] public string RepoSlug { get; set; } = "";
+    [Parameter] public string WorkflowId { get; set; } = "";
+    [CascadingParameter(Name = "AccountId")] string AccountId { get; set; } = "";
+
+    private List<WorkflowExecution> executions = [];
+    private string? workflowName;
+    private bool loading = true;
+    private string? expandedId;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        loading = true;
+        try
+        {
+            var repo = await RepoService.GetRepositoryBySlugAsync(Owner, RepoSlug);
+            if (repo != null)
+            {
+                var wf = await WorkflowService.GetAsync(WorkflowId, repo.AccountId);
+                workflowName = wf?.Name;
+                executions = await WorkflowService.ListExecutionsAsync(repo.AccountId, workflowId: WorkflowId);
+            }
+        }
+        catch { }
+        loading = false;
+    }
+
+    private void ToggleDetail(string id)
+    {
+        expandedId = expandedId == id ? null : id;
+    }
+
+    private static MarkupString StatusBadge(string status) => new(status switch
+    {
+        "Completed" => "<span class='badge bg-success'>Completed</span>",
+        "Failed" => "<span class='badge bg-danger'>Failed</span>",
+        "Running" => "<span class='badge bg-primary'>Running</span>",
+        "Cancelled" => "<span class='badge bg-secondary'>Cancelled</span>",
+        _ => $"<span class='badge bg-secondary'>{status}</span>"
+    });
+
+    private static string Truncate(string s, int max) =>
+        s.Length <= max ? s : s[..max] + "...";
+}

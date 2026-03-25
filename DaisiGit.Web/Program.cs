@@ -50,6 +50,7 @@ builder.Services.AddScoped<TeamService>();
 builder.Services.AddScoped<PermissionService>();
 builder.Services.AddScoped<ReviewService>();
 builder.Services.AddScoped<AccountSettingsService>();
+builder.Services.AddScoped<UserProfileService>();
 
 // Workflow services
 builder.Services.AddScoped<GitEventService>();
@@ -120,5 +121,14 @@ app.MapWorkflowApiEndpoints();
 
 app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode();
+
+// Populate reserved names from mapped routes
+var routeSegments = app.Services.GetRequiredService<Microsoft.AspNetCore.Routing.EndpointDataSource>()
+    .Endpoints.OfType<Microsoft.AspNetCore.Routing.RouteEndpoint>()
+    .Select(e => e.RoutePattern.RawText?.Split('/').FirstOrDefault(s => !string.IsNullOrEmpty(s) && !s.StartsWith('{')))
+    .Where(s => s != null)
+    .Cast<string>()
+    .Distinct();
+DaisiGit.Core.ReservedNames.RegisterRouteSegments(routeSegments);
 
 app.Run();

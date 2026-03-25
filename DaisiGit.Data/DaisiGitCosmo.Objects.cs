@@ -30,9 +30,9 @@ public partial class DaisiGitCosmo
     {
         var container = await GetContainerAsync(GitObjectsContainerName);
         var query = new QueryDefinition(
-            "SELECT * FROM c WHERE c.RepositoryId = @repoId AND c.id = @id AND c.Type = 'GitObjectRecord'")
+            "SELECT * FROM c WHERE c.RepositoryId = @repoId AND c.Sha = @sha AND c.Type = 'GitObjectRecord'")
             .WithParameter("@repoId", repositoryId)
-            .WithParameter("@id", sha);
+            .WithParameter("@sha", sha);
 
         using var iterator = container.GetItemQueryIterator<GitObjectRecord>(query, requestOptions: new QueryRequestOptions
         {

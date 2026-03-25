@@ -15,13 +15,22 @@ public partial class OrganizationService(DaisiGitCosmo cosmo)
     /// </summary>
     public async Task<GitOrganization> CreateAsync(
         string accountId, string name, string? description,
-        string creatorUserId, string creatorUserName)
+        string creatorUserId, string creatorUserName,
+        string? handle = null)
     {
-        var slug = Slugify(name);
+        var slug = !string.IsNullOrWhiteSpace(handle) ? Slugify(handle) : Slugify(name);
+
+        if (DaisiGit.Core.ReservedNames.IsDisallowed(slug))
+            throw new InvalidOperationException($"'{slug}' is not available.");
 
         var existing = await cosmo.GetOrganizationBySlugAsync(slug);
         if (existing != null)
-            throw new InvalidOperationException($"Organization '{slug}' already exists.");
+            throw new InvalidOperationException($"Handle '{slug}' is already taken.");
+
+        // Check against user handles too
+        var existingUser = await cosmo.GetUserProfileByHandleAsync(slug);
+        if (existingUser != null)
+            throw new InvalidOperationException($"Handle '{slug}' is already taken.");
 
         var org = await cosmo.CreateOrganizationAsync(new GitOrganization
         {
@@ -79,10 +88,24 @@ public partial class OrganizationService(DaisiGitCosmo cosmo)
     }
 
     /// <summary>
-    /// Updates organization metadata.
+    /// Updates organization metadata. Validates slug uniqueness if changed.
     /// </summary>
-    public async Task<GitOrganization> UpdateAsync(GitOrganization org)
+    public async Task<GitOrganization> UpdateAsync(GitOrganization org, string? newHandle = null)
     {
+        if (!string.IsNullOrWhiteSpace(newHandle))
+        {
+            var newSlug = Slugify(newHandle);
+            if (newSlug != org.Slug)
+            {
+                if (DaisiGit.Core.ReservedNames.IsDisallowed(newSlug))
+                    throw new InvalidOperationException($"'{newSlug}' is not available.");
+                var existing = await cosmo.GetOrganizationBySlugAsync(newSlug);
+                if (existing != null && existing.id != org.id)
+                    throw new InvalidOperationException($"Handle '{newSlug}' is already taken.");
+                org.Slug = newSlug;
+            }
+        }
+
         return await cosmo.UpdateOrganizationAsync(org);
     }
 

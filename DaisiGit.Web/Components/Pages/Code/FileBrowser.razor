@@ -2,15 +2,35 @@
 @page "/{Owner}/{RepoSlug}/tree/{Branch}"
 @inject BrowseService BrowseService
 @inject RepositoryService RepoService
+@inject PermissionService PermissionService
+@inject GitObjectStore ObjectStore
+@inject GitRefService RefService
 @inject NavigationManager Nav
 
 <PageTitle>@(string.IsNullOrEmpty(Path) ? $"{Owner}/{RepoSlug}" : $"{Path} - {Owner}/{RepoSlug}") - Daisi Git</PageTitle>
 
 <RepositoryLayout Owner="@Owner" RepoSlug="@RepoSlug" ActiveTab="code" SelectedBranch="@Branch">
-    @if (browseResult == null && !loading)
+    @if (isEmpty && !loading)
     {
-        <div class="text-center py-4 text-muted">
-            <p>This repository is empty or the branch doesn't exist.</p>
+        <div class="text-center py-5 text-muted">
+            <div class="mb-3"><i class="fa-duotone fa-folder-open" style="font-size: 3rem;"></i></div>
+            <h5>This repository is empty</h5>
+            <p>Get started by creating a README file or pushing code from the command line.</p>
+            @if (canWrite)
+            {
+                <button type="button" class="btn btn-primary" @onclick="CreateReadme" @onclick:preventDefault disabled="@creatingReadme">
+                    @if (creatingReadme) { <span class="spinner-border spinner-border-sm me-1"></span> }
+                    <i class="fa-duotone fa-file-lines me-1"></i> Create README.md
+                </button>
+            }
+            @if (!string.IsNullOrEmpty(readmeError))
+            {
+                <div class="alert alert-danger mt-3">@readmeError</div>
+            }
+            @if (readmeCreated)
+            {
+                <div class="alert alert-success mt-3">README.md created! Reloading...</div>
+            }
         </div>
     }
     else if (browseResult != null)
@@ -123,18 +143,30 @@
     [Parameter] public string Branch { get; set; } = "main";
     [Parameter] public string? Path { get; set; }
 
+    [CascadingParameter(Name = "UserId")] string UserId { get; set; } = "";
+    [CascadingParameter(Name = "UserName")] string UserName { get; set; } = "";
+
+    private GitRepository? repo;
     private BrowseResult? browseResult;
     private CommitInfo? lastCommit;
     private List<string> branches = [];
     private bool loading = true;
+    private bool isEmpty;
+    private bool canWrite;
+    private bool creatingReadme;
+    private string? readmeError;
+    private bool readmeCreated;
 
     protected override async Task OnParametersSetAsync()
     {
         loading = true;
         try
         {
-            var repo = await RepoService.GetRepositoryBySlugAsync(Owner, RepoSlug);
+            repo = await RepoService.GetRepositoryBySlugAsync(Owner, RepoSlug);
             if (repo == null) { loading = false; return; }
+
+            if (!string.IsNullOrEmpty(UserId))
+                canWrite = await PermissionService.CanWriteAsync(UserId, repo);
 
             // Load branches
             var refs = await BrowseService.GetBranchesAsync(repo.id, repo.DefaultBranch);
@@ -142,9 +174,13 @@
 
             // Resolve branch to SHA
             var commitSha = await BrowseService.ResolveRefAsync(repo.id, Branch);
-            if (commitSha == null) { loading = false; return; }
+            if (commitSha == null) { isEmpty = true; loading = false; return; }
 
             browseResult = await BrowseService.GetTreeAtPathAsync(repo.id, commitSha, Path ?? "");
+
+            // Empty repo = null result or root tree with no entries
+            isEmpty = browseResult == null
+                || (!browseResult.IsFile && string.IsNullOrEmpty(Path) && browseResult.Entries.Count == 0);
 
             // If it resolved to a file, redirect to blob view
             if (browseResult is { IsFile: true })
@@ -159,6 +195,88 @@
         }
         catch { }
         loading = false;
+    }
+
+    private async Task CreateReadme()
+    {
+        if (repo == null) return;
+        creatingReadme = true;
+        try
+        {
+            var readmeContent = $"# {repo.Name}\n\n{repo.Description ?? "A new repository."}\n";
+            var readmeBytes = System.Text.Encoding.UTF8.GetBytes(readmeContent);
+
+            // Create blob
+            var blob = new DaisiGit.Core.Git.GitBlob { Data = readmeBytes };
+            var blobSha = await ObjectStore.StoreObjectAsync(repo, blob);
+
+            // Create tree with README.md entry
+            var tree = new DaisiGit.Core.Git.GitTree
+            {
+                Entries = [new DaisiGit.Core.Git.GitTreeEntry { Name = "README.md", Mode = "100644", Sha = blobSha }]
+            };
+            var treeSha = await ObjectStore.StoreObjectAsync(repo, tree);
+
+            // Get current HEAD commit as parent
+            var headSha = await RefService.ResolveHeadAsync(repo.id);
+            var parentShas = headSha != null ? new List<string> { headSha } : new List<string>();
+
+            // Create commit
+            var signature = new DaisiGit.Core.Git.GitSignature
+            {
+                Name = UserName,
+                Email = $"{UserName}@daisigit.local",
+                Timestamp = DateTimeOffset.UtcNow
+            };
+            var commit = new DaisiGit.Core.Git.GitCommit
+            {
+                TreeSha = treeSha,
+                ParentShas = parentShas,
+                Author = signature,
+                Committer = signature,
+                Message = "Add README.md\n"
+            };
+            var commitSha = await ObjectStore.StoreObjectAsync(repo, commit);
+
+            // Update ref
+            await RefService.SetRefAsync(repo.id, $"refs/heads/{repo.DefaultBranch}", commitSha);
+
+            // Mark repo as non-empty
+            if (repo.IsEmpty)
+            {
+                repo.IsEmpty = false;
+                await RepoService.UpdateRepositoryAsync(repo);
+            }
+
+            // Verify the commit was stored and can be read back
+            var verifyObj = await ObjectStore.GetObjectAsync(repo.id, commitSha);
+            var verifyRef = await RefService.GetRefAsync(repo.id, $"refs/heads/{repo.DefaultBranch}");
+
+            // Refresh data in place
+            isEmpty = false;
+            var refBranch = string.IsNullOrEmpty(Branch) ? repo.DefaultBranch : Branch;
+            var newCommitSha = await BrowseService.ResolveRefAsync(repo.id, refBranch);
+            if (newCommitSha != null)
+            {
+                browseResult = await BrowseService.GetTreeAtPathAsync(repo.id, newCommitSha, "");
+                var commits = await BrowseService.GetCommitLogAsync(repo.id, newCommitSha, 1);
+                lastCommit = commits.FirstOrDefault();
+                readmeCreated = false;
+            }
+            else
+            {
+                readmeError = $"README committed (sha={commitSha[..7]}) but ref resolve failed. " +
+                    $"Ref target={verifyRef?[..7] ?? "null"}, object readable={verifyObj != null}, branch={refBranch}";
+            }
+        }
+        catch (Exception ex)
+        {
+            readmeError = $"Failed to create README: {ex.Message}";
+        }
+        finally
+        {
+            creatingReadme = false;
+        }
     }
 
     private static string FormatRelativeDate(DateTimeOffset date)

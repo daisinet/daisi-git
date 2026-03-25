@@ -24,6 +24,9 @@ public partial class RepositoryService(
         string name, string? description, GitRepoVisibility visibility,
         StorageProvider? storageProviderOverride = null)
     {
+        if (name.Trim().Length < 5)
+            throw new InvalidOperationException("Repository name must be at least 5 characters.");
+
         var slug = Slugify(name);
 
         // Check for duplicate slug under the same owner
@@ -119,11 +122,52 @@ public partial class RepositoryService(
 
     /// <summary>
     /// Deletes a repository and its storage.
+    /// If the repo has forks and a promotedForkId is specified, that fork becomes the new
+    /// upstream and all other forks are re-pointed to it. If no forks exist, just deletes.
     /// </summary>
-    public async Task DeleteRepositoryAsync(string id, string accountId)
+    public async Task DeleteRepositoryAsync(string id, string accountId, string? promotedForkId = null)
     {
         var repo = await cosmo.GetRepositoryAsync(id, accountId);
         if (repo == null) return;
+
+        // Handle fork promotion
+        var forks = await cosmo.GetForksAsync(id);
+        if (forks.Count > 0)
+        {
+            if (!string.IsNullOrEmpty(promotedForkId))
+            {
+                // Promote the selected fork to standalone (clear its ForkedFrom)
+                var promoted = forks.FirstOrDefault(f => f.id == promotedForkId);
+                if (promoted != null)
+                {
+                    promoted.ForkedFromId = null;
+                    promoted.ForkedFromOwnerName = null;
+                    promoted.ForkedFromSlug = null;
+                    promoted.ForkCount = forks.Count - 1;
+                    await cosmo.UpdateRepositoryAsync(promoted);
+
+                    // Re-point all other forks to the promoted repo
+                    foreach (var fork in forks.Where(f => f.id != promotedForkId))
+                    {
+                        fork.ForkedFromId = promoted.id;
+                        fork.ForkedFromOwnerName = promoted.OwnerName;
+                        fork.ForkedFromSlug = promoted.Slug;
+                        await cosmo.UpdateRepositoryAsync(fork);
+                    }
+                }
+            }
+            else
+            {
+                // No promotion — make all forks standalone
+                foreach (var fork in forks)
+                {
+                    fork.ForkedFromId = null;
+                    fork.ForkedFromOwnerName = null;
+                    fork.ForkedFromSlug = null;
+                    await cosmo.UpdateRepositoryAsync(fork);
+                }
+            }
+        }
 
         // Delete storage
         var drive = await storageFactory.GetAdapterAsync(repo);

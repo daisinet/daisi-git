@@ -34,6 +34,7 @@ public class GitObjectStore(DaisiGitCosmo cosmo, StorageAdapterFactory storageFa
         await cosmo.UpsertObjectRecordAsync(new GitObjectRecord
         {
             id = sha,
+            Sha = sha,
             RepositoryId = repo.id,
             DriveFileId = fileId,
             ObjectType = obj.TypeString,
@@ -63,6 +64,7 @@ public class GitObjectStore(DaisiGitCosmo cosmo, StorageAdapterFactory storageFa
         await cosmo.UpsertObjectRecordAsync(new GitObjectRecord
         {
             id = sha,
+            Sha = sha,
             RepositoryId = repo.id,
             DriveFileId = fileId,
             ObjectType = objectType,

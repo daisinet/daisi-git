@@ -33,7 +33,8 @@ public static class WorkflowYamlParser
             {
                 Name = raw.Name ?? "Unnamed workflow",
                 Triggers = triggers,
-                Steps = steps
+                Steps = steps,
+                Env = raw.Env
             };
         }
         catch
@@ -230,6 +231,7 @@ public static class WorkflowYamlParser
     {
         public string? Name { get; set; }
         public Dictionary<string, object?>? On { get; set; }
+        public Dictionary<string, string>? Env { get; set; }
         public Dictionary<string, RawJob>? Jobs { get; set; }
     }
 
@@ -255,6 +257,7 @@ public class ParsedFileWorkflow
     public string Name { get; set; } = "";
     public List<WorkflowTrigger> Triggers { get; set; } = [];
     public List<WorkflowStep> Steps { get; set; } = [];
+    public Dictionary<string, string>? Env { get; set; }
 }
 
 /// <summary>

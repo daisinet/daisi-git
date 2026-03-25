@@ -65,6 +65,9 @@ builder.Services.AddScoped<AccountSettingsService>();
 builder.Services.AddScoped<UserProfileService>();
 builder.Services.AddScoped<ApiKeyService>();
 builder.Services.AddScoped<ImportService>();
+builder.Services.AddScoped(sp => new SecretService(
+    sp.GetRequiredService<DaisiGitCosmo>(),
+    builder.Configuration["Daisi:SecretKey"] ?? "default-secret-key"));
 builder.Services.AddSingleton<AvatarService>();
 
 // Workflow services

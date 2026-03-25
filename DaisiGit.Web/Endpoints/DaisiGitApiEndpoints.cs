@@ -41,6 +41,11 @@ public static class DaisiGitApiEndpoints
         // Forks (create requires auth)
         api.MapPost("/repos/{owner}/{slug}/forks", ForkRepository);
 
+        // Secrets
+        api.MapPut("/repos/{owner}/{slug}/secrets/{name}", SetSecret);
+        api.MapGet("/repos/{owner}/{slug}/secrets", ListSecrets);
+        api.MapDelete("/repos/{owner}/{slug}/secrets/{name}", DeleteSecret);
+
         // Stars (require auth)
         api.MapPut("/repos/{owner}/{slug}/star", StarRepository);
         api.MapDelete("/repos/{owner}/{slug}/star", UnstarRepository);
@@ -791,6 +796,41 @@ public static class DaisiGitApiEndpoints
         return Results.Ok(forks.Select(RepoDto));
     }
 
+    // ── Secret endpoints ──
+
+    private static async Task<IResult> SetSecret(
+        HttpContext ctx, string owner, string slug, string name, SetSecretRequest req,
+        RepositoryService repoService, PermissionService permissionService, SecretService secretService)
+    {
+        var (repo, error) = await RequireWrite(ctx, owner, slug, repoService, permissionService);
+        if (error != null) return error;
+
+        await secretService.SetSecretAsync(repo!.id, name, req.Value);
+        return Results.NoContent();
+    }
+
+    private static async Task<IResult> ListSecrets(
+        HttpContext ctx, string owner, string slug,
+        RepositoryService repoService, PermissionService permissionService, SecretService secretService)
+    {
+        var (repo, error) = await RequireWrite(ctx, owner, slug, repoService, permissionService);
+        if (error != null) return error;
+
+        var names = await secretService.ListSecretNamesAsync(repo!.id);
+        return Results.Ok(names.Select(n => new { Name = n }));
+    }
+
+    private static async Task<IResult> DeleteSecret(
+        HttpContext ctx, string owner, string slug, string name,
+        RepositoryService repoService, PermissionService permissionService, SecretService secretService)
+    {
+        var (repo, error) = await RequireWrite(ctx, owner, slug, repoService, permissionService);
+        if (error != null) return error;
+
+        await secretService.DeleteSecretAsync(repo!.id, name);
+        return Results.NoContent();
+    }
+
     // ── Star endpoints ──
 
     private static async Task<IResult> StarRepository(
@@ -917,6 +957,7 @@ public record MergePrRequest(string? Strategy = null);
 public record CreateApiKeyRequest(string Name);
 public record CreateOrgRequest(string Name, string Handle, string? Description = null);
 public record ImportRepoRequest(string Url, string? Name = null, string? Owner = null, string? Description = null, GitRepoVisibility Visibility = GitRepoVisibility.Private);
+public record SetSecretRequest(string Value);
 public record CreateCommentRequest(string Body);
 public record SubmitReviewRequest(string? State, string? Body, List<DiffCommentRequest>? DiffComments = null);
 public record DiffCommentRequest(string Path, int Line, string Body, string? Side = null);

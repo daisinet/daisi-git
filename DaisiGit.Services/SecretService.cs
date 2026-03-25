@@ -6,60 +6,40 @@ using DaisiGit.Data;
 namespace DaisiGit.Services;
 
 /// <summary>
-/// Manages per-repository encrypted secrets for workflow execution.
-/// Secrets are encrypted with AES-256 using a server-side key.
-/// Values are never exposed via API — only names are listed.
+/// Manages encrypted secrets for workflows.
+/// Secrets can be scoped to a repo or org. Org secrets are inherited by all repos.
+/// Repo-level secrets override org-level secrets with the same name.
 /// </summary>
 public class SecretService(DaisiGitCosmo cosmo, string encryptionKey)
 {
-    /// <summary>
-    /// Sets a secret. Creates or updates.
-    /// </summary>
+    // ── Repo-level ──
+
     public async Task SetSecretAsync(string repositoryId, string name, string value)
     {
         if (string.IsNullOrWhiteSpace(name))
             throw new InvalidOperationException("Secret name is required.");
 
-        var encrypted = Encrypt(value);
-
         await cosmo.UpsertSecretAsync(new RepoSecret
         {
-            RepositoryId = repositoryId,
+            OwnerId = repositoryId,
+            Scope = "repo",
             Name = name.Trim().ToUpperInvariant(),
-            EncryptedValue = encrypted
+            EncryptedValue = Encrypt(value)
         });
     }
 
-    /// <summary>
-    /// Gets the decrypted value of a secret. Used internally by the workflow engine.
-    /// </summary>
-    public async Task<string?> GetSecretValueAsync(string repositoryId, string name)
-    {
-        var secret = await cosmo.GetSecretAsync(repositoryId, name.ToUpperInvariant());
-        if (secret == null) return null;
-        return Decrypt(secret.EncryptedValue);
-    }
-
-    /// <summary>
-    /// Lists secret names (not values) for a repository.
-    /// </summary>
     public async Task<List<string>> ListSecretNamesAsync(string repositoryId)
     {
         var secrets = await cosmo.GetSecretsAsync(repositoryId);
         return secrets.Select(s => s.Name).ToList();
     }
 
-    /// <summary>
-    /// Deletes a secret.
-    /// </summary>
     public async Task DeleteSecretAsync(string repositoryId, string name)
     {
         await cosmo.DeleteSecretAsync(repositoryId, name.ToUpperInvariant());
     }
 
-    // ── Org-level secrets ──
-
-    private static string OrgPartitionKey(string orgId) => $"org:{orgId}";
+    // ── Org-level ──
 
     public async Task SetOrgSecretAsync(string organizationId, string name, string value)
     {
@@ -68,8 +48,8 @@ public class SecretService(DaisiGitCosmo cosmo, string encryptionKey)
 
         await cosmo.UpsertSecretAsync(new RepoSecret
         {
-            RepositoryId = OrgPartitionKey(organizationId),
-            OrganizationId = organizationId,
+            OwnerId = organizationId,
+            Scope = "org",
             Name = name.Trim().ToUpperInvariant(),
             EncryptedValue = Encrypt(value)
         });
@@ -77,42 +57,43 @@ public class SecretService(DaisiGitCosmo cosmo, string encryptionKey)
 
     public async Task<List<string>> ListOrgSecretNamesAsync(string organizationId)
     {
-        var secrets = await cosmo.GetSecretsAsync(OrgPartitionKey(organizationId));
+        var secrets = await cosmo.GetSecretsAsync(organizationId);
         return secrets.Select(s => s.Name).ToList();
     }
 
     public async Task DeleteOrgSecretAsync(string organizationId, string name)
     {
-        await cosmo.DeleteSecretAsync(OrgPartitionKey(organizationId), name.ToUpperInvariant());
+        await cosmo.DeleteSecretAsync(organizationId, name.ToUpperInvariant());
     }
 
+    // ── Resolution (org + repo merged) ──
+
     /// <summary>
-    /// Resolves all secrets for a repository into a dictionary for workflow execution.
-    /// Org secrets are loaded first, then repo secrets override.
-    /// Keys are "secrets.NAME", values are decrypted.
+    /// Resolves all secrets for a repository. Org secrets loaded first, repo overrides.
     /// </summary>
     public async Task<Dictionary<string, string>> ResolveSecretsAsync(string repositoryId, string? organizationId = null)
     {
         var result = new Dictionary<string, string>();
 
-        // Org-level secrets first (lower priority)
         if (!string.IsNullOrEmpty(organizationId))
         {
-            var orgSecrets = await cosmo.GetSecretsAsync(OrgPartitionKey(organizationId));
+            var orgSecrets = await cosmo.GetSecretsAsync(organizationId);
             foreach (var s in orgSecrets)
-            {
                 try { result[$"secrets.{s.Name}"] = Decrypt(s.EncryptedValue); } catch { }
-            }
         }
 
-        // Repo-level secrets override
         var repoSecrets = await cosmo.GetSecretsAsync(repositoryId);
         foreach (var s in repoSecrets)
-        {
             try { result[$"secrets.{s.Name}"] = Decrypt(s.EncryptedValue); } catch { }
-        }
 
         return result;
+    }
+
+    public async Task<string?> GetSecretValueAsync(string repositoryId, string name)
+    {
+        var secret = await cosmo.GetSecretAsync(repositoryId, name.ToUpperInvariant());
+        if (secret == null) return null;
+        return Decrypt(secret.EncryptedValue);
     }
 
     // ── AES-256-CBC encryption ──
@@ -127,7 +108,6 @@ public class SecretService(DaisiGitCosmo cosmo, string encryptionKey)
         var plainBytes = Encoding.UTF8.GetBytes(plaintext);
         var cipherBytes = encryptor.TransformFinalBlock(plainBytes, 0, plainBytes.Length);
 
-        // Prepend IV to ciphertext
         var result = new byte[aes.IV.Length + cipherBytes.Length];
         Buffer.BlockCopy(aes.IV, 0, result, 0, aes.IV.Length);
         Buffer.BlockCopy(cipherBytes, 0, result, aes.IV.Length, cipherBytes.Length);
@@ -156,7 +136,6 @@ public class SecretService(DaisiGitCosmo cosmo, string encryptionKey)
 
     private byte[] DeriveKey()
     {
-        // Derive a 256-bit key from the encryption key string
         return SHA256.HashData(Encoding.UTF8.GetBytes(encryptionKey));
     }
 }

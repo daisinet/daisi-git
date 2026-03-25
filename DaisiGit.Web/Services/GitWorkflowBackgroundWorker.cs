@@ -55,7 +55,7 @@ public class GitWorkflowBackgroundWorker(
                         continue;
                     }
 
-                    await engine.ProcessExecutionAsync(execution, workflow.Steps);
+                    await engine.ProcessExecutionAsync(execution, workflow.Steps, workflow.Env);
                 }
             }
             catch (Exception ex)

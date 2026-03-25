@@ -94,6 +94,16 @@ public partial class DaisiGitCosmo
         return response.Resource;
     }
 
+    public virtual async Task DeleteIssueAsync(string id, string repositoryId)
+    {
+        try
+        {
+            var container = await GetContainerAsync(IssuesContainerName);
+            await container.DeleteItemAsync<Issue>(id, GetIssuePartitionKey(repositoryId));
+        }
+        catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound) { }
+    }
+
     private async Task<int> GetNextIssueNumberAsync(string repositoryId)
     {
         var container = await GetContainerAsync(IssuesContainerName);

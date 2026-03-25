@@ -16,9 +16,11 @@ public static class DaisiGitApiEndpoints
         // Authenticated endpoints (mutations + user-specific)
         var api = app.MapGroup("/api/git").RequireAuthorization();
 
-        // Repositories (create requires auth; get/list allow anonymous for public repos)
+        // Repositories (create/delete require auth; get/list allow anonymous for public repos)
         api.MapPost("/repos", CreateRepository);
+        api.MapPost("/repos/import", ImportRepository);
         api.MapGet("/repos", ListRepositories);
+        api.MapDelete("/repos/{owner}/{slug}", DeleteRepository);
 
         // Issues (create/update require auth)
         api.MapPost("/repos/{owner}/{slug}/issues", CreateIssue);
@@ -39,9 +41,19 @@ public static class DaisiGitApiEndpoints
         // Forks (create requires auth)
         api.MapPost("/repos/{owner}/{slug}/forks", ForkRepository);
 
+        // Secrets
+        api.MapPut("/repos/{owner}/{slug}/secrets/{name}", SetSecret);
+        api.MapGet("/repos/{owner}/{slug}/secrets", ListSecrets);
+        api.MapDelete("/repos/{owner}/{slug}/secrets/{name}", DeleteSecret);
+
         // Stars (require auth)
         api.MapPut("/repos/{owner}/{slug}/star", StarRepository);
         api.MapDelete("/repos/{owner}/{slug}/star", UnstarRepository);
+
+        // Organizations
+        api.MapPost("/orgs", CreateOrg);
+        api.MapGet("/orgs", ListOrgs);
+        api.MapDelete("/orgs/{slug}", DeleteOrg);
 
         // Account settings (require auth)
         api.MapGet("/account/settings", GetAccountSettings);
@@ -66,6 +78,58 @@ public static class DaisiGitApiEndpoints
         pub.MapGet("/repos/{owner}/{slug}/pulls/{number:int}/diff-comments", ListDiffComments);
         pub.MapGet("/repos/{owner}/{slug}/forks", ListForks);
         pub.MapGet("/explore", ExploreRepositories);
+
+        // API keys
+        api.MapPost("/auth/keys", CreateApiKey);
+        api.MapGet("/auth/keys", ListApiKeys);
+        api.MapDelete("/auth/keys/{id}", RevokeApiKey);
+        api.MapGet("/auth/whoami", WhoAmI);
+    }
+
+    // ── Auth/API key endpoints ──
+
+    private static async Task<IResult> CreateApiKey(
+        HttpContext ctx, CreateApiKeyRequest req, ApiKeyService keyService)
+    {
+        var (key, rawToken) = await keyService.CreateKeyAsync(
+            GetAccountId(ctx), GetUserId(ctx), GetUserName(ctx), req.Name);
+        return Results.Created($"/api/git/auth/keys/{key.id}", new
+        {
+            key.id,
+            key.Name,
+            key.TokenPrefix,
+            Token = rawToken,
+            key.CreatedUtc,
+            key.ExpiresUtc,
+            Warning = "This token will only be shown once. Copy it now."
+        });
+    }
+
+    private static async Task<IResult> ListApiKeys(
+        HttpContext ctx, ApiKeyService keyService)
+    {
+        var keys = await keyService.ListKeysAsync(GetAccountId(ctx), GetUserId(ctx));
+        return Results.Ok(keys.Select(k => new
+        {
+            k.id, k.Name, k.TokenPrefix, k.CreatedUtc, k.ExpiresUtc, k.LastUsedUtc
+        }));
+    }
+
+    private static async Task<IResult> RevokeApiKey(
+        HttpContext ctx, string id, ApiKeyService keyService)
+    {
+        await keyService.RevokeKeyAsync(id, GetAccountId(ctx));
+        return Results.NoContent();
+    }
+
+    private static IResult WhoAmI(HttpContext ctx)
+    {
+        return Results.Ok(new
+        {
+            UserId = GetUserId(ctx),
+            UserName = GetUserName(ctx),
+            AccountId = GetAccountId(ctx)
+        });
     }
 
     // ── Permission helpers ──
@@ -95,11 +159,18 @@ public static class DaisiGitApiEndpoints
     // ── Repository endpoints ──
 
     private static async Task<IResult> ListRepositories(
-        HttpContext ctx, RepositoryService repoService)
+        HttpContext ctx, string? owner, RepositoryService repoService)
     {
-        var userId = GetUserId(ctx);
-        var repos = await repoService.GetRepositoriesByOwnerAsync(userId);
-        return Results.Ok(repos.Select(RepoDto));
+        if (!string.IsNullOrEmpty(owner))
+        {
+            var repos = await repoService.GetRepositoriesByOwnerAsync(owner);
+            return Results.Ok(repos.Select(RepoDto));
+        }
+
+        // Default: list all repos in the account
+        var accountId = GetAccountId(ctx);
+        var allRepos = await repoService.GetRepositoriesAsync(accountId);
+        return Results.Ok(allRepos.Select(RepoDto));
     }
 
     private static async Task<IResult> GetRepository(
@@ -112,14 +183,104 @@ public static class DaisiGitApiEndpoints
     }
 
     private static async Task<IResult> CreateRepository(
-        HttpContext ctx, CreateRepoRequest req, RepositoryService repoService)
+        HttpContext ctx, CreateRepoRequest req,
+        RepositoryService repoService, UserProfileService profileService,
+        OrganizationService orgService)
     {
         var userId = GetUserId(ctx);
-        var userName = GetUserName(ctx);
+        var accountId = GetAccountId(ctx);
+        string ownerId;
+        string ownerName;
+
+        if (!string.IsNullOrEmpty(req.Owner))
+        {
+            // Check if owner is an org
+            var org = await orgService.GetBySlugAsync(req.Owner);
+            if (org != null)
+            {
+                ownerId = org.id;
+                ownerName = org.Slug;
+            }
+            else
+            {
+                // Must be the user's own handle
+                var profile = await profileService.GetProfileAsync(userId, accountId);
+                if (profile == null || profile.Handle != req.Owner)
+                    return Results.BadRequest("Invalid owner. Specify your personal handle or an organization slug.");
+                ownerId = userId;
+                ownerName = profile.Handle;
+            }
+        }
+        else
+        {
+            // No owner specified — use personal handle
+            var profile = await profileService.GetProfileAsync(userId, accountId);
+            if (profile == null || string.IsNullOrEmpty(profile.Handle))
+                return Results.BadRequest("You must set up a personal handle before creating personal repositories. Go to Settings > Personal Profile.");
+            ownerId = userId;
+            ownerName = profile.Handle;
+        }
+
         var repo = await repoService.CreateRepositoryAsync(
-            GetAccountId(ctx), userId, userName,
+            accountId, ownerId, ownerName,
             req.Name, req.Description, req.Visibility, req.StorageProvider);
         return Results.Created($"/api/git/repos/{repo.OwnerName}/{repo.Slug}", RepoDto(repo));
+    }
+
+    private static async Task<IResult> ImportRepository(
+        HttpContext ctx, ImportRepoRequest req,
+        ImportService importService, UserProfileService profileService,
+        OrganizationService orgService)
+    {
+        if (string.IsNullOrWhiteSpace(req.Url))
+            return Results.BadRequest("Source URL is required.");
+
+        var userId = GetUserId(ctx);
+        var accountId = GetAccountId(ctx);
+        string ownerId, ownerName;
+
+        if (!string.IsNullOrEmpty(req.Owner))
+        {
+            var org = await orgService.GetBySlugAsync(req.Owner);
+            if (org != null) { ownerId = org.id; ownerName = org.Slug; }
+            else
+            {
+                var profile = await profileService.GetProfileAsync(userId, accountId);
+                if (profile == null || profile.Handle != req.Owner)
+                    return Results.BadRequest("Invalid owner.");
+                ownerId = userId; ownerName = profile.Handle;
+            }
+        }
+        else
+        {
+            var profile = await profileService.GetProfileAsync(userId, accountId);
+            if (profile == null || string.IsNullOrEmpty(profile.Handle))
+                return Results.BadRequest("Set up your personal handle first.");
+            ownerId = userId; ownerName = profile.Handle;
+        }
+
+        try
+        {
+            var repo = await importService.ImportAsync(
+                req.Url, accountId, ownerId, ownerName,
+                req.Name, req.Description, req.Visibility);
+            return Results.Created($"/api/git/repos/{repo.OwnerName}/{repo.Slug}", RepoDto(repo));
+        }
+        catch (Exception ex)
+        {
+            return Results.BadRequest($"Import failed: {ex.Message}");
+        }
+    }
+
+    private static async Task<IResult> DeleteRepository(
+        HttpContext ctx, string owner, string slug,
+        RepositoryService repoService, PermissionService permissionService)
+    {
+        var (repo, error) = await RequireWrite(ctx, owner, slug, repoService, permissionService);
+        if (error != null) return error;
+
+        await repoService.DeleteRepositoryAsync(repo!.id, repo.AccountId);
+        return Results.NoContent();
     }
 
     // ── Branch endpoints ──
@@ -600,13 +761,19 @@ public static class DaisiGitApiEndpoints
 
     private static async Task<IResult> ForkRepository(
         HttpContext ctx, string owner, string slug, RepositoryService repoService,
-        PermissionService permissionService, GitEventService events)
+        PermissionService permissionService, GitEventService events,
+        UserProfileService profileService)
     {
         var (repo, error) = await RequireRead(ctx, owner, slug, repoService, permissionService);
         if (error != null) return error;
 
+        // Resolve the user's handle for fork ownership
+        var profile = await profileService.GetProfileAsync(GetUserId(ctx), GetAccountId(ctx));
+        if (profile == null || string.IsNullOrEmpty(profile.Handle))
+            return Results.BadRequest("You must set up a personal handle before forking. Go to Settings > Personal Profile.");
+
         var fork = await repoService.ForkRepositoryAsync(
-            GetAccountId(ctx), GetUserId(ctx), GetUserName(ctx), repo!);
+            GetAccountId(ctx), GetUserId(ctx), profile.Handle, repo!);
 
         await events.EmitAsync(repo.AccountId, repo.id, GitTriggerType.RepositoryForked,
             GetUserId(ctx), GetUserName(ctx), new Dictionary<string, string>
@@ -627,6 +794,41 @@ public static class DaisiGitApiEndpoints
 
         var forks = await repoService.GetForksAsync(repo!.id);
         return Results.Ok(forks.Select(RepoDto));
+    }
+
+    // ── Secret endpoints ──
+
+    private static async Task<IResult> SetSecret(
+        HttpContext ctx, string owner, string slug, string name, SetSecretRequest req,
+        RepositoryService repoService, PermissionService permissionService, SecretService secretService)
+    {
+        var (repo, error) = await RequireWrite(ctx, owner, slug, repoService, permissionService);
+        if (error != null) return error;
+
+        await secretService.SetSecretAsync(repo!.id, name, req.Value);
+        return Results.NoContent();
+    }
+
+    private static async Task<IResult> ListSecrets(
+        HttpContext ctx, string owner, string slug,
+        RepositoryService repoService, PermissionService permissionService, SecretService secretService)
+    {
+        var (repo, error) = await RequireWrite(ctx, owner, slug, repoService, permissionService);
+        if (error != null) return error;
+
+        var names = await secretService.ListSecretNamesAsync(repo!.id);
+        return Results.Ok(names.Select(n => new { Name = n }));
+    }
+
+    private static async Task<IResult> DeleteSecret(
+        HttpContext ctx, string owner, string slug, string name,
+        RepositoryService repoService, PermissionService permissionService, SecretService secretService)
+    {
+        var (repo, error) = await RequireWrite(ctx, owner, slug, repoService, permissionService);
+        if (error != null) return error;
+
+        await secretService.DeleteSecretAsync(repo!.id, name);
+        return Results.NoContent();
     }
 
     // ── Star endpoints ──
@@ -660,6 +862,35 @@ public static class DaisiGitApiEndpoints
     {
         var repos = await repoService.GetPublicReposAsync(skip ?? 0, take ?? 20);
         return Results.Ok(repos.Select(RepoDto));
+    }
+
+    // ── Organization endpoints ──
+
+    private static async Task<IResult> CreateOrg(
+        HttpContext ctx, CreateOrgRequest req, OrganizationService orgService)
+    {
+        var org = await orgService.CreateAsync(
+            GetAccountId(ctx), req.Name, req.Description,
+            GetUserId(ctx), GetUserName(ctx), req.Handle);
+        return Results.Created($"/api/git/orgs/{org.Slug}", org);
+    }
+
+    private static async Task<IResult> ListOrgs(
+        HttpContext ctx, OrganizationService orgService)
+    {
+        var orgs = await orgService.ListAsync(GetAccountId(ctx));
+        return Results.Ok(orgs);
+    }
+
+    private static async Task<IResult> DeleteOrg(
+        HttpContext ctx, string slug, OrganizationService orgService,
+        RepositoryService repoService, DaisiGit.Web.Services.AvatarService avatarService)
+    {
+        var org = await orgService.GetBySlugAsync(slug);
+        if (org == null) return Results.NotFound();
+        await orgService.DeleteAsync(org, repoService);
+        try { await avatarService.DeleteAvatarAsync("org", org.id); } catch { }
+        return Results.NoContent();
     }
 
     // ── Account settings endpoints ──
@@ -716,13 +947,17 @@ public static class DaisiGitApiEndpoints
 
 // ── Request DTOs ──
 
-public record CreateRepoRequest(string Name, string? Description, GitRepoVisibility Visibility = GitRepoVisibility.Private, StorageProvider? StorageProvider = null);
+public record CreateRepoRequest(string Name, string? Description, string? Owner = null, GitRepoVisibility Visibility = GitRepoVisibility.Private, StorageProvider? StorageProvider = null);
 public record SetStorageProviderRequest(StorageProvider Provider);
 public record CreateIssueRequest(string Title, string? Description, List<string>? Labels = null);
 public record UpdateIssueRequest(string? Title = null, string? Description = null, string? Action = null);
 public record CreatePrRequest(string Title, string? Description, string SourceBranch, string TargetBranch, List<string>? Labels = null);
 public record UpdatePrRequest(string? Title = null, string? Description = null, string? Action = null);
 public record MergePrRequest(string? Strategy = null);
+public record CreateApiKeyRequest(string Name);
+public record CreateOrgRequest(string Name, string Handle, string? Description = null);
+public record ImportRepoRequest(string Url, string? Name = null, string? Owner = null, string? Description = null, GitRepoVisibility Visibility = GitRepoVisibility.Private);
+public record SetSecretRequest(string Value);
 public record CreateCommentRequest(string Body);
 public record SubmitReviewRequest(string? State, string? Body, List<DiffCommentRequest>? DiffComments = null);
 public record DiffCommentRequest(string Path, int Line, string Body, string? Side = null);

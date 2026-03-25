@@ -173,8 +173,57 @@ public partial class RepositoryService(
         var drive = await storageFactory.GetAdapterAsync(repo);
         await drive.DeleteRepositoryAsync(repo.DriveRepositoryId);
 
-        // Delete Cosmos records
-        await cosmo.DeleteRepositoryAsync(id, accountId);
+        // Clean up all related Cosmos data
+        await CleanupRepoDataAsync(id, accountId);
+    }
+
+    private async Task CleanupRepoDataAsync(string repoId, string accountId)
+    {
+        // Refs
+        var refs = await refService.GetAllRefsAsync(repoId);
+        foreach (var (refName, _) in refs)
+            try { await cosmo.DeleteRefAsync(repoId, refName); } catch { }
+        try { await cosmo.DeleteRefAsync(repoId, "HEAD"); } catch { }
+
+        // Object records
+        var objects = await cosmo.GetAllObjectRecordsAsync(repoId);
+        var objContainer = await cosmo.GetContainerAsync(DaisiGitCosmo.GitObjectsContainerName);
+        foreach (var obj in objects)
+            try { await objContainer.DeleteItemAsync<GitObjectRecord>(obj.id, new Microsoft.Azure.Cosmos.PartitionKey(repoId)); } catch { }
+
+        // Issues
+        var issues = await cosmo.GetIssuesAsync(repoId);
+        foreach (var i in issues)
+            try { await cosmo.DeleteIssueAsync(i.id, repoId); } catch { }
+
+        // Pull requests
+        var prs = await cosmo.GetPullRequestsAsync(repoId);
+        foreach (var pr in prs)
+            try { await cosmo.DeletePullRequestAsync(pr.id, repoId); } catch { }
+
+        // Comments
+        var comments = await cosmo.GetAllCommentsAsync(repoId);
+        foreach (var c in comments)
+            try { await cosmo.DeleteCommentAsync(c.id, repoId); } catch { }
+
+        // Reviews
+        var reviews = await cosmo.GetAllReviewsAsync(repoId);
+        foreach (var r in reviews)
+            try { await cosmo.DeleteReviewAsync(r.id, repoId); } catch { }
+
+        // Stars
+        var stars = await cosmo.GetStarsForRepoAsync(repoId);
+        foreach (var s in stars)
+            try { await cosmo.DeleteStarAsync(s.id, repoId); } catch { }
+
+        // Events
+        var events = await cosmo.GetRecentEventsAsync(repoId, 1000);
+        var evtContainer = await cosmo.GetContainerAsync(DaisiGitCosmo.EventsContainerName);
+        foreach (var e in events)
+            try { await evtContainer.DeleteItemAsync<GitEvent>(e.id, new Microsoft.Azure.Cosmos.PartitionKey(repoId)); } catch { }
+
+        // Repository document
+        await cosmo.DeleteRepositoryAsync(repoId, accountId);
     }
 
     /// <summary>
@@ -248,10 +297,12 @@ public partial class RepositoryService(
             await cosmo.UpsertObjectRecordAsync(new GitObjectRecord
             {
                 id = obj.id,
+                Sha = obj.Sha,
                 RepositoryId = fork.id,
                 DriveFileId = obj.DriveFileId,
                 ObjectType = obj.ObjectType,
-                SizeBytes = obj.SizeBytes
+                SizeBytes = obj.SizeBytes,
+                StorageProvider = obj.StorageProvider
             });
         }
 

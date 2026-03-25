@@ -48,6 +48,26 @@ public partial class DaisiGitCosmo
         return null;
     }
 
+    public virtual async Task<List<RepoStar>> GetStarsForRepoAsync(string repositoryId)
+    {
+        var container = await GetContainerAsync(StarsContainerName);
+        var query = new QueryDefinition(
+            "SELECT * FROM c WHERE c.RepositoryId = @repoId AND c.Type = 'RepoStar'")
+            .WithParameter("@repoId", repositoryId);
+
+        var results = new List<RepoStar>();
+        using var iterator = container.GetItemQueryIterator<RepoStar>(query, requestOptions: new QueryRequestOptions
+        {
+            PartitionKey = GetStarPartitionKey(repositoryId)
+        });
+        while (iterator.HasMoreResults)
+        {
+            var response = await iterator.ReadNextAsync();
+            results.AddRange(response);
+        }
+        return results;
+    }
+
     public virtual async Task<List<RepoStar>> GetStarsByUserAsync(string userId)
     {
         var container = await GetContainerAsync(StarsContainerName);

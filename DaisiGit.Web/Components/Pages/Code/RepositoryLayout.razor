@@ -2,6 +2,7 @@
 @inject GitRefService RefService
 @inject BrowseService BrowseService
 @inject OrganizationService OrgService
+@inject UserProfileService ProfileService
 @inject NavigationManager Nav
 
 @if (loading)
@@ -25,7 +26,8 @@ else
     <div class="repo-header">
         <div class="d-flex justify-content-between align-items-start mb-3">
             <div>
-                <h3 class="mb-1">
+                <h3 class="mb-1 d-flex align-items-center gap-2">
+                    <OwnerAvatar OwnerName="@Owner" Size="28" />
                     <a href="/@Owner" class="text-muted text-decoration-none">@Owner</a>
                     <span class="text-muted mx-1">/</span>
                     <a href="/@Owner/@RepoSlug" class="text-decoration-none"><strong>@Repository.Name</strong></a>
@@ -55,12 +57,24 @@ else
                 }
             </div>
             <div class="d-flex align-items-center gap-2">
-                <button class="btn btn-sm btn-outline-secondary" @onclick="ToggleStar" title="@(hasStarred ? "Unstar" : "Star")">
-                    <i class="@(hasStarred ? "fa-solid" : "fa-regular") fa-star me-1"></i> @Repository.StarCount
-                </button>
-                <button class="btn btn-sm btn-outline-secondary" @onclick="ShowForkDialog" title="Fork">
-                    <i class="fa-duotone fa-code-fork me-1"></i> @Repository.ForkCount
-                </button>
+                @if (isLoggedIn)
+                {
+                    <button class="btn btn-sm btn-outline-secondary" @onclick="ToggleStar" title="@(hasStarred ? "Unstar" : "Star")">
+                        <i class="@(hasStarred ? "fa-solid" : "fa-regular") fa-star me-1"></i> @Repository.StarCount
+                    </button>
+                    <button class="btn btn-sm btn-outline-secondary" @onclick="ShowForkDialog" title="Fork">
+                        <i class="fa-duotone fa-code-fork me-1"></i> @Repository.ForkCount
+                    </button>
+                }
+                else
+                {
+                    <span class="btn btn-sm btn-outline-secondary disabled">
+                        <i class="fa-regular fa-star me-1"></i> @Repository.StarCount
+                    </span>
+                    <span class="btn btn-sm btn-outline-secondary disabled">
+                        <i class="fa-duotone fa-code-fork me-1"></i> @Repository.ForkCount
+                    </span>
+                }
                 <span class="badge bg-@(Repository.Visibility == GitRepoVisibility.Public ? "success" : Repository.Visibility == GitRepoVisibility.Internal ? "warning" : "secondary")">
                     @Repository.Visibility
                 </span>
@@ -102,16 +116,19 @@ else
                     <i class="fa-duotone fa-circle-dot me-1"></i> Issues
                 </a>
             </li>
-            <li class="nav-item">
-                <a class="nav-link @(ActiveTab == "workflows" ? "active" : "")" href="/@Owner/@RepoSlug/workflows">
-                    <i class="fa-duotone fa-bolt me-1"></i> Workflows
-                </a>
-            </li>
-            <li class="nav-item">
-                <a class="nav-link @(ActiveTab == "settings" ? "active" : "")" href="/@Owner/@RepoSlug/settings">
-                    <i class="fa-duotone fa-gear me-1"></i> Settings
-                </a>
-            </li>
+            @if (isLoggedIn)
+            {
+                <li class="nav-item">
+                    <a class="nav-link @(ActiveTab == "workflows" ? "active" : "")" href="/@Owner/@RepoSlug/workflows">
+                        <i class="fa-duotone fa-bolt me-1"></i> Workflows
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link @(ActiveTab == "settings" ? "active" : "")" href="/@Owner/@RepoSlug/settings">
+                        <i class="fa-duotone fa-gear me-1"></i> Settings
+                    </a>
+                </li>
+            }
         </ul>
     </div>
 
@@ -133,7 +150,10 @@ else
                     <div class="modal-body">
                         <label class="form-label">Fork to</label>
                         <select class="form-select" @bind="forkOwner">
-                            <option value="@UserName">@UserName (personal)</option>
+                            @if (!string.IsNullOrEmpty(userHandle))
+                            {
+                                <option value="@userHandle">@userHandle (personal)</option>
+                            }
                             @foreach (var org in forkOrgs)
                             {
                                 <option value="@org.Slug">@org.Slug (@org.Name)</option>
@@ -172,11 +192,13 @@ else
 
     public GitRepository? Repository { get; private set; }
     private bool loading = true;
+    private bool isLoggedIn;
     private bool hasStarred;
     private bool showForkConfirm;
     private bool forking;
     private string forkOwner = "";
     private string? forkError;
+    private string? userHandle;
     private List<GitOrganization> forkOrgs = [];
     private List<string> branches = [];
     private bool branchesLoaded;
@@ -193,6 +215,7 @@ else
         loadedSlug = RepoSlug;
         loading = true;
         branchesLoaded = false;
+        isLoggedIn = !string.IsNullOrEmpty(UserId);
         try
         {
             Repository = await RepoService.GetRepositoryBySlugAsync(Owner, RepoSlug);
@@ -243,7 +266,9 @@ else
 
     private async Task ShowForkDialog()
     {
-        forkOwner = UserName;
+        var profile = await ProfileService.GetProfileAsync(UserId, AccountId);
+        userHandle = profile?.Handle;
+        forkOwner = userHandle ?? "";
         forkError = null;
         try
         {

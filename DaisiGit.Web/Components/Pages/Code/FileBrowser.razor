@@ -6,11 +6,18 @@
 @inject GitObjectStore ObjectStore
 @inject GitRefService RefService
 @inject NavigationManager Nav
+@inject IJSRuntime JS
 
 <PageTitle>@(string.IsNullOrEmpty(Path) ? $"{Owner}/{RepoSlug}" : $"{Path} - {Owner}/{RepoSlug}") - Daisi Git</PageTitle>
 
 <RepositoryLayout Owner="@Owner" RepoSlug="@RepoSlug" ActiveTab="code" SelectedBranch="@Branch">
-    @if (isEmpty && !loading)
+    @if (loading)
+    {
+        <div class="text-center py-4">
+            <div class="spinner-border text-primary"></div>
+        </div>
+    }
+    else if (isEmpty)
     {
         <div class="text-center py-5 text-muted">
             <div class="mb-3"><i class="fa-duotone fa-folder-open" style="font-size: 3rem;"></i></div>
@@ -35,7 +42,7 @@
     }
     else if (browseResult != null)
     {
-        <!-- Branch selector + path breadcrumb -->
+        <!-- Branch selector + path breadcrumb + clone button -->
         <div class="d-flex align-items-center gap-2 mb-3">
             <div class="dropdown">
                 <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown">
@@ -83,7 +90,69 @@
                     </ol>
                 </nav>
             }
+            else
+            {
+                <div class="flex-grow-1"></div>
+            }
+
+            <!-- Clone button -->
+            <button type="button" class="btn btn-sm btn-success" @onclick="() => showCloneDialog = true">
+                <i class="fa-duotone fa-clone me-1"></i> Clone
+            </button>
         </div>
+
+        <!-- Clone dialog -->
+        @if (showCloneDialog)
+        {
+            var baseUrl = Nav.BaseUri.TrimEnd('/');
+            var httpsUrl = $"{baseUrl}/{Owner}/{RepoSlug}.git";
+
+            <div class="modal d-block" tabindex="-1" style="background: rgba(0,0,0,0.4);">
+                <div class="modal-dialog modal-dialog-centered">
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <h5 class="modal-title"><i class="fa-duotone fa-clone me-1"></i> Clone repository</h5>
+                            <button type="button" class="btn-close" @onclick="() => showCloneDialog = false"></button>
+                        </div>
+                        <div class="modal-body">
+                            <div class="mb-3">
+                                <label class="form-label fw-semibold">HTTPS</label>
+                                <div class="input-group input-group-sm">
+                                    <input type="text" class="form-control font-monospace" readonly value="@httpsUrl" />
+                                    <button class="btn @(copySuccess == true ? "btn-success" : copySuccess == false ? "btn-danger" : "btn-outline-secondary")"
+                                            type="button" @onclick="() => CopyToClipboard(httpsUrl)">
+                                        <i class="fa-duotone @(copySuccess == true ? "fa-check" : copySuccess == false ? "fa-xmark" : "fa-copy")"></i>
+                                    </button>
+                                </div>
+                            </div>
+
+                            <hr />
+
+                            <div class="mb-3">
+                                <label class="form-label fw-semibold small text-muted">Clone with Git</label>
+                                <div class="bg-dark text-light p-2 rounded font-monospace small">
+                                    git clone @httpsUrl
+                                </div>
+                            </div>
+
+                            <div class="mb-3">
+                                <label class="form-label fw-semibold small text-muted">Clone with DaisiGit CLI</label>
+                                <div class="bg-dark text-light p-2 rounded font-monospace small">
+                                    dg clone @Owner/@RepoSlug
+                                </div>
+                            </div>
+
+                            <div class="mb-3">
+                                <label class="form-label fw-semibold small text-muted">Open in VS Code</label>
+                                <div class="bg-dark text-light p-2 rounded font-monospace small">
+                                    git clone @httpsUrl && code @RepoSlug
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        }
 
         @if (browseResult.IsFile)
         {
@@ -133,6 +202,59 @@
                     }
                 </div>
             </div>
+
+            @* README / LICENSE tabs below file list (root only) *@
+            @if (string.IsNullOrEmpty(Path) && (readmeContent != null || licenseContent != null))
+            {
+                <div class="mt-3">
+                    <ul class="nav nav-tabs">
+                        @if (readmeContent != null)
+                        {
+                            <li class="nav-item">
+                                <button type="button" class="nav-link @(docTab == "readme" ? "active" : "")"
+                                        @onclick='() => docTab = "readme"'>
+                                    <i class="fa-duotone fa-book me-1"></i> @readmeFileName
+                                </button>
+                            </li>
+                        }
+                        @if (licenseContent != null)
+                        {
+                            <li class="nav-item">
+                                <button type="button" class="nav-link @(docTab == "license" ? "active" : "")"
+                                        @onclick='() => docTab = "license"'>
+                                    <i class="fa-duotone fa-scale-balanced me-1"></i> @licenseFileName
+                                </button>
+                            </li>
+                        }
+                    </ul>
+                    <div class="card border-top-0 rounded-top-0">
+                        <div class="card-body">
+                            @if (docTab == "readme" && readmeContent != null)
+                            {
+                                @if (readmeFileName?.EndsWith(".md", StringComparison.OrdinalIgnoreCase) == true)
+                                {
+                                    <MarkdownView Content="@readmeContent" />
+                                }
+                                else
+                                {
+                                    <pre style="white-space: pre-wrap; font-family: inherit; margin: 0;">@readmeContent</pre>
+                                }
+                            }
+                            else if (docTab == "license" && licenseContent != null)
+                            {
+                                @if (licenseFileName?.EndsWith(".md", StringComparison.OrdinalIgnoreCase) == true)
+                                {
+                                    <MarkdownView Content="@licenseContent" />
+                                }
+                                else
+                                {
+                                    <pre style="white-space: pre-wrap; font-family: inherit; margin: 0;">@licenseContent</pre>
+                                }
+                            }
+                        </div>
+                    </div>
+                </div>
+            }
         }
     }
 </RepositoryLayout>
@@ -154,12 +276,26 @@
     private bool isEmpty;
     private bool canWrite;
     private bool creatingReadme;
+    private bool showCloneDialog;
+    private bool? copySuccess;
+    private string? readmeContent;
+    private string? readmeFileName;
+    private string? licenseContent;
+    private string? licenseFileName;
+    private string docTab = "readme";
     private string? readmeError;
     private bool readmeCreated;
 
     protected override async Task OnParametersSetAsync()
     {
         loading = true;
+        browseResult = null;
+        lastCommit = null;
+        isEmpty = false;
+        readmeContent = null;
+        licenseContent = null;
+        StateHasChanged();
+
         try
         {
             repo = await RepoService.GetRepositoryBySlugAsync(Owner, RepoSlug);
@@ -192,6 +328,17 @@
             // Get last commit for header
             var commits = await BrowseService.GetCommitLogAsync(repo.id, commitSha, 1);
             lastCommit = commits.FirstOrDefault();
+
+            // Load README and LICENSE at root
+            if (string.IsNullOrEmpty(Path) && browseResult?.Entries != null)
+            {
+                await LoadDocFileAsync(repo.id, browseResult, "README.md", "README", "README.txt",
+                    (name, content) => { readmeFileName = name; readmeContent = content; });
+                await LoadDocFileAsync(repo.id, browseResult, "LICENSE", "LICENSE.md", "LICENSE.txt",
+                    (name, content) => { licenseFileName = name; licenseContent = content; });
+
+                docTab = readmeContent != null ? "readme" : licenseContent != null ? "license" : "readme";
+            }
         }
         catch { }
         loading = false;
@@ -277,6 +424,45 @@
         {
             creatingReadme = false;
         }
+    }
+
+    private async Task LoadDocFileAsync(string repoId, BrowseResult tree, string name1, string name2, string name3,
+        Action<string, string> setter)
+    {
+        foreach (var name in new[] { name1, name2, name3 })
+        {
+            var entry = tree.Entries.FirstOrDefault(e =>
+                !e.IsTree && string.Equals(e.Name, name, StringComparison.OrdinalIgnoreCase));
+            if (entry != null)
+            {
+                try
+                {
+                    var content = await BrowseService.GetFileContentAsync(repoId, entry.Sha);
+                    if (content is { IsBinary: false, Text: not null })
+                    {
+                        setter(entry.Name, content.Text);
+                        return;
+                    }
+                }
+                catch { }
+            }
+        }
+    }
+
+    private async Task CopyToClipboard(string text)
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("navigator.clipboard.writeText", text);
+            copySuccess = true;
+        }
+        catch
+        {
+            copySuccess = false;
+        }
+        StateHasChanged();
+        await Task.Delay(2000);
+        copySuccess = null;
     }
 
     private static string FormatRelativeDate(DateTimeOffset date)

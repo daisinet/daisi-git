@@ -15,12 +15,29 @@ public class WorkflowEngine(
     IHttpClientFactory httpClientFactory,
     IssueService issueService,
     PullRequestService prService,
-    CommentService commentService)
+    CommentService commentService,
+    SecretService secretService)
 {
-    public async Task ProcessExecutionAsync(WorkflowExecution execution, List<WorkflowStep> steps)
+    /// <summary>
+    /// Processes an execution, injecting secrets and env into the context.
+    /// </summary>
+    public async Task ProcessExecutionAsync(WorkflowExecution execution, List<WorkflowStep> steps,
+        Dictionary<string, string>? env = null)
     {
         try
         {
+            // Inject secrets into context (org secrets inherited, repo overrides)
+            var orgId = execution.Context.GetValueOrDefault("_orgId");
+            var secrets = await secretService.ResolveSecretsAsync(execution.RepositoryId, orgId);
+            foreach (var (key, value) in secrets)
+                execution.Context[key] = value;
+
+            // Inject env variables
+            if (env != null)
+            {
+                foreach (var (key, value) in env)
+                    execution.Context[$"env.{key}"] = value;
+            }
             var flatSteps = FlattenSteps(steps, execution.Context);
             execution.TotalSteps = flatSteps.Count;
 

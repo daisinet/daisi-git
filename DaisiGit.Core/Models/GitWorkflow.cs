@@ -27,6 +27,9 @@ public class GitWorkflow
     /// </summary>
     public Dictionary<string, string>? TriggerFilters { get; set; }
 
+    /// <summary>Environment variables available to all steps as {{env.KEY}}.</summary>
+    public Dictionary<string, string>? Env { get; set; }
+
     public List<WorkflowStep> Steps { get; set; } = [];
     public bool IsEnabled { get; set; } = true;
     public string Status { get; set; } = "Active";

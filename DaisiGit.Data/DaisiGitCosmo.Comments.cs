@@ -67,7 +67,31 @@ public partial class DaisiGitCosmo
 
     public virtual async Task DeleteCommentAsync(string id, string repositoryId)
     {
+        try
+        {
+            var container = await GetContainerAsync(CommentsContainerName);
+            await container.DeleteItemAsync<Comment>(id, GetCommentPartitionKey(repositoryId));
+        }
+        catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound) { }
+    }
+
+    public virtual async Task<List<Comment>> GetAllCommentsAsync(string repositoryId)
+    {
         var container = await GetContainerAsync(CommentsContainerName);
-        await container.DeleteItemAsync<Comment>(id, GetCommentPartitionKey(repositoryId));
+        var query = new QueryDefinition(
+            "SELECT * FROM c WHERE c.RepositoryId = @repoId AND c.Type = 'Comment'")
+            .WithParameter("@repoId", repositoryId);
+
+        var results = new List<Comment>();
+        using var iterator = container.GetItemQueryIterator<Comment>(query, requestOptions: new QueryRequestOptions
+        {
+            PartitionKey = GetCommentPartitionKey(repositoryId)
+        });
+        while (iterator.HasMoreResults)
+        {
+            var response = await iterator.ReadNextAsync();
+            results.AddRange(response);
+        }
+        return results;
     }
 }

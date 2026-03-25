@@ -43,7 +43,22 @@
                     <i class="fa-duotone fa-file-code me-1"></i>
                     @GetFileName()
                 </span>
-                <span class="text-muted">@FormatFileSize(fileContent.SizeBytes)</span>
+                <div class="d-flex align-items-center gap-2">
+                    @if (IsMarkdown)
+                    {
+                        <div class="btn-group btn-group-sm">
+                            <button type="button" class="btn @(!showPreview ? "btn-primary" : "btn-outline-secondary")"
+                                    @onclick="() => showPreview = false">
+                                <i class="fa-duotone fa-code me-1"></i> Code
+                            </button>
+                            <button type="button" class="btn @(showPreview ? "btn-primary" : "btn-outline-secondary")"
+                                    @onclick="() => showPreview = true">
+                                <i class="fa-duotone fa-eye me-1"></i> Preview
+                            </button>
+                        </div>
+                    }
+                    <span class="text-muted">@FormatFileSize(fileContent.SizeBytes)</span>
+                </div>
             </div>
 
             @if (fileContent.IsBinary)
@@ -51,6 +66,12 @@
                 <div class="card-body text-center text-muted">
                     <i class="fa-duotone fa-file-binary fa-3x mb-2"></i>
                     <p>Binary file (@FormatFileSize(fileContent.SizeBytes))</p>
+                </div>
+            }
+            else if (IsMarkdown && showPreview)
+            {
+                <div class="card-body">
+                    <MarkdownView Content="@fileContent.Text" />
                 </div>
             }
             else
@@ -89,6 +110,9 @@
 
     private FileContent? fileContent;
     private bool loading = true;
+    private bool showPreview = true;
+
+    private bool IsMarkdown => GetFileName().EndsWith(".md", StringComparison.OrdinalIgnoreCase);
 
     protected override async Task OnParametersSetAsync()
     {

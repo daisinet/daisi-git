@@ -72,6 +72,32 @@ public partial class OrganizationService(DaisiGitCosmo cosmo)
     }
 
     /// <summary>
+    /// Deletes an organization, all its repos (with full cascade), members, and teams.
+    /// </summary>
+    public async Task DeleteAsync(GitOrganization org, RepositoryService? repoService = null)
+    {
+        // Delete all repos owned by this org
+        if (repoService != null)
+        {
+            var repos = await cosmo.GetRepositoriesByOwnerAsync(org.Slug);
+            foreach (var repo in repos)
+                try { await repoService.DeleteRepositoryAsync(repo.id, repo.AccountId); } catch { }
+        }
+
+        // Delete teams
+        var teams = await cosmo.GetTeamsAsync(org.id);
+        foreach (var t in teams)
+            try { await cosmo.DeleteTeamAsync(t.id, org.id); } catch { }
+
+        // Delete members
+        var members = await cosmo.GetOrgMembersAsync(org.id);
+        foreach (var m in members)
+            try { await cosmo.DeleteOrgMemberAsync(m.id, org.id); } catch { }
+
+        await cosmo.DeleteOrganizationAsync(org.id, org.AccountId);
+    }
+
+    /// <summary>
     /// Lists organizations a user belongs to.
     /// </summary>
     public async Task<List<GitOrganization>> GetUserOrganizationsAsync(string userId, string accountId)

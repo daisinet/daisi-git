@@ -115,4 +115,14 @@ public partial class DaisiGitCosmo
         }
         return 1;
     }
+
+    public virtual async Task DeletePullRequestAsync(string id, string repositoryId)
+    {
+        try
+        {
+            var container = await GetContainerAsync(PullRequestsContainerName);
+            await container.DeleteItemAsync<PullRequest>(id, GetPullRequestPartitionKey(repositoryId));
+        }
+        catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound) { }
+    }
 }

@@ -152,7 +152,10 @@ else
                     {
                         <a href="/@repo.OwnerName/@repo.Slug" class="list-group-item list-group-item-action py-2">
                             <div class="d-flex justify-content-between align-items-center">
-                                <span class="small fw-semibold">@repo.OwnerName/@repo.Name</span>
+                                <span class="small fw-semibold d-flex align-items-center gap-1">
+                                    <OwnerAvatar OwnerName="@repo.OwnerName" Size="18" />
+                                    @repo.OwnerName/@repo.Name
+                                </span>
                                 <span class="badge bg-@(repo.Visibility == GitRepoVisibility.Public ? "success" : "secondary") small">
                                     @repo.Visibility
                                 </span>

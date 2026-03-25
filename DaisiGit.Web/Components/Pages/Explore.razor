@@ -30,7 +30,9 @@ else
         {
             <a href="/@repo.OwnerName/@repo.Slug" class="list-group-item list-group-item-action">
                 <div class="d-flex w-100 justify-content-between">
-                    <div>
+                    <div class="d-flex align-items-center gap-2">
+                        <OwnerAvatar OwnerName="@repo.OwnerName" Size="32" />
+                        <div>
                         <h5 class="mb-1">
                             <span class="text-muted">@repo.OwnerName /</span> @repo.Name
                         </h5>
@@ -42,6 +44,7 @@ else
                         {
                             <small class="text-muted"><i class="fa-duotone fa-code-fork me-1"></i> Forked from @repo.ForkedFromOwnerName/@repo.ForkedFromSlug</small>
                         }
+                        </div>
                     </div>
                     <div class="text-end">
                         <span class="me-3" title="Stars"><i class="fa-solid fa-star text-warning me-1"></i> @repo.StarCount</span>

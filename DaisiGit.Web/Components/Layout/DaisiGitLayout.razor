@@ -70,6 +70,38 @@
     </div>
 </div>
 }
+else
+{
+<!-- Minimal layout for unauthenticated users (public repo pages) -->
+<div class="dg-app">
+    <div class="dg-main" style="margin-left: 0;">
+        <header class="dg-header">
+            <div class="dg-header-left">
+                <a href="/" class="text-decoration-none fw-bold">
+                    <span style="color: #F78C1D;">Daisi Git</span>
+                </a>
+            </div>
+            <div class="dg-header-right">
+                <a href="/" class="btn btn-sm btn-primary">Sign in</a>
+            </div>
+        </header>
+
+        <main class="dg-content">
+            <CascadingValue Value="accountId" Name="AccountId">
+                <CascadingValue Value="userName" Name="UserName">
+                    <CascadingValue Value="userId" Name="UserId">
+                        @Body
+                    </CascadingValue>
+                </CascadingValue>
+            </CascadingValue>
+        </main>
+
+        <footer class="dg-footer">
+            &copy; @DateTime.UtcNow.Year Daisi Git &mdash; Powered by Daisinet
+        </footer>
+    </div>
+</div>
+}
 
 <MudThemeProvider />
 <MudPopoverProvider />

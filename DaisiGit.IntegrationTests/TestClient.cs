@@ -198,6 +198,21 @@ public class TestClient : IDisposable
         return (await _http.GetFromJsonAsync<List<GitEvent>>($"api/git/repos/{owner}/{slug}/events", JsonOptions))!;
     }
 
+    // ── Organizations ──
+
+    public async Task<GitOrganization> CreateOrgAsync(string name, string handle, string? description = null)
+    {
+        var response = await _http.PostAsJsonAsync("api/git/orgs",
+            new { name, handle, description }, JsonOptions);
+        response.EnsureSuccessStatusCode();
+        return (await response.Content.ReadFromJsonAsync<GitOrganization>(JsonOptions))!;
+    }
+
+    public async Task DeleteOrgAsync(string slug)
+    {
+        await _http.DeleteAsync($"api/git/orgs/{slug}");
+    }
+
     public void Dispose() => _http.Dispose();
 }
 

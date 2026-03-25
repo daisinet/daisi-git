@@ -44,6 +44,11 @@ public static class DaisiGitApiEndpoints
         api.MapPut("/repos/{owner}/{slug}/star", StarRepository);
         api.MapDelete("/repos/{owner}/{slug}/star", UnstarRepository);
 
+        // Organizations
+        api.MapPost("/orgs", CreateOrg);
+        api.MapGet("/orgs", ListOrgs);
+        api.MapDelete("/orgs/{slug}", DeleteOrg);
+
         // Account settings (require auth)
         api.MapGet("/account/settings", GetAccountSettings);
         api.MapPut("/account/settings/storage", SetDefaultStorageProvider);
@@ -705,13 +710,19 @@ public static class DaisiGitApiEndpoints
 
     private static async Task<IResult> ForkRepository(
         HttpContext ctx, string owner, string slug, RepositoryService repoService,
-        PermissionService permissionService, GitEventService events)
+        PermissionService permissionService, GitEventService events,
+        UserProfileService profileService)
     {
         var (repo, error) = await RequireRead(ctx, owner, slug, repoService, permissionService);
         if (error != null) return error;
 
+        // Resolve the user's handle for fork ownership
+        var profile = await profileService.GetProfileAsync(GetUserId(ctx), GetAccountId(ctx));
+        if (profile == null || string.IsNullOrEmpty(profile.Handle))
+            return Results.BadRequest("You must set up a personal handle before forking. Go to Settings > Personal Profile.");
+
         var fork = await repoService.ForkRepositoryAsync(
-            GetAccountId(ctx), GetUserId(ctx), GetUserName(ctx), repo!);
+            GetAccountId(ctx), GetUserId(ctx), profile.Handle, repo!);
 
         await events.EmitAsync(repo.AccountId, repo.id, GitTriggerType.RepositoryForked,
             GetUserId(ctx), GetUserName(ctx), new Dictionary<string, string>
@@ -765,6 +776,35 @@ public static class DaisiGitApiEndpoints
     {
         var repos = await repoService.GetPublicReposAsync(skip ?? 0, take ?? 20);
         return Results.Ok(repos.Select(RepoDto));
+    }
+
+    // ── Organization endpoints ──
+
+    private static async Task<IResult> CreateOrg(
+        HttpContext ctx, CreateOrgRequest req, OrganizationService orgService)
+    {
+        var org = await orgService.CreateAsync(
+            GetAccountId(ctx), req.Name, req.Description,
+            GetUserId(ctx), GetUserName(ctx), req.Handle);
+        return Results.Created($"/api/git/orgs/{org.Slug}", org);
+    }
+
+    private static async Task<IResult> ListOrgs(
+        HttpContext ctx, OrganizationService orgService)
+    {
+        var orgs = await orgService.ListAsync(GetAccountId(ctx));
+        return Results.Ok(orgs);
+    }
+
+    private static async Task<IResult> DeleteOrg(
+        HttpContext ctx, string slug, OrganizationService orgService,
+        RepositoryService repoService, DaisiGit.Web.Services.AvatarService avatarService)
+    {
+        var org = await orgService.GetBySlugAsync(slug);
+        if (org == null) return Results.NotFound();
+        await orgService.DeleteAsync(org, repoService);
+        try { await avatarService.DeleteAvatarAsync("org", org.id); } catch { }
+        return Results.NoContent();
     }
 
     // ── Account settings endpoints ──
@@ -829,6 +869,7 @@ public record CreatePrRequest(string Title, string? Description, string SourceBr
 public record UpdatePrRequest(string? Title = null, string? Description = null, string? Action = null);
 public record MergePrRequest(string? Strategy = null);
 public record CreateApiKeyRequest(string Name);
+public record CreateOrgRequest(string Name, string Handle, string? Description = null);
 public record CreateCommentRequest(string Body);
 public record SubmitReviewRequest(string? State, string? Body, List<DiffCommentRequest>? DiffComments = null);
 public record DiffCommentRequest(string Path, int Line, string Body, string? Side = null);

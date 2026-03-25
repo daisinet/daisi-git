@@ -2,6 +2,7 @@
 @inject GitRefService RefService
 @inject BrowseService BrowseService
 @inject OrganizationService OrgService
+@inject UserProfileService ProfileService
 @inject NavigationManager Nav
 
 @if (loading)
@@ -148,7 +149,10 @@ else
                     <div class="modal-body">
                         <label class="form-label">Fork to</label>
                         <select class="form-select" @bind="forkOwner">
-                            <option value="@UserName">@UserName (personal)</option>
+                            @if (!string.IsNullOrEmpty(userHandle))
+                            {
+                                <option value="@userHandle">@userHandle (personal)</option>
+                            }
                             @foreach (var org in forkOrgs)
                             {
                                 <option value="@org.Slug">@org.Slug (@org.Name)</option>
@@ -193,6 +197,7 @@ else
     private bool forking;
     private string forkOwner = "";
     private string? forkError;
+    private string? userHandle;
     private List<GitOrganization> forkOrgs = [];
     private List<string> branches = [];
     private bool branchesLoaded;
@@ -260,7 +265,9 @@ else
 
     private async Task ShowForkDialog()
     {
-        forkOwner = UserName;
+        var profile = await ProfileService.GetProfileAsync(UserId, AccountId);
+        userHandle = profile?.Handle;
+        forkOwner = userHandle ?? "";
         forkError = null;
         try
         {

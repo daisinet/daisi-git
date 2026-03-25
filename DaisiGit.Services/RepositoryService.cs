@@ -297,10 +297,12 @@ public partial class RepositoryService(
             await cosmo.UpsertObjectRecordAsync(new GitObjectRecord
             {
                 id = obj.id,
+                Sha = obj.Sha,
                 RepositoryId = fork.id,
                 DriveFileId = obj.DriveFileId,
                 ObjectType = obj.ObjectType,
-                SizeBytes = obj.SizeBytes
+                SizeBytes = obj.SizeBytes,
+                StorageProvider = obj.StorageProvider
             });
         }
 

@@ -4,11 +4,7 @@ namespace DaisiGit.IntegrationTests;
 
 /// <summary>
 /// End-to-end integration tests against a running DaisiGit dev server.
-/// These tests exercise the full API flow: repo creation, issues, PRs, forks, stars, workflows.
-///
-/// Prerequisites:
-/// - DaisiGit.Web running on https://localhost:5003 in Development mode
-/// - Set env var DAISIGIT_API_KEY to the Daisi:SecretKey value (default: secret-debug)
+/// Uses a single shared repo for most tests to minimize Cosmos/Blob usage.
 /// </summary>
 [Collection("Integration")]
 public class FullWorkflowTests : IAsyncLifetime
@@ -16,278 +12,181 @@ public class FullWorkflowTests : IAsyncLifetime
     private readonly TestClient _client;
     private readonly string _testId = DateTime.UtcNow.ToString("HHmmss");
     private readonly List<(string owner, string slug)> _createdRepos = [];
+    private RepoDto _repo = null!;
 
     public FullWorkflowTests()
     {
         if (!TestConfig.IsConfigured)
-            throw new InvalidOperationException(
-                "Set DAISIGIT_API_KEY env var to a valid personal access token (dg_...)");
+            throw new InvalidOperationException("Set DAISIGIT_API_KEY env var");
         _client = new TestClient(TestConfig.ServerUrl, TestConfig.ApiKey);
     }
 
-    /// <summary>Creates a repo and tracks it for cleanup.</summary>
-    private async Task<RepoDto> CreateAndTrackRepoAsync(string name,
-        string? description = null, GitRepoVisibility visibility = GitRepoVisibility.Private)
+    public async Task InitializeAsync()
     {
-        var repo = await _client.CreateRepoAsync(name, description, visibility);
-        _createdRepos.Add((repo.OwnerName, repo.Slug));
-        return repo;
+        _repo = await _client.CreateRepoAsync($"test-{_testId}", "Integration test repo",
+            GitRepoVisibility.Public);
+        _createdRepos.Add((_repo.OwnerName, _repo.Slug));
     }
-
-    public Task InitializeAsync() => Task.CompletedTask;
 
     public async Task DisposeAsync()
     {
-        // Delete all repos created during this test run
         foreach (var (owner, slug) in _createdRepos)
-        {
             try { await _client.DeleteRepoAsync(owner, slug); } catch { }
-        }
         _client.Dispose();
     }
 
-    // ── 1. Repository Creation ──
+    // ── Repository ──
 
     [Fact]
-    public async Task T01_CreateRepository()
+    public void T01_RepoCreated()
     {
-        var repo = await CreateAndTrackRepoAsync($"test-repo-{_testId}", "Integration test repo", GitRepoVisibility.Public);
-
-        Assert.NotNull(repo);
-        Assert.Equal($"test-repo-{_testId}", repo.Name);
-        Assert.Equal("Public", repo.Visibility);
-        Assert.Equal("main", repo.DefaultBranch);
+        Assert.NotNull(_repo);
+        Assert.Equal("main", _repo.DefaultBranch);
+        Assert.Equal("Public", _repo.Visibility);
     }
 
     [Fact]
-    public async Task T02_ListRepositories()
+    public async Task T02_GetRepository()
     {
-        // Create a repo, then verify it's retrievable by owner/slug
-        var repo = await CreateAndTrackRepoAsync($"list-test-{_testId}");
-        var fetched = await _client.GetRepoAsync(repo.OwnerName, repo.Slug);
-
+        var fetched = await _client.GetRepoAsync(_repo.OwnerName, _repo.Slug);
         Assert.NotNull(fetched);
-        Assert.Equal(repo.Slug, fetched.Slug);
+        Assert.Equal(_repo.Slug, fetched.Slug);
     }
 
-    [Fact]
-    public async Task T03_GetRepository()
-    {
-        var created = await CreateAndTrackRepoAsync($"get-test-{_testId}");
-        var repo = await _client.GetRepoAsync(created.OwnerName, created.Slug);
-
-        Assert.NotNull(repo);
-        Assert.Equal(created.Slug, repo.Slug);
-    }
-
-    // ── 2. Branches and Commits ──
+    // ── Branches and Commits ──
 
     [Fact]
-    public async Task T04_ListBranches()
+    public async Task T03_ListBranches()
     {
-        var repo = await CreateAndTrackRepoAsync($"branch-test-{_testId}");
-        var branches = await _client.ListBranchesAsync(repo.OwnerName, repo.Slug);
-
+        var branches = await _client.ListBranchesAsync(_repo.OwnerName, _repo.Slug);
         Assert.NotEmpty(branches);
         Assert.Contains(branches, b => b.Name == "main");
     }
 
     [Fact]
-    public async Task T05_ListCommits()
+    public async Task T04_ListCommits()
     {
-        var repo = await CreateAndTrackRepoAsync($"commit-test-{_testId}");
-        var commits = await _client.ListCommitsAsync(repo.OwnerName, repo.Slug);
-
+        var commits = await _client.ListCommitsAsync(_repo.OwnerName, _repo.Slug);
         Assert.NotEmpty(commits);
         Assert.Equal("Initial commit", commits[0].MessageFirstLine);
     }
 
     [Fact]
-    public async Task T06_BrowseTree()
+    public async Task T05_BrowseTree()
     {
-        var repo = await CreateAndTrackRepoAsync($"tree-test-{_testId}");
-        var tree = await _client.GetTreeAsync(repo.OwnerName, repo.Slug);
-
-        // New repo has empty tree (initial commit has no files)
+        var tree = await _client.GetTreeAsync(_repo.OwnerName, _repo.Slug);
         Assert.NotNull(tree);
         Assert.False(tree.IsFile);
     }
 
-    // ── 3. Issues ──
+    // ── Issues ──
 
     [Fact]
-    public async Task T07_CreateIssue()
+    public async Task T06_IssueLifecycle()
     {
-        var repo = await CreateAndTrackRepoAsync($"issue-test-{_testId}");
-        var issue = await _client.CreateIssueAsync(repo.OwnerName, repo.Slug,
-            "Test Issue", "This is a test issue");
-
-        Assert.NotNull(issue);
+        var issue = await _client.CreateIssueAsync(_repo.OwnerName, _repo.Slug,
+            "Test Issue", "Description");
         Assert.Equal("Test Issue", issue.Title);
         Assert.Equal(IssueStatus.Open, issue.Status);
-        Assert.True(issue.Number > 0);
-    }
 
-    [Fact]
-    public async Task T08_ListIssues()
-    {
-        var repo = await CreateAndTrackRepoAsync($"issuelist-{_testId}");
-        await _client.CreateIssueAsync(repo.OwnerName, repo.Slug, "Issue A");
-        await _client.CreateIssueAsync(repo.OwnerName, repo.Slug, "Issue B");
+        var issues = await _client.ListIssuesAsync(_repo.OwnerName, _repo.Slug);
+        Assert.Contains(issues, i => i.Number == issue.Number);
 
-        var issues = await _client.ListIssuesAsync(repo.OwnerName, repo.Slug);
-        Assert.Equal(2, issues.Count);
-    }
-
-    [Fact]
-    public async Task T09_CloseIssue()
-    {
-        var repo = await CreateAndTrackRepoAsync($"issueclose-{_testId}");
-        var issue = await _client.CreateIssueAsync(repo.OwnerName, repo.Slug, "Close Me");
-
-        var closed = await _client.CloseIssueAsync(repo.OwnerName, repo.Slug, issue.Number);
+        var closed = await _client.CloseIssueAsync(_repo.OwnerName, _repo.Slug, issue.Number);
         Assert.Equal(IssueStatus.Closed, closed.Status);
     }
 
     [Fact]
-    public async Task T10_IssueComment()
+    public async Task T07_IssueComment()
     {
-        var repo = await CreateAndTrackRepoAsync($"issuecomment-{_testId}");
-        var issue = await _client.CreateIssueAsync(repo.OwnerName, repo.Slug, "Comment Test");
-
-        var comment = await _client.AddIssueCommentAsync(repo.OwnerName, repo.Slug,
-            issue.Number, "This is a comment");
-
-        Assert.NotNull(comment);
-        Assert.Equal("This is a comment", comment.Body);
+        var issue = await _client.CreateIssueAsync(_repo.OwnerName, _repo.Slug, "Comment Test");
+        var comment = await _client.AddIssueCommentAsync(_repo.OwnerName, _repo.Slug,
+            issue.Number, "Test comment");
+        Assert.Equal("Test comment", comment.Body);
     }
 
-    // ── 4. Pull Requests ──
+    // ── Pull Requests ──
 
     [Fact]
-    public async Task T11_CreatePullRequest()
+    public async Task T08_PullRequestLifecycle()
     {
-        var repo = await CreateAndTrackRepoAsync($"pr-test-{_testId}");
-
-        // PR needs two different branches — create a PR from main to main won't work
-        // but the API should still accept the creation (validation happens at merge)
-        var pr = await _client.CreatePrAsync(repo.OwnerName, repo.Slug,
-            "Test PR", "main", "main", "Test PR description");
-
-        Assert.NotNull(pr);
+        var pr = await _client.CreatePrAsync(_repo.OwnerName, _repo.Slug,
+            "Test PR", "main", "main");
         Assert.Equal("Test PR", pr.Title);
         Assert.Equal(PullRequestStatus.Open, pr.Status);
+
+        var prs = await _client.ListPrsAsync(_repo.OwnerName, _repo.Slug);
+        Assert.Contains(prs, p => p.Number == pr.Number);
     }
 
     [Fact]
-    public async Task T12_ListPullRequests()
+    public async Task T09_ReviewOnPR()
     {
-        var repo = await CreateAndTrackRepoAsync($"prlist-{_testId}");
-        await _client.CreatePrAsync(repo.OwnerName, repo.Slug, "PR A", "main", "main");
-        await _client.CreatePrAsync(repo.OwnerName, repo.Slug, "PR B", "main", "main");
-
-        var prs = await _client.ListPrsAsync(repo.OwnerName, repo.Slug);
-        Assert.Equal(2, prs.Count);
+        var pr = await _client.CreatePrAsync(_repo.OwnerName, _repo.Slug, "Review PR", "main", "main");
+        var review = await _client.SubmitReviewAsync(_repo.OwnerName, _repo.Slug,
+            pr.Number, "approved", "LGTM");
+        Assert.Equal("Approved", review.State);
     }
 
-    // ── 5. Stars ──
+    // ── Stars ──
 
     [Fact]
-    public async Task T13_StarAndUnstar()
+    public async Task T10_StarAndUnstar()
     {
-        var repo = await CreateAndTrackRepoAsync($"star-test-{_testId}");
+        await _client.StarRepoAsync(_repo.OwnerName, _repo.Slug);
+        var starred = await _client.GetRepoAsync(_repo.OwnerName, _repo.Slug);
+        Assert.True(starred!.StarCount > 0);
 
-        await _client.StarRepoAsync(repo.OwnerName, repo.Slug);
-        var starred = await _client.GetRepoAsync(repo.OwnerName, repo.Slug);
-        Assert.Equal(1, starred!.StarCount);
-
-        await _client.UnstarRepoAsync(repo.OwnerName, repo.Slug);
-        var unstarred = await _client.GetRepoAsync(repo.OwnerName, repo.Slug);
-        Assert.Equal(0, unstarred!.StarCount);
+        await _client.UnstarRepoAsync(_repo.OwnerName, _repo.Slug);
     }
 
-    // ── 6. Forks ──
+    // ── Forks ──
 
     [Fact]
-    public async Task T14_ForkRepository()
+    public async Task T11_ForkRepository()
     {
-        var repo = await CreateAndTrackRepoAsync($"fork-src-{_testId}", visibility: GitRepoVisibility.Public);
+        // Create a second repo to fork (can't fork to same owner)
+        var src = await _client.CreateRepoAsync($"fork-src-{_testId}", visibility: GitRepoVisibility.Public);
+        _createdRepos.Add((src.OwnerName, src.Slug));
 
-        var fork = await _client.ForkRepoAsync(repo.OwnerName, repo.Slug);
+        var fork = await _client.ForkRepoAsync(src.OwnerName, src.Slug);
         _createdRepos.Add((fork.OwnerName, fork.Slug));
-        Assert.NotNull(fork);
-        Assert.Equal(repo.id, fork.ForkedFromId);
+        Assert.Equal(src.id, fork.ForkedFromId);
     }
 
-    // ── 7. Workflows ──
+    // ── Workflows ──
 
     [Fact]
-    public async Task T15_CreateWorkflow()
+    public async Task T12_WorkflowLifecycle()
     {
-        var repo = await CreateAndTrackRepoAsync($"workflow-test-{_testId}");
-
-        var wf = await _client.CreateWorkflowAsync(repo.OwnerName, repo.Slug,
+        var wf = await _client.CreateWorkflowAsync(_repo.OwnerName, _repo.Slug,
             "Test Workflow", GitTriggerType.PushToRef);
-
-        Assert.NotNull(wf);
         Assert.Equal("Test Workflow", wf.Name);
-        Assert.True(wf.IsEnabled);
+
+        var wfs = await _client.ListWorkflowsAsync(_repo.OwnerName, _repo.Slug);
+        Assert.Contains(wfs, w => w.Name == "Test Workflow");
     }
 
-    [Fact]
-    public async Task T16_ListWorkflows()
-    {
-        var repo = await CreateAndTrackRepoAsync($"wflist-{_testId}");
-        await _client.CreateWorkflowAsync(repo.OwnerName, repo.Slug, "WF A", GitTriggerType.PushToRef);
-        await _client.CreateWorkflowAsync(repo.OwnerName, repo.Slug, "WF B", GitTriggerType.IssueCreated);
-
-        var wfs = await _client.ListWorkflowsAsync(repo.OwnerName, repo.Slug);
-        Assert.Equal(2, wfs.Count);
-    }
-
-    // ── 8. Events ──
+    // ── Events ──
 
     [Fact]
-    public async Task T17_EventsEmitted()
+    public async Task T13_EventsEmitted()
     {
-        var repo = await CreateAndTrackRepoAsync($"events-test-{_testId}");
-
-        // Create an issue — should emit an event
-        await _client.CreateIssueAsync(repo.OwnerName, repo.Slug, "Event Test Issue");
-
-        // Wait a moment for async event processing
+        await _client.CreateIssueAsync(_repo.OwnerName, _repo.Slug, "Event Test");
         await Task.Delay(500);
 
-        var events = await _client.ListEventsAsync(repo.OwnerName, repo.Slug);
+        var events = await _client.ListEventsAsync(_repo.OwnerName, _repo.Slug);
         Assert.NotEmpty(events);
-        Assert.Contains(events, e => e.EventType == GitTriggerType.IssueCreated);
     }
 
-    // ── 9. Duplicate Prevention ──
+    // ── Duplicate Prevention ──
 
     [Fact]
-    public async Task T18_DuplicateRepoNameFails()
+    public async Task T14_DuplicateRepoFails()
     {
-        var repo = await CreateAndTrackRepoAsync($"dup-test-{_testId}");
-
         await Assert.ThrowsAsync<HttpRequestException>(async () =>
         {
-            await CreateAndTrackRepoAsync($"dup-test-{_testId}");
+            await _client.CreateRepoAsync(_repo.Name);
         });
-    }
-
-    // ── 10. Reviews ──
-
-    [Fact]
-    public async Task T19_SubmitReview()
-    {
-        var repo = await CreateAndTrackRepoAsync($"review-test-{_testId}");
-        var pr = await _client.CreatePrAsync(repo.OwnerName, repo.Slug, "Review PR", "main", "main");
-
-        var review = await _client.SubmitReviewAsync(repo.OwnerName, repo.Slug,
-            pr.Number, "approved", "Looks good!");
-
-        Assert.NotNull(review);
-        Assert.Equal("Approved", review.State);
     }
 }

@@ -22,11 +22,14 @@ public class DaisiGitClient : IDisposable
     /// Creates a new DaisiGit client pointing at the given server URL.
     /// </summary>
     /// <param name="baseUrl">DaisiGit server base URL (e.g., https://git.daisinet.app)</param>
-    /// <param name="sessionToken">Authentication session token</param>
-    public DaisiGitClient(string baseUrl, string sessionToken)
+    /// <param name="apiKeyOrSession">API key (dg_...) or session token for authentication</param>
+    public DaisiGitClient(string baseUrl, string apiKeyOrSession)
     {
         _http = new HttpClient { BaseAddress = new Uri(baseUrl.TrimEnd('/') + "/") };
-        _http.DefaultRequestHeaders.Add("X-Session-Id", sessionToken);
+        if (apiKeyOrSession.StartsWith("dg_"))
+            _http.DefaultRequestHeaders.Add("X-Api-Key", apiKeyOrSession);
+        else
+            _http.DefaultRequestHeaders.Add("X-Session-Id", apiKeyOrSession);
     }
 
     /// <summary>

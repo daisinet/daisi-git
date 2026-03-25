@@ -22,6 +22,18 @@ builder.Services.AddDaisiForWeb()
                 .AddDaisiMiddleware()
                 .AddDaisiCookieKeyProvider();
 
+// API key authentication (for CLI and external integrations)
+builder.Services.AddAuthentication()
+    .AddScheme<Microsoft.AspNetCore.Authentication.AuthenticationSchemeOptions,
+        DaisiGit.Web.Services.ApiKeyAuthHandler>("ApiKey", _ => { });
+builder.Services.AddAuthorization(options =>
+{
+    options.DefaultPolicy = new Microsoft.AspNetCore.Authorization.AuthorizationPolicyBuilder()
+        .AddAuthenticationSchemes("ApiKey")
+        .RequireAuthenticatedUser()
+        .Build();
+});
+
 // Cosmos DB
 builder.Services.AddSingleton<DaisiGitCosmo>(sp =>
     new DaisiGitCosmo(builder.Configuration));
@@ -51,6 +63,7 @@ builder.Services.AddScoped<PermissionService>();
 builder.Services.AddScoped<ReviewService>();
 builder.Services.AddScoped<AccountSettingsService>();
 builder.Services.AddScoped<UserProfileService>();
+builder.Services.AddScoped<ApiKeyService>();
 builder.Services.AddSingleton<AvatarService>();
 
 // Workflow services

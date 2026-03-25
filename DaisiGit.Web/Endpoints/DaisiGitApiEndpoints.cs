@@ -66,6 +66,58 @@ public static class DaisiGitApiEndpoints
         pub.MapGet("/repos/{owner}/{slug}/pulls/{number:int}/diff-comments", ListDiffComments);
         pub.MapGet("/repos/{owner}/{slug}/forks", ListForks);
         pub.MapGet("/explore", ExploreRepositories);
+
+        // API keys
+        api.MapPost("/auth/keys", CreateApiKey);
+        api.MapGet("/auth/keys", ListApiKeys);
+        api.MapDelete("/auth/keys/{id}", RevokeApiKey);
+        api.MapGet("/auth/whoami", WhoAmI);
+    }
+
+    // ── Auth/API key endpoints ──
+
+    private static async Task<IResult> CreateApiKey(
+        HttpContext ctx, CreateApiKeyRequest req, ApiKeyService keyService)
+    {
+        var (key, rawToken) = await keyService.CreateKeyAsync(
+            GetAccountId(ctx), GetUserId(ctx), GetUserName(ctx), req.Name);
+        return Results.Created($"/api/git/auth/keys/{key.id}", new
+        {
+            key.id,
+            key.Name,
+            key.TokenPrefix,
+            Token = rawToken,
+            key.CreatedUtc,
+            key.ExpiresUtc,
+            Warning = "This token will only be shown once. Copy it now."
+        });
+    }
+
+    private static async Task<IResult> ListApiKeys(
+        HttpContext ctx, ApiKeyService keyService)
+    {
+        var keys = await keyService.ListKeysAsync(GetAccountId(ctx), GetUserId(ctx));
+        return Results.Ok(keys.Select(k => new
+        {
+            k.id, k.Name, k.TokenPrefix, k.CreatedUtc, k.ExpiresUtc, k.LastUsedUtc
+        }));
+    }
+
+    private static async Task<IResult> RevokeApiKey(
+        HttpContext ctx, string id, ApiKeyService keyService)
+    {
+        await keyService.RevokeKeyAsync(id, GetAccountId(ctx));
+        return Results.NoContent();
+    }
+
+    private static IResult WhoAmI(HttpContext ctx)
+    {
+        return Results.Ok(new
+        {
+            UserId = GetUserId(ctx),
+            UserName = GetUserName(ctx),
+            AccountId = GetAccountId(ctx)
+        });
     }
 
     // ── Permission helpers ──
@@ -723,6 +775,7 @@ public record UpdateIssueRequest(string? Title = null, string? Description = nul
 public record CreatePrRequest(string Title, string? Description, string SourceBranch, string TargetBranch, List<string>? Labels = null);
 public record UpdatePrRequest(string? Title = null, string? Description = null, string? Action = null);
 public record MergePrRequest(string? Strategy = null);
+public record CreateApiKeyRequest(string Name);
 public record CreateCommentRequest(string Body);
 public record SubmitReviewRequest(string? State, string? Body, List<DiffCommentRequest>? DiffComments = null);
 public record DiffCommentRequest(string Path, int Line, string Body, string? Side = null);

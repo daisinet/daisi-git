@@ -180,6 +180,15 @@ app.MapGitSmartProtocolEndpoints();
 app.MapDaisiGitApiEndpoints();
 app.MapWorkflowApiEndpoints();
 
+// Avatar proxy (public, no auth required, cached 10 min)
+app.MapGet("/api/git/avatars/{type}/{id}", async (HttpContext ctx, string type, string id, AvatarService avatarService) =>
+{
+    var result = await avatarService.DownloadAvatarAsync(type, id);
+    if (result == null) return Results.NotFound();
+    ctx.Response.Headers.CacheControl = "public, max-age=600";
+    return Results.Stream(result.Value.Stream, result.Value.ContentType);
+});
+
 app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode();
 

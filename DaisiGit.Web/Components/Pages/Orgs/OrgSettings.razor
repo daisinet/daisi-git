@@ -123,8 +123,18 @@ else if (!loading)
         saving = false;
     }
 
-    private void OnOrgAvatarChanged(string? url)
+    private async Task OnOrgAvatarChanged(string? url)
     {
         orgAvatarUrl = url;
+        // Save avatar URL immediately
+        if (org != null)
+        {
+            try
+            {
+                org.AvatarUrl = url;
+                await OrgService.UpdateAsync(org);
+            }
+            catch { }
+        }
     }
 }

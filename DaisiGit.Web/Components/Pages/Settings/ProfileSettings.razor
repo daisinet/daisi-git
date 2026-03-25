@@ -193,9 +193,20 @@
         saving = false;
     }
 
-    private void OnAvatarChanged(string? url)
+    private async Task OnAvatarChanged(string? url)
     {
         avatarUrl = url;
+        // Save avatar URL immediately
+        try
+        {
+            var profile = await ProfileService.GetProfileAsync(UserId, AccountId);
+            if (profile != null)
+            {
+                profile.AvatarUrl = url;
+                await ProfileService.SaveProfileAsync(profile);
+            }
+        }
+        catch { }
     }
 
     // ── API Keys ──

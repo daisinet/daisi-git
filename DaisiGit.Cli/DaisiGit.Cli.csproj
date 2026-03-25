@@ -6,10 +6,30 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>DaisiGit.Cli</RootNamespace>
     <AssemblyName>dg</AssemblyName>
+
+    <!-- dotnet tool packaging -->
+    <PackAsTool>true</PackAsTool>
     <ToolCommandName>dg</ToolCommandName>
+    <PackageId>DaisiGit.Cli</PackageId>
+    <Version>0.1.0</Version>
+    <Authors>Daisinet</Authors>
+    <Description>DaisiGit CLI - manage repositories, issues, and pull requests from your terminal</Description>
+    <PackageProjectUrl>https://git.daisi.ai</PackageProjectUrl>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+
+    <!-- Standalone publish settings -->
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>true</SelfContained>
+    <PublishTrimmed>true</PublishTrimmed>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
   </PropertyGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\DaisiGit.SDK\DaisiGit.SDK.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="..\docs\cli.md" Pack="true" PackagePath="README.md" />
   </ItemGroup>
 </Project>

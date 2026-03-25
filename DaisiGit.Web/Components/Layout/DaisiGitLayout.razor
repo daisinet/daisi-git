@@ -77,18 +77,20 @@
 else
 {
 <!-- Minimal layout for unauthenticated users (public repo pages) -->
+<nav style="background: #1a1a2e; border-bottom: 1px solid rgba(255,255,255,0.1);">
+    <div class="container d-flex align-items-center justify-content-between py-3">
+        <a href="/welcome" class="text-decoration-none d-flex align-items-center">
+            <img src="images/daisi-logo-color-white.svg" alt="Daisi Git" style="height: 24px;" />
+            <span class="ms-2" style="font-family: 'Anta', system-ui; color: #F78C1D; font-size: 1.1rem;">GIT</span>
+        </a>
+        <div class="d-flex gap-2">
+            <a href="/explore" class="btn btn-sm btn-outline-light">Explore</a>
+            <a href="@anonLoginUrl" class="btn btn-sm text-white" style="background: #F78C1D; border: none;">Sign In</a>
+        </div>
+    </div>
+</nav>
 <div class="dg-app">
     <div class="dg-main" style="margin-left: 0;">
-        <header class="dg-header">
-            <div class="dg-header-left">
-                <a href="/" class="text-decoration-none fw-bold">
-                    <span style="color: #F78C1D;">Daisi Git</span>
-                </a>
-            </div>
-            <div class="dg-header-right">
-                <a href="/" class="btn btn-sm btn-primary">Sign in</a>
-            </div>
-        </header>
 
         <main class="dg-content">
             <CascadingValue Value="accountId" Name="AccountId">
@@ -118,6 +120,7 @@ else
     private string userName = "";
     private string userId = "";
     private string? userHandle;
+    private string anonLoginUrl = "/";
 
     [Inject] AuthService Auth { get; set; } = default!;
     [Inject] IHttpContextAccessor HttpContextAccessor { get; set; } = default!;
@@ -127,6 +130,16 @@ else
     {
         try
         {
+            // Build login URL for anonymous nav
+            var appUrl = Daisi.SDK.Models.DaisiStaticSettings.SsoAppUrl;
+            var authorityUrl = Daisi.SDK.Models.DaisiStaticSettings.SsoAuthorityUrl;
+            if (!string.IsNullOrEmpty(authorityUrl) && !string.IsNullOrEmpty(appUrl))
+            {
+                var cb = Uri.EscapeDataString($"{appUrl}/sso/callback");
+                var orig = Uri.EscapeDataString(appUrl);
+                anonLoginUrl = $"{authorityUrl}/sso/authorize?returnUrl={cb}&origin={orig}";
+            }
+
             isAuthenticated = await Auth.IsAuthenticatedAsync();
             if (!isAuthenticated)
             {

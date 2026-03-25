@@ -3,6 +3,7 @@
 @inject BrowseService BrowseService
 @inject OrganizationService OrgService
 @inject UserProfileService ProfileService
+@inject PermissionService PermissionService
 @inject NavigationManager Nav
 
 @if (loading)
@@ -13,11 +14,15 @@
         </div>
     </div>
 }
-else if (Repository == null)
+else if (Repository == null || !hasAccess)
 {
     <div class="text-center py-5">
         <h4 class="text-muted">Repository not found</h4>
         <p class="text-muted">@Owner/@RepoSlug does not exist or you don't have access.</p>
+        @if (!isLoggedIn)
+        {
+            <a href="/" class="btn btn-primary mt-2">Sign in</a>
+        }
     </div>
 }
 else
@@ -193,6 +198,7 @@ else
     public GitRepository? Repository { get; private set; }
     private bool loading = true;
     private bool isLoggedIn;
+    private bool hasAccess = true;
     private bool hasStarred;
     private bool showForkConfirm;
     private bool forking;
@@ -219,12 +225,18 @@ else
         try
         {
             Repository = await RepoService.GetRepositoryBySlugAsync(Owner, RepoSlug);
-            if (Repository != null && string.IsNullOrEmpty(SelectedBranch))
-                SelectedBranch = Repository.DefaultBranch;
-            if (Repository != null && !string.IsNullOrEmpty(UserId))
-                hasStarred = await RepoService.HasStarredAsync(UserId, Repository.id);
             if (Repository != null)
+            {
+                // Check read permission
+                hasAccess = await PermissionService.CanReadAsync(UserId ?? "", Repository);
+                if (!hasAccess) { loading = false; return; }
+
+                if (string.IsNullOrEmpty(SelectedBranch))
+                    SelectedBranch = Repository.DefaultBranch;
+                if (!string.IsNullOrEmpty(UserId))
+                    hasStarred = await RepoService.HasStarredAsync(UserId, Repository.id);
                 await LoadBranches();
+            }
         }
         catch { }
         loading = false;

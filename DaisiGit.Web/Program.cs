@@ -143,7 +143,7 @@ app.Use(async (context, next) =>
         var isSystemRoute = firstSegment is "" or "settings" or "repositories" or "organizations" or "new";
         var isPotentialPublicPage = segments.Length >= 2 && !isSystemRoute;
 
-        if (!isPotentialPublicPage)
+        if (!isPotentialPublicPage && !path.StartsWith("/welcome"))
         {
             var authService = context.RequestServices.GetRequiredService<Daisi.SDK.Web.Services.AuthService>();
             var isAuthenticated = false;
@@ -151,15 +151,9 @@ app.Use(async (context, next) =>
 
             if (!isAuthenticated)
             {
-                var appUrl = DaisiStaticSettings.SsoAppUrl;
-                var authorityUrl = DaisiStaticSettings.SsoAuthorityUrl;
-                if (!string.IsNullOrEmpty(appUrl) && !string.IsNullOrEmpty(authorityUrl))
-                {
-                    var callbackUrl = Uri.EscapeDataString($"{appUrl}/sso/callback");
-                    var origin = Uri.EscapeDataString(appUrl);
-                    context.Response.Redirect($"{authorityUrl}/sso/authorize?returnUrl={callbackUrl}&origin={origin}");
-                    return;
-                }
+                // Redirect to welcome page instead of SSO
+                context.Response.Redirect("/welcome");
+                return;
             }
         }
     }

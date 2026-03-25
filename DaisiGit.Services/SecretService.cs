@@ -57,22 +57,61 @@ public class SecretService(DaisiGitCosmo cosmo, string encryptionKey)
         await cosmo.DeleteSecretAsync(repositoryId, name.ToUpperInvariant());
     }
 
+    // ── Org-level secrets ──
+
+    private static string OrgPartitionKey(string orgId) => $"org:{orgId}";
+
+    public async Task SetOrgSecretAsync(string organizationId, string name, string value)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+            throw new InvalidOperationException("Secret name is required.");
+
+        await cosmo.UpsertSecretAsync(new RepoSecret
+        {
+            RepositoryId = OrgPartitionKey(organizationId),
+            OrganizationId = organizationId,
+            Name = name.Trim().ToUpperInvariant(),
+            EncryptedValue = Encrypt(value)
+        });
+    }
+
+    public async Task<List<string>> ListOrgSecretNamesAsync(string organizationId)
+    {
+        var secrets = await cosmo.GetSecretsAsync(OrgPartitionKey(organizationId));
+        return secrets.Select(s => s.Name).ToList();
+    }
+
+    public async Task DeleteOrgSecretAsync(string organizationId, string name)
+    {
+        await cosmo.DeleteSecretAsync(OrgPartitionKey(organizationId), name.ToUpperInvariant());
+    }
+
     /// <summary>
     /// Resolves all secrets for a repository into a dictionary for workflow execution.
+    /// Org secrets are loaded first, then repo secrets override.
     /// Keys are "secrets.NAME", values are decrypted.
     /// </summary>
-    public async Task<Dictionary<string, string>> ResolveSecretsAsync(string repositoryId)
+    public async Task<Dictionary<string, string>> ResolveSecretsAsync(string repositoryId, string? organizationId = null)
     {
-        var secrets = await cosmo.GetSecretsAsync(repositoryId);
         var result = new Dictionary<string, string>();
-        foreach (var s in secrets)
+
+        // Org-level secrets first (lower priority)
+        if (!string.IsNullOrEmpty(organizationId))
         {
-            try
+            var orgSecrets = await cosmo.GetSecretsAsync(OrgPartitionKey(organizationId));
+            foreach (var s in orgSecrets)
             {
-                result[$"secrets.{s.Name}"] = Decrypt(s.EncryptedValue);
+                try { result[$"secrets.{s.Name}"] = Decrypt(s.EncryptedValue); } catch { }
             }
-            catch { }
         }
+
+        // Repo-level secrets override
+        var repoSecrets = await cosmo.GetSecretsAsync(repositoryId);
+        foreach (var s in repoSecrets)
+        {
+            try { result[$"secrets.{s.Name}"] = Decrypt(s.EncryptedValue); } catch { }
+        }
+
         return result;
     }
 

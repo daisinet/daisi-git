@@ -26,8 +26,9 @@ public class WorkflowEngine(
     {
         try
         {
-            // Inject secrets into context
-            var secrets = await secretService.ResolveSecretsAsync(execution.RepositoryId);
+            // Inject secrets into context (org secrets inherited, repo overrides)
+            var orgId = execution.Context.GetValueOrDefault("_orgId");
+            var secrets = await secretService.ResolveSecretsAsync(execution.RepositoryId, orgId);
             foreach (var (key, value) in secrets)
                 execution.Context[key] = value;
 

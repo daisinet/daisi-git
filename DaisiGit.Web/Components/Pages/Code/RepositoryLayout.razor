@@ -55,12 +55,24 @@ else
                 }
             </div>
             <div class="d-flex align-items-center gap-2">
-                <button class="btn btn-sm btn-outline-secondary" @onclick="ToggleStar" title="@(hasStarred ? "Unstar" : "Star")">
-                    <i class="@(hasStarred ? "fa-solid" : "fa-regular") fa-star me-1"></i> @Repository.StarCount
-                </button>
-                <button class="btn btn-sm btn-outline-secondary" @onclick="ShowForkDialog" title="Fork">
-                    <i class="fa-duotone fa-code-fork me-1"></i> @Repository.ForkCount
-                </button>
+                @if (isLoggedIn)
+                {
+                    <button class="btn btn-sm btn-outline-secondary" @onclick="ToggleStar" title="@(hasStarred ? "Unstar" : "Star")">
+                        <i class="@(hasStarred ? "fa-solid" : "fa-regular") fa-star me-1"></i> @Repository.StarCount
+                    </button>
+                    <button class="btn btn-sm btn-outline-secondary" @onclick="ShowForkDialog" title="Fork">
+                        <i class="fa-duotone fa-code-fork me-1"></i> @Repository.ForkCount
+                    </button>
+                }
+                else
+                {
+                    <span class="btn btn-sm btn-outline-secondary disabled">
+                        <i class="fa-regular fa-star me-1"></i> @Repository.StarCount
+                    </span>
+                    <span class="btn btn-sm btn-outline-secondary disabled">
+                        <i class="fa-duotone fa-code-fork me-1"></i> @Repository.ForkCount
+                    </span>
+                }
                 <span class="badge bg-@(Repository.Visibility == GitRepoVisibility.Public ? "success" : Repository.Visibility == GitRepoVisibility.Internal ? "warning" : "secondary")">
                     @Repository.Visibility
                 </span>
@@ -102,16 +114,19 @@ else
                     <i class="fa-duotone fa-circle-dot me-1"></i> Issues
                 </a>
             </li>
-            <li class="nav-item">
-                <a class="nav-link @(ActiveTab == "workflows" ? "active" : "")" href="/@Owner/@RepoSlug/workflows">
-                    <i class="fa-duotone fa-bolt me-1"></i> Workflows
-                </a>
-            </li>
-            <li class="nav-item">
-                <a class="nav-link @(ActiveTab == "settings" ? "active" : "")" href="/@Owner/@RepoSlug/settings">
-                    <i class="fa-duotone fa-gear me-1"></i> Settings
-                </a>
-            </li>
+            @if (isLoggedIn)
+            {
+                <li class="nav-item">
+                    <a class="nav-link @(ActiveTab == "workflows" ? "active" : "")" href="/@Owner/@RepoSlug/workflows">
+                        <i class="fa-duotone fa-bolt me-1"></i> Workflows
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link @(ActiveTab == "settings" ? "active" : "")" href="/@Owner/@RepoSlug/settings">
+                        <i class="fa-duotone fa-gear me-1"></i> Settings
+                    </a>
+                </li>
+            }
         </ul>
     </div>
 
@@ -172,6 +187,7 @@ else
 
     public GitRepository? Repository { get; private set; }
     private bool loading = true;
+    private bool isLoggedIn;
     private bool hasStarred;
     private bool showForkConfirm;
     private bool forking;
@@ -193,6 +209,7 @@ else
         loadedSlug = RepoSlug;
         loading = true;
         branchesLoaded = false;
+        isLoggedIn = !string.IsNullOrEmpty(UserId);
         try
         {
             Repository = await RepoService.GetRepositoryBySlugAsync(Owner, RepoSlug);

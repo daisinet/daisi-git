@@ -73,28 +73,40 @@ DaisiStaticSettings.LoadFromConfiguration(
 
 app.UseDaisiMiddleware();
 
-// Redirect unauthenticated users to SSO (skip static files, API, git endpoints, and SSO callbacks)
+// Redirect unauthenticated users to SSO (skip static files, API, git endpoints, SSO callbacks,
+// and potential public repo/org pages which handle auth in the UI)
 app.Use(async (context, next) =>
 {
     var path = context.Request.Path.Value?.ToLower() ?? "";
     if (!path.StartsWith("/_") && !path.StartsWith("/api/") && !path.Contains(".git/")
         && !path.StartsWith("/sso/") && !path.StartsWith("/account/")
+        && !path.StartsWith("/explore")
         && !Path.HasExtension(path))
     {
-        var authService = context.RequestServices.GetRequiredService<Daisi.SDK.Web.Services.AuthService>();
-        var isAuthenticated = false;
-        try { isAuthenticated = await authService.IsAuthenticatedAsync(); } catch { }
+        // Allow potential public pages through without auth:
+        // /{owner}/{repo}/... paths (2+ segments that aren't system routes)
+        var segments = path.Trim('/').Split('/');
+        var firstSegment = segments.Length > 0 ? segments[0] : "";
+        var isSystemRoute = firstSegment is "" or "settings" or "repositories" or "organizations" or "new";
+        var isPotentialPublicPage = segments.Length >= 2 && !isSystemRoute;
 
-        if (!isAuthenticated)
+        if (!isPotentialPublicPage)
         {
-            var appUrl = DaisiStaticSettings.SsoAppUrl;
-            var authorityUrl = DaisiStaticSettings.SsoAuthorityUrl;
-            if (!string.IsNullOrEmpty(appUrl) && !string.IsNullOrEmpty(authorityUrl))
+            var authService = context.RequestServices.GetRequiredService<Daisi.SDK.Web.Services.AuthService>();
+            var isAuthenticated = false;
+            try { isAuthenticated = await authService.IsAuthenticatedAsync(); } catch { }
+
+            if (!isAuthenticated)
             {
-                var callbackUrl = Uri.EscapeDataString($"{appUrl}/sso/callback");
-                var origin = Uri.EscapeDataString(appUrl);
-                context.Response.Redirect($"{authorityUrl}/sso/authorize?returnUrl={callbackUrl}&origin={origin}");
-                return;
+                var appUrl = DaisiStaticSettings.SsoAppUrl;
+                var authorityUrl = DaisiStaticSettings.SsoAuthorityUrl;
+                if (!string.IsNullOrEmpty(appUrl) && !string.IsNullOrEmpty(authorityUrl))
+                {
+                    var callbackUrl = Uri.EscapeDataString($"{appUrl}/sso/callback");
+                    var origin = Uri.EscapeDataString(appUrl);
+                    context.Response.Redirect($"{authorityUrl}/sso/authorize?returnUrl={callbackUrl}&origin={origin}");
+                    return;
+                }
             }
         }
     }

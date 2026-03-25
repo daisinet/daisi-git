@@ -11,7 +11,13 @@
 <PageTitle>@(string.IsNullOrEmpty(Path) ? $"{Owner}/{RepoSlug}" : $"{Path} - {Owner}/{RepoSlug}") - Daisi Git</PageTitle>
 
 <RepositoryLayout Owner="@Owner" RepoSlug="@RepoSlug" ActiveTab="code" SelectedBranch="@Branch">
-    @if (isEmpty && !loading)
+    @if (loading)
+    {
+        <div class="text-center py-4">
+            <div class="spinner-border text-primary"></div>
+        </div>
+    }
+    else if (isEmpty)
     {
         <div class="text-center py-5 text-muted">
             <div class="mb-3"><i class="fa-duotone fa-folder-open" style="font-size: 3rem;"></i></div>
@@ -283,6 +289,13 @@
     protected override async Task OnParametersSetAsync()
     {
         loading = true;
+        browseResult = null;
+        lastCommit = null;
+        isEmpty = false;
+        readmeContent = null;
+        licenseContent = null;
+        StateHasChanged();
+
         try
         {
             repo = await RepoService.GetRepositoryBySlugAsync(Owner, RepoSlug);

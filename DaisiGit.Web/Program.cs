@@ -51,6 +51,7 @@ builder.Services.AddScoped<PermissionService>();
 builder.Services.AddScoped<ReviewService>();
 builder.Services.AddScoped<AccountSettingsService>();
 builder.Services.AddScoped<UserProfileService>();
+builder.Services.AddSingleton<AvatarService>();
 
 // Workflow services
 builder.Services.AddScoped<GitEventService>();

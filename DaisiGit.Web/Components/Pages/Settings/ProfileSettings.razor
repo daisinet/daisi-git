@@ -11,6 +11,12 @@
 
 <div class="card" style="max-width: 600px;">
     <div class="card-body">
+        <div class="mb-4">
+            <label class="form-label fw-semibold">Avatar</label>
+            <AvatarUpload EntityType="user" EntityId="@UserId" CurrentUrl="@avatarUrl"
+                          OnAvatarChanged="OnAvatarChanged" />
+        </div>
+
         <div class="mb-3">
             <label class="form-label fw-semibold">Handle</label>
             <div class="input-group">
@@ -61,6 +67,7 @@
     private string? displayName;
     private string? email;
     private string? bio;
+    private string? avatarUrl;
     private string? error;
     private bool saving;
     private bool saved;
@@ -80,6 +87,7 @@
                 displayName = profile.DisplayName;
                 email = profile.Email;
                 bio = profile.Bio;
+                avatarUrl = profile.AvatarUrl;
             }
             else
             {
@@ -116,6 +124,7 @@
             profile.DisplayName = displayName?.Trim();
             profile.Email = email?.Trim();
             profile.Bio = bio?.Trim();
+            profile.AvatarUrl = avatarUrl;
 
             await ProfileService.SaveProfileAsync(profile);
             saved = true;
@@ -125,5 +134,10 @@
             error = ex.Message;
         }
         saving = false;
+    }
+
+    private void OnAvatarChanged(string? url)
+    {
+        avatarUrl = url;
     }
 }

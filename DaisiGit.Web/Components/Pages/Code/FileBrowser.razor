@@ -225,15 +225,25 @@
                         <div class="card-body">
                             @if (docTab == "readme" && readmeContent != null)
                             {
-                                <div class="markdown-body">
+                                @if (readmeFileName?.EndsWith(".md", StringComparison.OrdinalIgnoreCase) == true)
+                                {
+                                    <MarkdownView Content="@readmeContent" />
+                                }
+                                else
+                                {
                                     <pre style="white-space: pre-wrap; font-family: inherit; margin: 0;">@readmeContent</pre>
-                                </div>
+                                }
                             }
                             else if (docTab == "license" && licenseContent != null)
                             {
-                                <div class="markdown-body">
+                                @if (licenseFileName?.EndsWith(".md", StringComparison.OrdinalIgnoreCase) == true)
+                                {
+                                    <MarkdownView Content="@licenseContent" />
+                                }
+                                else
+                                {
                                     <pre style="white-space: pre-wrap; font-family: inherit; margin: 0;">@licenseContent</pre>
-                                </div>
+                                }
                             }
                         </div>
                     </div>

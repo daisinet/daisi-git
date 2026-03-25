@@ -14,6 +14,12 @@
 
     <div class="card" style="max-width: 600px;">
         <div class="card-body">
+            <div class="mb-4">
+                <label class="form-label fw-semibold">Avatar</label>
+                <AvatarUpload EntityType="org" EntityId="@(org?.id ?? "")" CurrentUrl="@orgAvatarUrl"
+                              OnAvatarChanged="OnOrgAvatarChanged" />
+            </div>
+
             <div class="mb-3">
                 <label class="form-label fw-semibold">Organization name</label>
                 <input type="text" class="form-control" @bind="name" />
@@ -22,7 +28,7 @@
             <div class="mb-3">
                 <label class="form-label fw-semibold">URL handle</label>
                 <div class="input-group">
-                    <span class="input-group-text text-muted">/org/</span>
+                    <span class="input-group-text text-muted">/</span>
                     <input type="text" class="form-control" @bind="handle" />
                 </div>
                 <div class="form-text">Changing this will update all URLs for this organization. Must be unique.</div>
@@ -66,6 +72,7 @@ else if (!loading)
     private string name = "";
     private string handle = "";
     private string? description;
+    private string? orgAvatarUrl;
     private string? error;
     private bool loading = true;
     private bool saving;
@@ -82,6 +89,7 @@ else if (!loading)
                 name = org.Name;
                 handle = org.Slug;
                 description = org.Description;
+                orgAvatarUrl = org.AvatarUrl;
             }
         }
         catch { }
@@ -100,6 +108,7 @@ else if (!loading)
         {
             org.Name = name.Trim();
             org.Description = description?.Trim();
+            org.AvatarUrl = orgAvatarUrl;
             org = await OrgService.UpdateAsync(org, handle.Trim());
             saved = true;
 
@@ -112,5 +121,10 @@ else if (!loading)
             error = ex.Message;
         }
         saving = false;
+    }
+
+    private void OnOrgAvatarChanged(string? url)
+    {
+        orgAvatarUrl = url;
     }
 }

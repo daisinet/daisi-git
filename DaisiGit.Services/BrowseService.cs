@@ -114,20 +114,20 @@ public class BrowseService(GitObjectStore objectStore, GitRefService refService)
     {
         var commits = new List<CommitInfo>();
         var visited = new HashSet<string>();
-        // Use a priority queue ordered by timestamp (newest first)
-        var queue = new PriorityQueue<string, long>();
-        queue.Enqueue(startSha, 0);
+        // Priority queue: negative unix timestamp = newest first
+        var queue = new PriorityQueue<(string sha, GitCommit commit), long>();
+
+        // Load the start commit to get its timestamp
+        var startObj = await objectStore.GetObjectAsync(repositoryId, startSha);
+        if (startObj is GitCommit startCommit)
+            queue.Enqueue((startSha, startCommit), -startCommit.Author.Timestamp.ToUnixTimeSeconds());
 
         var skipped = 0;
 
         while (queue.Count > 0 && commits.Count < maxCount)
         {
-            var sha = queue.Dequeue();
+            var (sha, commit) = queue.Dequeue();
             if (!visited.Add(sha))
-                continue;
-
-            var obj = await objectStore.GetObjectAsync(repositoryId, sha);
-            if (obj is not GitCommit commit)
                 continue;
 
             if (skipped < skip)
@@ -152,11 +152,15 @@ public class BrowseService(GitObjectStore objectStore, GitRefService refService)
                 });
             }
 
-            // Enqueue parents with negative timestamp for ordering (newest first)
+            // Load parents and enqueue with their own timestamps
             foreach (var parentSha in commit.ParentShas)
             {
                 if (!visited.Contains(parentSha))
-                    queue.Enqueue(parentSha, -commit.Author.Timestamp.ToUnixTimeSeconds());
+                {
+                    var parentObj = await objectStore.GetObjectAsync(repositoryId, parentSha);
+                    if (parentObj is GitCommit parentCommit)
+                        queue.Enqueue((parentSha, parentCommit), -parentCommit.Author.Timestamp.ToUnixTimeSeconds());
+                }
             }
         }
 

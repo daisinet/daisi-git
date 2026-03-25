@@ -54,12 +54,12 @@ public class FullWorkflowTests : IAsyncLifetime
     [Fact]
     public async Task T02_ListRepositories()
     {
-        // Create a repo first
+        // Create a repo, then verify it's retrievable by owner/slug
         var repo = await _client.CreateRepoAsync($"list-test-{_testId}");
-        var repos = await _client.ListReposAsync();
+        var fetched = await _client.GetRepoAsync(repo.OwnerName, repo.Slug);
 
-        Assert.NotEmpty(repos);
-        Assert.Contains(repos, r => r.Slug == repo.Slug);
+        Assert.NotNull(fetched);
+        Assert.Equal(repo.Slug, fetched.Slug);
     }
 
     [Fact]

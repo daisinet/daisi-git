@@ -39,16 +39,16 @@ public class TestClient : IDisposable
         return (await response.Content.ReadFromJsonAsync<GitRepository>(JsonOptions))!;
     }
 
-    public async Task<GitRepository?> GetRepoAsync(string owner, string slug)
+    public async Task<RepoDto?> GetRepoAsync(string owner, string slug)
     {
         var response = await _http.GetAsync($"api/git/repos/{owner}/{slug}");
         if (!response.IsSuccessStatusCode) return null;
-        return await response.Content.ReadFromJsonAsync<GitRepository>(JsonOptions);
+        return await response.Content.ReadFromJsonAsync<RepoDto>(JsonOptions);
     }
 
-    public async Task<List<GitRepository>> ListReposAsync()
+    public async Task<List<RepoDto>> ListReposAsync()
     {
-        return (await _http.GetFromJsonAsync<List<GitRepository>>("api/git/repos", JsonOptions))!;
+        return (await _http.GetFromJsonAsync<List<RepoDto>>("api/git/repos", JsonOptions))!;
     }
 
     public async Task DeleteRepoAsync(string owner, string slug)
@@ -208,3 +208,4 @@ public class TreeResultDto { public string Path { get; set; } = ""; public bool 
 public class TreeEntryDto { public string Name { get; set; } = ""; public string Mode { get; set; } = ""; }
 public class MergeResultDto { public bool Success { get; set; } public string? MergeCommitSha { get; set; } public string? Error { get; set; } }
 public class ReviewDto { public string Id { get; set; } = ""; public string State { get; set; } = ""; }
+public class RepoDto { public string id { get; set; } = ""; public string Name { get; set; } = ""; public string Slug { get; set; } = ""; public string OwnerName { get; set; } = ""; public string? Description { get; set; } public string DefaultBranch { get; set; } = "main"; public string? Visibility { get; set; } public int StarCount { get; set; } public int ForkCount { get; set; } public string? ForkedFromId { get; set; } }

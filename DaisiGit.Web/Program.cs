@@ -85,6 +85,41 @@ DaisiStaticSettings.LoadFromConfiguration(
     builder.Configuration.AsEnumerable().ToDictionary(
         keySelector: x => x.Key, elementSelector: x => x.Value));
 
+// Authenticate API key on all requests (even anonymous endpoints)
+app.Use(async (context, next) =>
+{
+    var apiKey = context.Request.Headers["X-Api-Key"].FirstOrDefault();
+    if (string.IsNullOrEmpty(apiKey))
+    {
+        var authHeader = context.Request.Headers.Authorization.FirstOrDefault();
+        if (authHeader?.StartsWith("Bearer dg_") == true)
+            apiKey = authHeader["Bearer ".Length..];
+    }
+
+    if (!string.IsNullOrEmpty(apiKey) && apiKey.StartsWith("dg_"))
+    {
+        using var scope = app.Services.CreateScope();
+        var keyService = scope.ServiceProvider.GetRequiredService<ApiKeyService>();
+        var key = await keyService.ValidateTokenAsync(apiKey);
+        if (key != null)
+        {
+            context.Items["userId"] = key.UserId;
+            context.Items["userName"] = key.UserName;
+            context.Items["accountId"] = key.AccountId;
+
+            var claims = new[] {
+                new System.Security.Claims.Claim(System.Security.Claims.ClaimTypes.Name, key.UserName),
+                new System.Security.Claims.Claim(System.Security.Claims.ClaimTypes.Sid, key.UserId),
+                new System.Security.Claims.Claim("accountId", key.AccountId)
+            };
+            context.User = new System.Security.Claims.ClaimsPrincipal(
+                new System.Security.Claims.ClaimsIdentity(claims, "ApiKey"));
+        }
+    }
+
+    await next();
+});
+
 app.UseDaisiMiddleware();
 
 // Redirect unauthenticated users to SSO (skip static files, API, git endpoints, SSO callbacks,

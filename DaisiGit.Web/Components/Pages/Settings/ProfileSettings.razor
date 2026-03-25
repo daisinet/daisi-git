@@ -1,5 +1,7 @@
 @page "/settings/profile"
 @inject UserProfileService ProfileService
+@inject ApiKeyService KeyService
+@inject IJSRuntime JS
 @inject NavigationManager Nav
 
 <PageTitle>Personal Profile - Daisi Git</PageTitle>
@@ -58,6 +60,59 @@
     </div>
 </div>
 
+<!-- API Keys -->
+<h5 class="mt-4 mb-3">API Keys</h5>
+<div class="card" style="max-width: 600px;">
+    <div class="card-body">
+        <p class="text-muted small">Personal access tokens for CLI and API access. Tokens are shown only once when created.</p>
+
+        <div class="d-flex gap-2 mb-3">
+            <input type="text" class="form-control form-control-sm" @bind="newKeyName" placeholder="Token name (e.g. my-laptop)" />
+            <button type="button" class="btn btn-sm btn-success text-nowrap" @onclick="CreateKey" disabled="@creatingKey">
+                @if (creatingKey) { <span class="spinner-border spinner-border-sm me-1"></span> }
+                Generate Token
+            </button>
+        </div>
+
+        @if (!string.IsNullOrEmpty(newRawToken))
+        {
+            <div class="alert alert-warning">
+                <strong>Copy this token now — it won't be shown again:</strong>
+                <div class="input-group input-group-sm mt-2">
+                    <input type="text" class="form-control font-monospace" readonly value="@newRawToken" />
+                    <button class="btn btn-outline-secondary" type="button" @onclick="CopyToken">
+                        <i class="fa-duotone fa-copy"></i>
+                    </button>
+                </div>
+            </div>
+        }
+
+        @if (apiKeys.Count > 0)
+        {
+            <table class="table table-sm mb-0">
+                <thead><tr><th>Name</th><th>Prefix</th><th>Created</th><th>Last Used</th><th></th></tr></thead>
+                <tbody>
+                    @foreach (var key in apiKeys)
+                    {
+                        var k = key;
+                        <tr>
+                            <td>@k.Name</td>
+                            <td><code>@k.TokenPrefix...</code></td>
+                            <td class="text-muted small">@k.CreatedUtc.ToString("MMM d")</td>
+                            <td class="text-muted small">@(k.LastUsedUtc?.ToString("MMM d") ?? "Never")</td>
+                            <td><button class="btn btn-sm btn-outline-danger" @onclick="() => RevokeKey(k.id)"><i class="fa-solid fa-xmark"></i></button></td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
+        else if (!creatingKey)
+        {
+            <div class="text-muted small">No API keys yet.</div>
+        }
+    </div>
+</div>
+
 @code {
     [CascadingParameter(Name = "AccountId")] string AccountId { get; set; } = "";
     [CascadingParameter(Name = "UserId")] string UserId { get; set; } = "";
@@ -97,6 +152,8 @@
             }
         }
         catch { }
+
+        await LoadKeys();
     }
 
     private async Task Save()
@@ -139,5 +196,53 @@
     private void OnAvatarChanged(string? url)
     {
         avatarUrl = url;
+    }
+
+    // ── API Keys ──
+
+    private List<DaisiGit.Core.Models.ApiKey> apiKeys = [];
+    private string newKeyName = "";
+    private string? newRawToken;
+    private bool creatingKey;
+
+    private async Task LoadKeys()
+    {
+        if (!string.IsNullOrEmpty(UserId))
+        {
+            try { apiKeys = await KeyService.ListKeysAsync(AccountId, UserId); }
+            catch { }
+        }
+    }
+
+    private async Task CreateKey()
+    {
+        if (string.IsNullOrWhiteSpace(newKeyName)) return;
+        creatingKey = true;
+        newRawToken = null;
+        try
+        {
+            var (key, rawToken) = await KeyService.CreateKeyAsync(AccountId, UserId, UserName, newKeyName.Trim());
+            newRawToken = rawToken;
+            newKeyName = "";
+            await LoadKeys();
+        }
+        catch { }
+        creatingKey = false;
+    }
+
+    private async Task RevokeKey(string keyId)
+    {
+        try
+        {
+            await KeyService.RevokeKeyAsync(keyId, AccountId);
+            await LoadKeys();
+        }
+        catch { }
+    }
+
+    private async Task CopyToken()
+    {
+        if (newRawToken != null)
+            await JS.InvokeVoidAsync("navigator.clipboard.writeText", newRawToken);
     }
 }

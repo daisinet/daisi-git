@@ -19,7 +19,8 @@ public class AvatarService
         {
             var blobServiceClient = new BlobServiceClient(connectionString);
             _container = blobServiceClient.GetBlobContainerClient(ContainerName);
-            _container.CreateIfNotExists(PublicAccessType.Blob);
+            try { _container.CreateIfNotExists(PublicAccessType.Blob); }
+            catch { _container.CreateIfNotExists(); }
         }
     }
 

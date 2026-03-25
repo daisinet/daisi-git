@@ -5,7 +5,6 @@ namespace DaisiGit.Web.Services;
 
 /// <summary>
 /// Background worker that polls for pending workflow executions and processes them.
-/// Adapted from CRM CrmBackgroundWorker.
 /// </summary>
 public class GitWorkflowBackgroundWorker(
     IServiceProvider serviceProvider,
@@ -13,8 +12,9 @@ public class GitWorkflowBackgroundWorker(
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        // Wait a bit before first poll to let the app start up
-        await Task.Delay(TimeSpan.FromSeconds(10), stoppingToken);
+        // Wait for the app to fully start
+        try { await Task.Delay(TimeSpan.FromSeconds(15), stoppingToken); }
+        catch (OperationCanceledException) { return; }
 
         while (!stoppingToken.IsCancellationRequested)
         {
@@ -27,7 +27,8 @@ public class GitWorkflowBackgroundWorker(
                 logger.LogError(ex, "Error processing workflow executions");
             }
 
-            await Task.Delay(TimeSpan.FromSeconds(30), stoppingToken);
+            try { await Task.Delay(TimeSpan.FromSeconds(30), stoppingToken); }
+            catch (OperationCanceledException) { return; }
         }
     }
 
@@ -56,14 +57,13 @@ public class GitWorkflowBackgroundWorker(
 
                     await engine.ProcessExecutionAsync(execution, workflow.Steps);
                 }
-                // File-based workflow processing will be added in Phase 6
             }
             catch (Exception ex)
             {
                 logger.LogError(ex, "Failed to process execution {ExecutionId}", execution.id);
                 execution.Status = "Failed";
                 execution.Error = ex.Message;
-                await cosmo.UpdateWorkflowExecutionAsync(execution);
+                try { await cosmo.UpdateWorkflowExecutionAsync(execution); } catch { }
             }
         }
     }

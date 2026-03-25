@@ -1,4 +1,4 @@
-@page "/org/{Slug}/teams/new"
+@page "/{Slug}/teams/new"
 @inject OrganizationService OrgService
 @inject TeamService TeamService
 @inject NavigationManager Navigation
@@ -8,7 +8,7 @@
 @if (org != null)
 {
     <h4 class="mb-3">
-        <a href="/org/@Slug" class="text-decoration-none text-muted">@org.Name</a>
+        <a href="/@Slug" class="text-decoration-none text-muted">@org.Name</a>
         <span class="text-muted">/</span> New Team
     </h4>
 
@@ -75,7 +75,7 @@
         try
         {
             var team = await TeamService.CreateAsync(org.id, name.Trim(), description?.Trim(), defaultPermission);
-            Navigation.NavigateTo($"/org/{Slug}/team/{team.Slug}");
+            Navigation.NavigateTo($"/{Slug}/team/{team.Slug}");
         }
         catch (Exception ex)
         {

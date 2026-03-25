@@ -1,25 +1,14 @@
 @page "/"
-@page "/repositories"
 @inject RepositoryService RepoService
+@inject OrganizationService OrgService
+@inject WorkflowService WorkflowService
+@inject BrowseService BrowseService
 
-<PageTitle>Repositories - Daisi Git</PageTitle>
+<PageTitle>Dashboard - Daisi Git</PageTitle>
 
 <div class="d-flex justify-content-between align-items-center mb-4">
-    <div>
-        <ul class="nav nav-pills">
-            <li class="nav-item">
-                <button class="nav-link @(activeTab == "repos" ? "active" : "")" @onclick='() => SwitchTab("repos")'>
-                    <i class="fa-duotone fa-code-branch me-1"></i> Your Repositories
-                </button>
-            </li>
-            <li class="nav-item">
-                <button class="nav-link @(activeTab == "starred" ? "active" : "")" @onclick='() => SwitchTab("starred")'>
-                    <i class="fa-solid fa-star me-1"></i> Starred
-                </button>
-            </li>
-        </ul>
-    </div>
-    <a href="/new" class="btn btn-primary">
+    <h4 class="mb-0">Dashboard</h4>
+    <a href="/new" class="btn btn-primary btn-sm">
         <i class="fa-duotone fa-plus me-1"></i> New Repository
     </a>
 </div>
@@ -27,103 +16,316 @@
 @if (loading)
 {
     <div class="text-center py-5">
-        <div class="spinner-border text-primary" role="status">
-            <span class="visually-hidden">Loading...</span>
-        </div>
-    </div>
-}
-else if (displayedRepos.Count == 0)
-{
-    <div class="text-center py-5">
-        @if (activeTab == "starred")
-        {
-            <i class="fa-solid fa-star fa-3x text-muted mb-3"></i>
-            <h5 class="text-muted">No starred repositories</h5>
-            <p class="text-muted">Star repositories to bookmark them here.</p>
-            <a href="/explore" class="btn btn-outline-primary">Explore Repositories</a>
-        }
-        else
-        {
-            <i class="fa-duotone fa-code-branch fa-3x text-muted mb-3"></i>
-            <h5 class="text-muted">No repositories yet</h5>
-            <p class="text-muted">Create your first repository to get started.</p>
-            <a href="/new" class="btn btn-primary">Create Repository</a>
-        }
+        <div class="spinner-border text-primary"></div>
     </div>
 }
 else
 {
-    <div class="list-group">
-        @foreach (var repo in displayedRepos)
-        {
-            <a href="/@repo.OwnerName/@repo.Slug" class="list-group-item list-group-item-action">
-                <div class="d-flex w-100 justify-content-between">
-                    <div>
-                        <h5 class="mb-1">
-                            <span class="text-muted">@repo.OwnerName /</span> @repo.Name
-                        </h5>
-                        @if (!string.IsNullOrEmpty(repo.Description))
-                        {
-                            <p class="mb-1 text-muted">@repo.Description</p>
-                        }
-                        @if (!string.IsNullOrEmpty(repo.ForkedFromOwnerName))
-                        {
-                            <small class="text-muted"><i class="fa-duotone fa-code-fork me-1"></i> Forked from @repo.ForkedFromOwnerName/@repo.ForkedFromSlug</small>
-                        }
-                    </div>
-                    <div class="text-end">
-                        <span class="badge bg-@(repo.Visibility == GitRepoVisibility.Public ? "success" : repo.Visibility == GitRepoVisibility.Internal ? "warning" : "secondary")">
-                            @repo.Visibility
-                        </span>
-                        @if (repo.StarCount > 0)
-                        {
-                            <span class="ms-2"><i class="fa-solid fa-star text-warning"></i> @repo.StarCount</span>
-                        }
-                        <br />
-                        <small class="text-muted">@repo.CreatedUtc.ToString("MMM d, yyyy")</small>
-                    </div>
+    <!-- Summary cards -->
+    <div class="row g-3 mb-4">
+        <div class="col-md-3">
+            <div class="card text-center">
+                <div class="card-body py-3">
+                    <div class="text-muted small">Repositories</div>
+                    <div class="fs-3 fw-bold">@repositories.Count</div>
                 </div>
-            </a>
-        }
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card text-center">
+                <div class="card-body py-3">
+                    <div class="text-muted small">Organizations</div>
+                    <div class="fs-3 fw-bold">@orgs.Count</div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card text-center">
+                <div class="card-body py-3">
+                    <div class="text-muted small">Team Members</div>
+                    <div class="fs-3 fw-bold">@totalMembers</div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card text-center">
+                <div class="card-body py-3">
+                    <div class="text-muted small">Events (30d)</div>
+                    <div class="fs-3 fw-bold">@recentEvents.Count</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row g-4">
+        <!-- Commit density chart -->
+        <div class="col-md-8">
+            <div class="card">
+                <div class="card-header">
+                    <i class="fa-duotone fa-chart-bar me-1"></i> Activity (last 30 days)
+                </div>
+                <div class="card-body">
+                    @if (dailyCounts.Length > 0 && dailyCounts.Any(c => c > 0))
+                    {
+                        <svg viewBox="0 0 600 120" class="w-100" style="height: 120px;">
+                            @{ var maxCount = Math.Max(1, dailyCounts.Max()); }
+                            @for (var i = 0; i < dailyCounts.Length; i++)
+                            {
+                                var barHeight = dailyCounts[i] > 0 ? Math.Max(4, (int)(100.0 * dailyCounts[i] / maxCount)) : 0;
+                                var x = i * 20;
+                                var y = 110 - barHeight;
+                                <rect x="@x" y="@y" width="16" height="@barHeight" rx="2"
+                                      fill="var(--bs-primary)" opacity="0.7">
+                                    <title>@chartDates[i].ToString("MMM d"): @dailyCounts[i] event(s)</title>
+                                </rect>
+                            }
+                            <!-- X-axis labels (rendered as foreignObject to avoid Razor <text> conflict) -->
+                            @for (var i = 0; i < dailyCounts.Length; i += 7)
+                            {
+                                <foreignObject x="@(i * 20 - 5)" y="108" width="40" height="14">
+                                    <span style="font-size:9px;color:var(--bs-secondary)">@chartDates[i].ToString("M/d")</span>
+                                </foreignObject>
+                            }
+                        </svg>
+                    }
+                    else
+                    {
+                        <div class="text-center text-muted py-4">No activity in the last 30 days</div>
+                    }
+                </div>
+            </div>
+
+            <!-- Recent activity -->
+            <div class="card mt-3">
+                <div class="card-header">
+                    <i class="fa-duotone fa-bolt me-1"></i> Recent Activity
+                </div>
+                <div class="card-body p-0">
+                    @if (recentEvents.Count == 0)
+                    {
+                        <div class="text-center text-muted py-4">No recent activity</div>
+                    }
+                    else
+                    {
+                        <div class="list-group list-group-flush">
+                            @foreach (var evt in recentEvents.Take(15))
+                            {
+                                <div class="list-group-item py-2">
+                                    <div class="d-flex align-items-center gap-2">
+                                        <span class="badge bg-@EventColor(evt.EventType)">@EventIcon(evt.EventType)</span>
+                                        <div>
+                                            <span class="fw-semibold small">@evt.ActorName</span>
+                                            <span class="text-muted small">@EventVerb(evt.EventType)</span>
+                                            @if (evt.Payload.TryGetValue("pr.title", out var prTitle))
+                                            {
+                                                <span class="small">@prTitle</span>
+                                            }
+                                            else if (evt.Payload.TryGetValue("issue.title", out var issueTitle))
+                                            {
+                                                <span class="small">@issueTitle</span>
+                                            }
+                                            else if (evt.Payload.TryGetValue("push.branch", out var branch))
+                                            {
+                                                <code class="small">@branch</code>
+                                            }
+                                        </div>
+                                        <span class="text-muted small ms-auto">@FormatRelative(evt.CreatedUtc)</span>
+                                    </div>
+                                </div>
+                            }
+                        </div>
+                    }
+                </div>
+            </div>
+        </div>
+
+        <!-- Sidebar: repos + team -->
+        <div class="col-md-4">
+            <!-- Repositories -->
+            <div class="card mb-3">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <span><i class="fa-duotone fa-code-branch me-1"></i> Repositories</span>
+                    <a href="/repositories" class="btn btn-sm btn-link p-0">View all</a>
+                </div>
+                <div class="list-group list-group-flush">
+                    @foreach (var repo in repositories.Take(8))
+                    {
+                        <a href="/@repo.OwnerName/@repo.Slug" class="list-group-item list-group-item-action py-2">
+                            <div class="d-flex justify-content-between align-items-center">
+                                <span class="small fw-semibold">@repo.OwnerName/@repo.Name</span>
+                                <span class="badge bg-@(repo.Visibility == GitRepoVisibility.Public ? "success" : "secondary") small">
+                                    @repo.Visibility
+                                </span>
+                            </div>
+                        </a>
+                    }
+                    @if (repositories.Count > 8)
+                    {
+                        <a href="/repositories" class="list-group-item list-group-item-action text-center text-muted small py-2">
+                            +@(repositories.Count - 8) more
+                        </a>
+                    }
+                </div>
+            </div>
+
+            <!-- Team members -->
+            <div class="card">
+                <div class="card-header">
+                    <i class="fa-duotone fa-users me-1"></i> Team Members
+                </div>
+                <div class="list-group list-group-flush">
+                    @if (members.Count == 0)
+                    {
+                        <div class="list-group-item text-muted small py-3 text-center">
+                            No organization members yet.
+                            <a href="/organizations" class="d-block mt-1">Create an organization</a>
+                        </div>
+                    }
+                    else
+                    {
+                        @foreach (var member in members.Take(12))
+                        {
+                            <div class="list-group-item py-2">
+                                <div class="d-flex justify-content-between align-items-center">
+                                    <span class="small">
+                                        <i class="fa-duotone fa-user me-1 text-muted"></i>
+                                        @member.UserName
+                                    </span>
+                                    <span class="badge bg-outline-secondary border small">@member.Role</span>
+                                </div>
+                            </div>
+                        }
+                    }
+                </div>
+            </div>
+        </div>
     </div>
 }
 
 @code {
     [CascadingParameter(Name = "AccountId")] string AccountId { get; set; } = "";
     [CascadingParameter(Name = "UserId")] string UserId { get; set; } = "";
+
     private List<GitRepository> repositories = [];
-    private List<GitRepository> starredRepos = [];
-    private List<GitRepository> displayedRepos = [];
-    private string activeTab = "repos";
+    private List<GitOrganization> orgs = [];
+    private List<OrgMember> members = [];
+    private List<GitEvent> recentEvents = [];
+    private int totalMembers;
+    private int[] dailyCounts = [];
+    private DateTime[] chartDates = [];
     private bool loading = true;
 
     protected override async Task OnParametersSetAsync()
     {
-        if (!string.IsNullOrEmpty(AccountId))
+        if (string.IsNullOrEmpty(AccountId)) return;
+
+        loading = true;
+        try
         {
-            try
+            repositories = await RepoService.GetRepositoriesAsync(AccountId);
+            orgs = await OrgService.ListAsync(AccountId);
+
+            // Collect members across all orgs
+            members = [];
+            foreach (var org in orgs)
             {
-                repositories = await RepoService.GetRepositoriesAsync(AccountId);
-                displayedRepos = repositories;
+                var orgMembers = await OrgService.GetMembersAsync(org.id);
+                foreach (var m in orgMembers)
+                {
+                    if (!members.Any(x => x.UserId == m.UserId))
+                        members.Add(m);
+                }
             }
-            catch { }
-            loading = false;
+            totalMembers = members.Count;
+
+            // Collect recent events across all repos
+            recentEvents = [];
+            foreach (var repo in repositories.Take(20))
+            {
+                try
+                {
+                    var events = await WorkflowService.ListEventsAsync(repo.id, 50);
+                    recentEvents.AddRange(events);
+                }
+                catch { }
+            }
+            recentEvents = recentEvents.OrderByDescending(e => e.CreatedUtc).Take(50).ToList();
+
+            // Build 30-day activity chart
+            BuildActivityChart();
+        }
+        catch { }
+        loading = false;
+    }
+
+    private void BuildActivityChart()
+    {
+        var today = DateTime.UtcNow.Date;
+        var days = 30;
+        chartDates = Enumerable.Range(0, days).Select(i => today.AddDays(-days + 1 + i)).ToArray();
+        dailyCounts = new int[days];
+
+        foreach (var evt in recentEvents)
+        {
+            var dayIndex = (evt.CreatedUtc.Date - chartDates[0]).Days;
+            if (dayIndex >= 0 && dayIndex < days)
+                dailyCounts[dayIndex]++;
         }
     }
 
-    private async Task SwitchTab(string tab)
+    private static string EventColor(GitTriggerType t) => t switch
     {
-        activeTab = tab;
-        if (tab == "starred" && starredRepos.Count == 0 && !string.IsNullOrEmpty(UserId))
-        {
-            loading = true;
-            try
-            {
-                starredRepos = await RepoService.GetStarredReposAsync(UserId);
-            }
-            catch { }
-            loading = false;
-        }
-        displayedRepos = tab == "starred" ? starredRepos : repositories;
+        GitTriggerType.PushToRef or GitTriggerType.BranchCreated => "primary",
+        GitTriggerType.PullRequestCreated => "info",
+        GitTriggerType.PullRequestMerged => "success",
+        GitTriggerType.PullRequestClosed => "secondary",
+        GitTriggerType.IssueCreated => "warning",
+        GitTriggerType.IssueClosed => "secondary",
+        GitTriggerType.CommentCreated => "light",
+        GitTriggerType.ReviewSubmitted => "info",
+        _ => "secondary"
+    };
+
+    private static string EventIcon(GitTriggerType t) => t switch
+    {
+        GitTriggerType.PushToRef => "↑",
+        GitTriggerType.BranchCreated => "+",
+        GitTriggerType.BranchDeleted => "−",
+        GitTriggerType.PullRequestCreated => "PR",
+        GitTriggerType.PullRequestMerged => "✓",
+        GitTriggerType.PullRequestClosed => "×",
+        GitTriggerType.IssueCreated => "!",
+        GitTriggerType.IssueClosed => "✓",
+        GitTriggerType.CommentCreated => "💬",
+        GitTriggerType.ReviewSubmitted => "👁",
+        GitTriggerType.RepositoryForked => "⑂",
+        _ => "•"
+    };
+
+    private static string EventVerb(GitTriggerType t) => t switch
+    {
+        GitTriggerType.PushToRef => "pushed to",
+        GitTriggerType.BranchCreated => "created branch",
+        GitTriggerType.BranchDeleted => "deleted branch",
+        GitTriggerType.PullRequestCreated => "opened PR",
+        GitTriggerType.PullRequestMerged => "merged PR",
+        GitTriggerType.PullRequestClosed => "closed PR",
+        GitTriggerType.IssueCreated => "opened issue",
+        GitTriggerType.IssueClosed => "closed issue",
+        GitTriggerType.IssueReopened => "reopened issue",
+        GitTriggerType.CommentCreated => "commented on",
+        GitTriggerType.ReviewSubmitted => "reviewed",
+        GitTriggerType.RepositoryForked => "forked",
+        _ => t.ToString()
+    };
+
+    private static string FormatRelative(DateTime utc)
+    {
+        var diff = DateTime.UtcNow - utc;
+        if (diff.TotalMinutes < 1) return "just now";
+        if (diff.TotalMinutes < 60) return $"{(int)diff.TotalMinutes}m ago";
+        if (diff.TotalHours < 24) return $"{(int)diff.TotalHours}h ago";
+        if (diff.TotalDays < 7) return $"{(int)diff.TotalDays}d ago";
+        return utc.ToString("MMM d");
     }
 }

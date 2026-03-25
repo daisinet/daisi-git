@@ -1,0 +1,302 @@
+@page "/{Owner}/{RepoSlug}/settings"
+@inject RepositoryService RepoService
+@inject NavigationManager Nav
+
+<PageTitle>Settings - @Owner/@RepoSlug - Daisi Git</PageTitle>
+
+<RepositoryLayout Owner="@Owner" RepoSlug="@RepoSlug" ActiveTab="settings">
+    @if (repo == null && !loading)
+    {
+        <div class="text-center py-4 text-muted">Repository not found.</div>
+    }
+    else if (repo != null)
+    {
+        <h5 class="mb-3">Repository Settings</h5>
+
+        <!-- General -->
+        <div class="card mb-3" style="max-width: 700px;">
+            <div class="card-header fw-semibold">General</div>
+            <div class="card-body">
+                <div class="mb-3">
+                    <label class="form-label">Repository name</label>
+                    <input type="text" class="form-control" @bind="name" />
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Description</label>
+                    <textarea class="form-control" rows="2" @bind="description"></textarea>
+                </div>
+                <div class="mb-3" style="max-width: 300px;">
+                    <label class="form-label">Default branch</label>
+                    <BranchSelector RepositoryId="@(repo?.id ?? "")" Value="@defaultBranch" ValueChanged="b => defaultBranch = b" />
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Visibility</label>
+                    <select class="form-select" style="max-width: 250px;" value="@visibility" @onchange="OnVisibilityChange">
+                        <option value="@GitRepoVisibility.Private">Private</option>
+                        <option value="@GitRepoVisibility.Internal">Internal</option>
+                        <option value="@GitRepoVisibility.Public">Public</option>
+                    </select>
+                    @if (visibilityChanged && repo != null)
+                    {
+                        <div class="alert alert-warning mt-2 small">
+                            <strong>Changing visibility from @repo.Visibility to @visibility:</strong>
+                            <ul class="mb-0 mt-1">
+                                @if (visibility == GitRepoVisibility.Public)
+                                {
+                                    <li>Anyone on the internet will be able to see this repository.</li>
+                                    <li>Code, issues, pull requests, and commits will be publicly accessible.</li>
+                                }
+                                else if (visibility == GitRepoVisibility.Internal)
+                                {
+                                    <li>Only members of your organization will be able to see this repository.</li>
+                                    @if (repo.Visibility == GitRepoVisibility.Public)
+                                    {
+                                        <li>External users will lose access immediately.</li>
+                                    }
+                                }
+                                else if (visibility == GitRepoVisibility.Private)
+                                {
+                                    <li>Only you and explicitly granted collaborators will be able to see this repository.</li>
+                                    @if (repo.Visibility == GitRepoVisibility.Public)
+                                    {
+                                        <li>All public access will be revoked immediately.</li>
+                                        <li>Forks by external users will become disconnected.</li>
+                                    }
+                                    else if (repo.Visibility == GitRepoVisibility.Internal)
+                                    {
+                                        <li>Organization members without explicit grants will lose access.</li>
+                                    }
+                                }
+                            </ul>
+                        </div>
+                    }
+                </div>
+            </div>
+        </div>
+
+        <!-- Info (read-only) -->
+        <div class="card mb-3" style="max-width: 700px;">
+            <div class="card-header fw-semibold">Info</div>
+            <div class="card-body">
+                <div class="row text-muted small">
+                    <div class="col-md-6 mb-2">
+                        <strong>Storage:</strong> @(repo.StorageProvider?.ToString() ?? "Account default (Daisi Drive)")
+                    </div>
+                    <div class="col-md-6 mb-2">
+                        <strong>Created:</strong> @repo.CreatedUtc.ToString("MMM d, yyyy")
+                    </div>
+                    <div class="col-md-6 mb-2">
+                        <strong>Owner:</strong> @repo.OwnerName
+                    </div>
+                    <div class="col-md-6 mb-2">
+                        <strong>Stars:</strong> @repo.StarCount &nbsp; <strong>Forks:</strong> @repo.ForkCount
+                    </div>
+                    @if (!string.IsNullOrEmpty(repo.ForkedFromOwnerName))
+                    {
+                        <div class="col-12 mb-2">
+                            <strong>Forked from:</strong>
+                            <a href="/@repo.ForkedFromOwnerName/@repo.ForkedFromSlug">@repo.ForkedFromOwnerName/@repo.ForkedFromSlug</a>
+                        </div>
+                    }
+                </div>
+            </div>
+        </div>
+
+        @if (!string.IsNullOrEmpty(error))
+        {
+            <div class="alert alert-danger" style="max-width: 700px;">@error</div>
+        }
+        @if (saved)
+        {
+            <div class="alert alert-success" style="max-width: 700px;">Settings saved.</div>
+        }
+
+        <button class="btn btn-primary" @onclick="Save" disabled="@saving">
+            @if (saving) { <span class="spinner-border spinner-border-sm me-1"></span> }
+            Save Changes
+        </button>
+
+        <!-- Danger zone -->
+        <div class="card border-danger mt-4" style="max-width: 700px;">
+            <div class="card-header fw-semibold text-danger">Danger Zone</div>
+            <div class="card-body">
+                @if (!showDeleteConfirm)
+                {
+                    <div class="d-flex justify-content-between align-items-center">
+                        <div>
+                            <strong>Delete this @(isFork ? "fork" : "repository")</strong>
+                            <div class="text-muted small">
+                                @if (isFork)
+                                {
+                                    <text>This only deletes your fork. The original repository will not be affected.</text>
+                                }
+                                else
+                                {
+                                    <text>Once deleted, this cannot be undone.</text>
+                                }
+                            </div>
+                        </div>
+                        <button class="btn btn-outline-danger btn-sm" @onclick="ShowDeleteConfirm">
+                            Delete @(isFork ? "Fork" : "Repository")
+                        </button>
+                    </div>
+                }
+                else
+                {
+                    <div class="alert alert-danger mb-2">
+                        <strong>Are you sure?</strong> Type <code>@repo.OwnerName/@repo.Slug</code> to confirm.
+                        @if (isFork)
+                        {
+                            <div class="mt-1 small">The original repository <strong>@repo.ForkedFromOwnerName/@repo.ForkedFromSlug</strong> will not be affected.</div>
+                        }
+                    </div>
+
+                    @if (forks.Count > 0)
+                    {
+                        <div class="alert alert-warning mb-2">
+                            <strong>This repository has @forks.Count fork(s).</strong>
+                            Choose which fork should become the new upstream:
+                        </div>
+                        <div class="mb-2">
+                            <select class="form-select form-select-sm" style="max-width: 400px;" @bind="promotedForkId">
+                                @foreach (var fork in forks)
+                                {
+                                    <option value="@fork.id">@fork.OwnerName/@fork.Slug</option>
+                                }
+                                <option value="">None — make all forks standalone</option>
+                            </select>
+                        </div>
+                    }
+
+                    <div class="d-flex gap-2">
+                        <input type="text" class="form-control form-control-sm" value="@deleteConfirmText"
+                               @oninput="OnDeleteConfirmInput"
+                               placeholder="@repo.OwnerName/@repo.Slug" style="max-width: 300px;" />
+                        <button class="btn btn-danger btn-sm" @onclick="DeleteRepo"
+                                disabled="@(deleteConfirmText != $"{repo.OwnerName}/{repo.Slug}" || deleting)">
+                            @if (deleting) { <span class="spinner-border spinner-border-sm me-1"></span> }
+                            Delete
+                        </button>
+                        <button class="btn btn-outline-secondary btn-sm" @onclick="CancelDelete">
+                            Cancel
+                        </button>
+                    </div>
+                }
+            </div>
+        </div>
+    }
+</RepositoryLayout>
+
+@code {
+    [Parameter] public string Owner { get; set; } = "";
+    [Parameter] public string RepoSlug { get; set; } = "";
+    [CascadingParameter(Name = "AccountId")] string AccountId { get; set; } = "";
+
+    private GitRepository? repo;
+    private string name = "";
+    private string? description;
+    private string defaultBranch = "main";
+    private GitRepoVisibility visibility = GitRepoVisibility.Private;
+    private bool loading = true;
+    private bool saving;
+    private bool saved;
+    private string? error;
+    private bool visibilityChanged;
+    private bool isFork;
+    private bool showDeleteConfirm;
+    private string deleteConfirmText = "";
+    private string? promotedForkId;
+    private List<GitRepository> forks = [];
+    private bool deleting;
+
+    private bool dataLoaded;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (dataLoaded) return;
+        dataLoaded = true;
+        loading = true;
+        try
+        {
+            repo = await RepoService.GetRepositoryBySlugAsync(Owner, RepoSlug);
+            if (repo != null)
+            {
+                name = repo.Name;
+                description = repo.Description;
+                defaultBranch = repo.DefaultBranch;
+                visibility = repo.Visibility;
+                isFork = !string.IsNullOrEmpty(repo.ForkedFromId);
+            }
+        }
+        catch { }
+        loading = false;
+    }
+
+    private async Task Save()
+    {
+        if (repo == null) return;
+        error = null;
+        saved = false;
+        if (string.IsNullOrWhiteSpace(name)) { error = "Name is required."; return; }
+
+        saving = true;
+        try
+        {
+            repo.Name = name.Trim();
+            repo.Description = description?.Trim();
+            repo.DefaultBranch = defaultBranch.Trim();
+            repo.Visibility = visibility;
+            repo = await RepoService.UpdateRepositoryAsync(repo);
+            visibilityChanged = false;
+            saved = true;
+        }
+        catch (Exception ex) { error = ex.Message; }
+        saving = false;
+    }
+
+    private async Task ShowDeleteConfirm()
+    {
+        if (repo != null && !isFork)
+        {
+            try { forks = await RepoService.GetForksAsync(repo.id); }
+            catch { forks = []; }
+            if (forks.Count > 0)
+                promotedForkId = forks[0].id;
+        }
+        showDeleteConfirm = true;
+    }
+
+    private void OnVisibilityChange(ChangeEventArgs e)
+    {
+        if (Enum.TryParse<GitRepoVisibility>(e.Value?.ToString(), out var v))
+        {
+            visibility = v;
+            visibilityChanged = repo != null && visibility != repo.Visibility;
+        }
+    }
+
+    private void OnDeleteConfirmInput(ChangeEventArgs e)
+    {
+        deleteConfirmText = e.Value?.ToString() ?? "";
+    }
+
+    private void CancelDelete()
+    {
+        showDeleteConfirm = false;
+        deleteConfirmText = "";
+    }
+
+    private async Task DeleteRepo()
+    {
+        if (repo == null) return;
+        deleting = true;
+        try
+        {
+            await RepoService.DeleteRepositoryAsync(repo.id, repo.AccountId,
+                string.IsNullOrEmpty(promotedForkId) ? null : promotedForkId);
+            Nav.NavigateTo("/repositories");
+        }
+        catch (Exception ex) { error = ex.Message; }
+        deleting = false;
+    }
+}

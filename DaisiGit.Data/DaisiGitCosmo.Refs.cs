@@ -24,17 +24,22 @@ public partial class DaisiGitCosmo
 
     public virtual async Task<GitRef?> GetRefAsync(string repositoryId, string refName)
     {
-        try
+        var container = await GetContainerAsync(RefsContainerName);
+        var query = new QueryDefinition(
+            "SELECT * FROM c WHERE c.RepositoryId = @repoId AND c.Name = @name AND c.Type = 'GitRef'")
+            .WithParameter("@repoId", repositoryId)
+            .WithParameter("@name", refName);
+
+        using var iterator = container.GetItemQueryIterator<GitRef>(query, requestOptions: new QueryRequestOptions
         {
-            var container = await GetContainerAsync(RefsContainerName);
-            var id = MakeRefId(repositoryId, refName);
-            var response = await container.ReadItemAsync<GitRef>(id, GetRefPartitionKey(repositoryId));
-            return response.Resource;
-        }
-        catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
+            PartitionKey = GetRefPartitionKey(repositoryId)
+        });
+        if (iterator.HasMoreResults)
         {
-            return null;
+            var response = await iterator.ReadNextAsync();
+            return response.FirstOrDefault();
         }
+        return null;
     }
 
     public virtual async Task<List<GitRef>> GetAllRefsAsync(string repositoryId)

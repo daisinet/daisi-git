@@ -1,0 +1,541 @@
+@page "/{Owner}/{RepoSlug}/workflows/new"
+@page "/{Owner}/{RepoSlug}/workflows/edit/{WorkflowId}"
+@inject WorkflowService WorkflowService
+@inject RepositoryService RepoService
+@inject NavigationManager Nav
+
+<PageTitle>@(isNew ? "New Workflow" : "Edit Workflow") - @Owner/@RepoSlug - Daisi Git</PageTitle>
+
+<RepositoryLayout Owner="@Owner" RepoSlug="@RepoSlug" ActiveTab="workflows">
+    @if (loading)
+    {
+        <div class="text-center py-4"><div class="spinner-border spinner-border-sm text-primary"></div></div>
+    }
+    else
+    {
+        <!-- Header -->
+        <div class="d-flex justify-content-between align-items-center mb-3">
+            <h5 class="mb-0">@(isNew ? "New Workflow" : "Edit Workflow")</h5>
+            <div class="d-flex gap-2">
+                <a href="/@Owner/@RepoSlug/workflows" class="btn btn-sm btn-outline-secondary">Cancel</a>
+                <button class="btn btn-sm btn-primary" @onclick="Save" disabled="@saving">
+                    @if (saving) { <span class="spinner-border spinner-border-sm me-1"></span> }
+                    @(isNew ? "Create" : "Save")
+                </button>
+            </div>
+        </div>
+
+        @if (!string.IsNullOrEmpty(errorMessage))
+        {
+            <div class="alert alert-danger alert-dismissible">@errorMessage</div>
+        }
+
+        <!-- Workflow metadata -->
+        <div class="card mb-3">
+            <div class="card-body">
+                <div class="row g-3">
+                    <div class="col-md-6">
+                        <label class="form-label">Name</label>
+                        <input type="text" class="form-control" @bind="workflow.Name" placeholder="My workflow" />
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label">Trigger</label>
+                        <select class="form-select" @bind="triggerTypeStr">
+                            <option value="PushToRef">Push to branch</option>
+                            <option value="BranchCreated">Branch created</option>
+                            <option value="BranchDeleted">Branch deleted</option>
+                            <option value="TagCreated">Tag created</option>
+                            <option value="PullRequestCreated">Pull request opened</option>
+                            <option value="PullRequestClosed">Pull request closed</option>
+                            <option value="PullRequestMerged">Pull request merged</option>
+                            <option value="IssueCreated">Issue opened</option>
+                            <option value="IssueClosed">Issue closed</option>
+                            <option value="IssueReopened">Issue reopened</option>
+                            <option value="CommentCreated">Comment created</option>
+                            <option value="ReviewSubmitted">Review submitted</option>
+                            <option value="RepositoryForked">Repository forked</option>
+                        </select>
+                    </div>
+                    <div class="col-md-2 d-flex align-items-end">
+                        <div class="form-check form-switch">
+                            <input class="form-check-input" type="checkbox" @bind="workflow.IsEnabled" id="wfEnabled" />
+                            <label class="form-check-label" for="wfEnabled">Enabled</label>
+                        </div>
+                    </div>
+                </div>
+
+                @if (IsPushTrigger)
+                {
+                    <div class="row g-3 mt-1">
+                        <div class="col-md-6">
+                            <label class="form-label">Branch filter <span class="text-muted">(optional, comma-separated)</span></label>
+                            <input type="text" class="form-control" @bind="branchFilter" placeholder="main, dev" />
+                        </div>
+                    </div>
+                }
+
+                <div class="mt-2">
+                    <label class="form-label">Description <span class="text-muted">(optional)</span></label>
+                    <input type="text" class="form-control" @bind="workflow.Description" />
+                </div>
+            </div>
+        </div>
+
+        <!-- Visual workflow designer -->
+        <div class="card">
+            <div class="card-body">
+                <div class="wf-flow">
+                    <!-- Trigger node -->
+                    <div class="wf-node wf-node--trigger">
+                        <i class="fa-duotone fa-bolt me-1"></i> @FormatTriggerShort(workflow.TriggerType)
+                    </div>
+                    <div class="wf-connector"></div>
+
+                    <!-- Insert before first step -->
+                    <div class="wf-insert">
+                        <button class="btn btn-sm btn-outline-secondary wf-insert-btn" @onclick="() => InsertStep(0)">
+                            <i class="fa-solid fa-plus"></i>
+                        </button>
+                    </div>
+
+                    @for (var i = 0; i < workflow.Steps.Count; i++)
+                    {
+                        var idx = i;
+                        var step = workflow.Steps[i];
+                        <div class="wf-connector"></div>
+                        <div class="wf-node wf-node--@step.StepType.ToString().ToLower() @(selectedStepIndex == idx ? "wf-node--selected" : "")"
+                             @onclick="() => SelectStep(idx)">
+                            <div class="wf-node-icon">@StepIcon(step.StepType)</div>
+                            <div class="wf-node-label">
+                                @if (!string.IsNullOrEmpty(step.Name))
+                                {
+                                    @step.Name
+                                }
+                                else
+                                {
+                                    @FormatStepType(step.StepType)
+                                }
+                            </div>
+                            <button class="wf-node-delete btn btn-sm" @onclick="() => RemoveStep(idx)" @onclick:stopPropagation="true">
+                                <i class="fa-solid fa-xmark"></i>
+                            </button>
+                        </div>
+
+                        <div class="wf-insert">
+                            <button class="btn btn-sm btn-outline-secondary wf-insert-btn" @onclick="() => InsertStep(idx + 1)">
+                                <i class="fa-solid fa-plus"></i>
+                            </button>
+                        </div>
+                    }
+
+                    <div class="wf-connector"></div>
+                    <!-- End node -->
+                    <div class="wf-node wf-node--end">
+                        <i class="fa-duotone fa-flag-checkered me-1"></i> End
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Step editor panel -->
+        @if (selectedStepIndex >= 0 && selectedStepIndex < workflow.Steps.Count)
+        {
+            var step = workflow.Steps[selectedStepIndex];
+            <div class="card mt-3">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <strong>Step @(selectedStepIndex + 1): @FormatStepType(step.StepType)</strong>
+                    <button class="btn btn-sm btn-outline-secondary" @onclick="() => selectedStepIndex = -1">
+                        <i class="fa-solid fa-xmark"></i>
+                    </button>
+                </div>
+                <div class="card-body">
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            <label class="form-label">Step name</label>
+                            <input type="text" class="form-control" @bind="step.Name" placeholder="Optional label" />
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">Type</label>
+                            <select class="form-select" @bind="stepTypeStr">
+                                <option value="HttpRequest">HTTP Request</option>
+                                <option value="AddComment">Add Comment</option>
+                                <option value="SetLabel">Set Label</option>
+                                <option value="RemoveLabel">Remove Label</option>
+                                <option value="CloseIssue">Close Issue</option>
+                                <option value="ClosePullRequest">Close Pull Request</option>
+                                <option value="RequireReview">Require Review</option>
+                                <option value="Wait">Wait</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <hr />
+
+                    @switch (step.StepType)
+                    {
+                        case WorkflowStepType.HttpRequest:
+                            <div class="row g-3">
+                                <div class="col-md-3">
+                                    <label class="form-label">Method</label>
+                                    <select class="form-select" @bind="step.HttpMethod">
+                                        <option>GET</option>
+                                        <option>POST</option>
+                                        <option>PUT</option>
+                                        <option>PATCH</option>
+                                        <option>DELETE</option>
+                                    </select>
+                                </div>
+                                <div class="col-md-9">
+                                    <label class="form-label">URL</label>
+                                    <input type="text" class="form-control" @bind="step.HttpUrl" placeholder="https://hooks.example.com/webhook" />
+                                </div>
+                                @if (step.HttpMethod is "POST" or "PUT" or "PATCH")
+                                {
+                                    <div class="col-12">
+                                        <label class="form-label">Body</label>
+                                        <textarea class="form-control font-monospace" rows="4" @bind="step.HttpBody"
+                                                  placeholder='{"repo": "{{repo.name}}", "branch": "{{push.branch}}"}'></textarea>
+                                        <div class="form-text">Supports merge fields: <code>@("{{repo.name}}")</code>, <code>@("{{pr.title}}")</code>, <code>@("{{actor.name}}")</code>, etc.</div>
+                                    </div>
+                                }
+                            </div>
+                            break;
+
+                        case WorkflowStepType.AddComment:
+                            <div>
+                                <label class="form-label">Comment body</label>
+                                <textarea class="form-control" rows="3" @bind="step.CommentBody"
+                                          placeholder="Build triggered for {{push.branch}}"></textarea>
+                                <div class="form-text">Added to the PR or issue that triggered this workflow. Supports merge fields.</div>
+                            </div>
+                            break;
+
+                        case WorkflowStepType.SetLabel:
+                        case WorkflowStepType.RemoveLabel:
+                            <div>
+                                <label class="form-label">Label name</label>
+                                <input type="text" class="form-control" @bind="step.LabelName" placeholder="ready-to-merge" />
+                            </div>
+                            break;
+
+                        case WorkflowStepType.CloseIssue:
+                            <div class="text-muted">Closes the issue that triggered this workflow. No configuration needed.</div>
+                            break;
+
+                        case WorkflowStepType.ClosePullRequest:
+                            <div class="text-muted">Closes the pull request that triggered this workflow. No configuration needed.</div>
+                            break;
+
+                        case WorkflowStepType.RequireReview:
+                            <div class="col-md-4">
+                                <label class="form-label">Required approvals</label>
+                                <input type="number" class="form-control" @bind="step.RequiredApprovals" min="1" max="10" />
+                            </div>
+                            break;
+
+                        case WorkflowStepType.Wait:
+                            <div class="row g-3">
+                                <div class="col-md-4">
+                                    <label class="form-label">Days</label>
+                                    <input type="number" class="form-control" @bind="step.WaitDays" min="0" />
+                                </div>
+                                <div class="col-md-4">
+                                    <label class="form-label">Hours</label>
+                                    <input type="number" class="form-control" @bind="step.WaitHours" min="0" max="23" />
+                                </div>
+                                <div class="col-md-4">
+                                    <label class="form-label">Minutes</label>
+                                    <input type="number" class="form-control" @bind="step.WaitMinutes" min="0" max="59" />
+                                </div>
+                            </div>
+                            break;
+                    }
+                </div>
+            </div>
+        }
+
+        <!-- Add step menu (shown when clicking +) -->
+        @if (showAddStepMenu)
+        {
+            <div class="card mt-3">
+                <div class="card-header">
+                    <strong>Add a step</strong>
+                </div>
+                <div class="card-body">
+                    <div class="row g-2">
+                        <div class="col-md-4"><button class="btn btn-outline-primary w-100" @onclick='() => AddStep(WorkflowStepType.HttpRequest, "HTTP Request")'><i class="fa-duotone fa-globe me-1"></i> HTTP Request</button></div>
+                        <div class="col-md-4"><button class="btn btn-outline-primary w-100" @onclick='() => AddStep(WorkflowStepType.AddComment, "Add Comment")'><i class="fa-duotone fa-comment me-1"></i> Add Comment</button></div>
+                        <div class="col-md-4"><button class="btn btn-outline-primary w-100" @onclick='() => AddStep(WorkflowStepType.SetLabel, "Set Label")'><i class="fa-duotone fa-tag me-1"></i> Set Label</button></div>
+                        <div class="col-md-4"><button class="btn btn-outline-primary w-100" @onclick='() => AddStep(WorkflowStepType.RemoveLabel, "Remove Label")'><i class="fa-duotone fa-tag me-1"></i> Remove Label</button></div>
+                        <div class="col-md-4"><button class="btn btn-outline-primary w-100" @onclick='() => AddStep(WorkflowStepType.CloseIssue, "Close Issue")'><i class="fa-duotone fa-circle-xmark me-1"></i> Close Issue</button></div>
+                        <div class="col-md-4"><button class="btn btn-outline-primary w-100" @onclick='() => AddStep(WorkflowStepType.ClosePullRequest, "Close PR")'><i class="fa-duotone fa-code-pull-request me-1"></i> Close PR</button></div>
+                        <div class="col-md-4"><button class="btn btn-outline-primary w-100" @onclick='() => AddStep(WorkflowStepType.RequireReview, "Require Review")'><i class="fa-duotone fa-check-double me-1"></i> Require Review</button></div>
+                        <div class="col-md-4"><button class="btn btn-outline-primary w-100" @onclick='() => AddStep(WorkflowStepType.Wait, "Wait")'><i class="fa-duotone fa-clock me-1"></i> Wait</button></div>
+                    </div>
+                </div>
+            </div>
+        }
+    }
+</RepositoryLayout>
+
+<style>
+    .wf-flow {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        padding: 1rem 0;
+    }
+    .wf-connector {
+        width: 2px;
+        height: 20px;
+        background: var(--bs-border-color);
+    }
+    .wf-node {
+        position: relative;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.5rem 1.25rem;
+        border: 2px solid var(--bs-border-color);
+        border-radius: 8px;
+        background: var(--bs-body-bg);
+        cursor: pointer;
+        min-width: 180px;
+        justify-content: center;
+        transition: border-color 0.15s, box-shadow 0.15s;
+    }
+    .wf-node:hover { border-color: var(--bs-primary); }
+    .wf-node--selected { border-color: var(--bs-primary); box-shadow: 0 0 0 3px rgba(var(--bs-primary-rgb), 0.15); }
+    .wf-node--trigger { background: var(--bs-success-bg-subtle); border-color: var(--bs-success); color: var(--bs-success); border-radius: 20px; cursor: default; }
+    .wf-node--end { background: var(--bs-secondary-bg); border-color: var(--bs-secondary); color: var(--bs-secondary); border-radius: 20px; cursor: default; }
+    .wf-node--httprequest { border-left: 4px solid #fd7e14; }
+    .wf-node--addcomment { border-left: 4px solid #0d6efd; }
+    .wf-node--setlabel, .wf-node--removelabel { border-left: 4px solid #6f42c1; }
+    .wf-node--closeissue, .wf-node--closepullrequest { border-left: 4px solid #dc3545; }
+    .wf-node--requirereview { border-left: 4px solid #198754; }
+    .wf-node--wait { border-left: 4px solid #6c757d; }
+    .wf-node-delete {
+        position: absolute;
+        top: -8px;
+        right: -8px;
+        width: 22px;
+        height: 22px;
+        padding: 0;
+        border-radius: 50%;
+        background: var(--bs-danger);
+        color: white;
+        font-size: 0.7rem;
+        display: none;
+        align-items: center;
+        justify-content: center;
+    }
+    .wf-node:hover .wf-node-delete { display: flex; }
+    .wf-insert { padding: 4px 0; }
+    .wf-insert-btn {
+        width: 24px;
+        height: 24px;
+        padding: 0;
+        border-radius: 50%;
+        font-size: 0.65rem;
+        opacity: 0.4;
+        transition: opacity 0.15s;
+    }
+    .wf-insert-btn:hover { opacity: 1; }
+    .wf-node-icon { font-size: 1rem; }
+    .wf-node-label { font-size: 0.85rem; font-weight: 500; }
+</style>
+
+@code {
+    [Parameter] public string Owner { get; set; } = "";
+    [Parameter] public string RepoSlug { get; set; } = "";
+    [Parameter] public string? WorkflowId { get; set; }
+    [CascadingParameter(Name = "AccountId")] string AccountId { get; set; } = "";
+
+    private GitWorkflow workflow = new();
+    private GitRepository? repo;
+    private bool isNew => string.IsNullOrEmpty(WorkflowId);
+    private bool loading = true;
+    private bool saving;
+    private string? errorMessage;
+    private int selectedStepIndex = -1;
+    private bool showAddStepMenu;
+    private int insertAtIndex;
+    private string branchFilter = "";
+
+    private string triggerTypeStr
+    {
+        get => workflow.TriggerType.ToString();
+        set { if (Enum.TryParse<GitTriggerType>(value, out var t)) workflow.TriggerType = t; }
+    }
+
+    private string stepTypeStr
+    {
+        get => selectedStepIndex >= 0 && selectedStepIndex < workflow.Steps.Count
+            ? workflow.Steps[selectedStepIndex].StepType.ToString() : "";
+        set
+        {
+            if (selectedStepIndex >= 0 && selectedStepIndex < workflow.Steps.Count
+                && Enum.TryParse<WorkflowStepType>(value, out var t))
+                workflow.Steps[selectedStepIndex].StepType = t;
+        }
+    }
+
+    private bool IsPushTrigger => workflow.TriggerType is GitTriggerType.PushToRef
+        or GitTriggerType.BranchCreated or GitTriggerType.BranchDeleted
+        or GitTriggerType.TagCreated or GitTriggerType.TagDeleted;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        loading = true;
+        try
+        {
+            repo = await RepoService.GetRepositoryBySlugAsync(Owner, RepoSlug);
+            if (!isNew && repo != null)
+            {
+                var wf = await WorkflowService.GetAsync(WorkflowId!, repo.AccountId);
+                if (wf != null)
+                {
+                    workflow = wf;
+                    branchFilter = wf.TriggerFilters?.GetValueOrDefault("branch", "") ?? "";
+                }
+            }
+            else
+            {
+                workflow = new GitWorkflow
+                {
+                    AccountId = repo?.AccountId ?? "",
+                    RepositoryId = repo?.id
+                };
+            }
+        }
+        catch { }
+        loading = false;
+    }
+
+    private void SelectStep(int index)
+    {
+        selectedStepIndex = index;
+        showAddStepMenu = false;
+    }
+
+    private void InsertStep(int index)
+    {
+        insertAtIndex = index;
+        showAddStepMenu = true;
+        selectedStepIndex = -1;
+    }
+
+    private void AddStep(WorkflowStepType type, string name)
+    {
+        var step = new WorkflowStep
+        {
+            Order = insertAtIndex,
+            Name = name,
+            StepType = type,
+            HttpMethod = type == WorkflowStepType.HttpRequest ? "POST" : null,
+            RequiredApprovals = type == WorkflowStepType.RequireReview ? 1 : null
+        };
+
+        workflow.Steps.Insert(insertAtIndex, step);
+        ReorderSteps();
+        selectedStepIndex = insertAtIndex;
+        showAddStepMenu = false;
+    }
+
+    private void RemoveStep(int index)
+    {
+        workflow.Steps.RemoveAt(index);
+        ReorderSteps();
+        if (selectedStepIndex == index) selectedStepIndex = -1;
+        else if (selectedStepIndex > index) selectedStepIndex--;
+    }
+
+    private void ReorderSteps()
+    {
+        for (var i = 0; i < workflow.Steps.Count; i++)
+            workflow.Steps[i].Order = i;
+    }
+
+    private async Task Save()
+    {
+        if (string.IsNullOrWhiteSpace(workflow.Name))
+        {
+            errorMessage = "Workflow name is required.";
+            return;
+        }
+
+        saving = true;
+        errorMessage = null;
+
+        // Build trigger filters
+        workflow.TriggerFilters = new();
+        if (!string.IsNullOrWhiteSpace(branchFilter))
+            workflow.TriggerFilters["branch"] = branchFilter.Trim();
+
+        try
+        {
+            if (isNew)
+            {
+                workflow.AccountId = repo!.AccountId;
+                workflow.RepositoryId = repo.id;
+                await WorkflowService.CreateAsync(workflow);
+            }
+            else
+            {
+                await WorkflowService.UpdateAsync(workflow);
+            }
+
+            Nav.NavigateTo($"/{Owner}/{RepoSlug}/workflows");
+        }
+        catch (Exception ex)
+        {
+            errorMessage = ex.Message;
+        }
+        finally
+        {
+            saving = false;
+        }
+    }
+
+    private static string StepIcon(WorkflowStepType type) => type switch
+    {
+        WorkflowStepType.HttpRequest => "🌐",
+        WorkflowStepType.AddComment => "💬",
+        WorkflowStepType.SetLabel => "🏷️",
+        WorkflowStepType.RemoveLabel => "🏷️",
+        WorkflowStepType.CloseIssue => "⊘",
+        WorkflowStepType.ClosePullRequest => "⊘",
+        WorkflowStepType.RequireReview => "✔",
+        WorkflowStepType.Wait => "⏱",
+        WorkflowStepType.Condition => "⑂",
+        _ => "•"
+    };
+
+    private static string FormatStepType(WorkflowStepType type) => type switch
+    {
+        WorkflowStepType.HttpRequest => "HTTP Request",
+        WorkflowStepType.AddComment => "Add Comment",
+        WorkflowStepType.SetLabel => "Set Label",
+        WorkflowStepType.RemoveLabel => "Remove Label",
+        WorkflowStepType.CloseIssue => "Close Issue",
+        WorkflowStepType.ClosePullRequest => "Close PR",
+        WorkflowStepType.RequireReview => "Require Review",
+        WorkflowStepType.Wait => "Wait",
+        WorkflowStepType.Condition => "Condition",
+        _ => type.ToString()
+    };
+
+    private static string FormatTriggerShort(GitTriggerType t) => t switch
+    {
+        GitTriggerType.PushToRef => "Push",
+        GitTriggerType.BranchCreated => "Branch Created",
+        GitTriggerType.PullRequestCreated => "PR Opened",
+        GitTriggerType.PullRequestMerged => "PR Merged",
+        GitTriggerType.PullRequestClosed => "PR Closed",
+        GitTriggerType.IssueCreated => "Issue Opened",
+        GitTriggerType.IssueClosed => "Issue Closed",
+        GitTriggerType.CommentCreated => "Comment",
+        GitTriggerType.ReviewSubmitted => "Review",
+        _ => t.ToString()
+    };
+}

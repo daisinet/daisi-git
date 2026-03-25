@@ -1,3 +1,4 @@
+@page "/{Slug}/settings"
 @page "/org/{Slug}/settings"
 @inject OrganizationService OrgService
 @inject NavigationManager Navigation
@@ -7,7 +8,7 @@
 @if (org != null)
 {
     <h4 class="mb-3">
-        <a href="/org/@Slug" class="text-decoration-none text-muted">@org.Name</a>
+        <a href="/@Slug" class="text-decoration-none text-muted">@org.Name</a>
         <span class="text-muted">/</span> Settings
     </h4>
 
@@ -16,6 +17,15 @@
             <div class="mb-3">
                 <label class="form-label fw-semibold">Organization name</label>
                 <input type="text" class="form-control" @bind="name" />
+            </div>
+
+            <div class="mb-3">
+                <label class="form-label fw-semibold">URL handle</label>
+                <div class="input-group">
+                    <span class="input-group-text text-muted">/org/</span>
+                    <input type="text" class="form-control" @bind="handle" />
+                </div>
+                <div class="form-text">Changing this will update all URLs for this organization. Must be unique.</div>
             </div>
 
             <div class="mb-3">
@@ -54,6 +64,7 @@ else if (!loading)
 
     private GitOrganization? org;
     private string name = "";
+    private string handle = "";
     private string? description;
     private string? error;
     private bool loading = true;
@@ -69,6 +80,7 @@ else if (!loading)
             if (org != null)
             {
                 name = org.Name;
+                handle = org.Slug;
                 description = org.Description;
             }
         }
@@ -81,14 +93,19 @@ else if (!loading)
         error = null;
         saved = false;
         if (org == null || string.IsNullOrWhiteSpace(name)) { error = "Name is required."; return; }
+        if (string.IsNullOrWhiteSpace(handle)) { error = "URL handle is required."; return; }
 
         saving = true;
         try
         {
             org.Name = name.Trim();
             org.Description = description?.Trim();
-            org = await OrgService.UpdateAsync(org);
+            org = await OrgService.UpdateAsync(org, handle.Trim());
             saved = true;
+
+            // Navigate to new slug if it changed
+            if (org.Slug != Slug)
+                Navigation.NavigateTo($"/{org.Slug}/settings", replace: true);
         }
         catch (Exception ex)
         {

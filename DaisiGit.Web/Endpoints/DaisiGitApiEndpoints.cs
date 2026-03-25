@@ -148,11 +148,18 @@ public static class DaisiGitApiEndpoints
     // ── Repository endpoints ──
 
     private static async Task<IResult> ListRepositories(
-        HttpContext ctx, RepositoryService repoService)
+        HttpContext ctx, string? owner, RepositoryService repoService)
     {
-        var userId = GetUserId(ctx);
-        var repos = await repoService.GetRepositoriesByOwnerAsync(userId);
-        return Results.Ok(repos.Select(RepoDto));
+        if (!string.IsNullOrEmpty(owner))
+        {
+            var repos = await repoService.GetRepositoriesByOwnerAsync(owner);
+            return Results.Ok(repos.Select(RepoDto));
+        }
+
+        // Default: list all repos in the account
+        var accountId = GetAccountId(ctx);
+        var allRepos = await repoService.GetRepositoriesAsync(accountId);
+        return Results.Ok(allRepos.Select(RepoDto));
     }
 
     private static async Task<IResult> GetRepository(
@@ -165,12 +172,46 @@ public static class DaisiGitApiEndpoints
     }
 
     private static async Task<IResult> CreateRepository(
-        HttpContext ctx, CreateRepoRequest req, RepositoryService repoService)
+        HttpContext ctx, CreateRepoRequest req,
+        RepositoryService repoService, UserProfileService profileService,
+        OrganizationService orgService)
     {
         var userId = GetUserId(ctx);
-        var userName = GetUserName(ctx);
+        var accountId = GetAccountId(ctx);
+        string ownerId;
+        string ownerName;
+
+        if (!string.IsNullOrEmpty(req.Owner))
+        {
+            // Check if owner is an org
+            var org = await orgService.GetBySlugAsync(req.Owner);
+            if (org != null)
+            {
+                ownerId = org.id;
+                ownerName = org.Slug;
+            }
+            else
+            {
+                // Must be the user's own handle
+                var profile = await profileService.GetProfileAsync(userId, accountId);
+                if (profile == null || profile.Handle != req.Owner)
+                    return Results.BadRequest("Invalid owner. Specify your personal handle or an organization slug.");
+                ownerId = userId;
+                ownerName = profile.Handle;
+            }
+        }
+        else
+        {
+            // No owner specified — use personal handle
+            var profile = await profileService.GetProfileAsync(userId, accountId);
+            if (profile == null || string.IsNullOrEmpty(profile.Handle))
+                return Results.BadRequest("You must set up a personal handle before creating personal repositories. Go to Settings > Personal Profile.");
+            ownerId = userId;
+            ownerName = profile.Handle;
+        }
+
         var repo = await repoService.CreateRepositoryAsync(
-            GetAccountId(ctx), userId, userName,
+            accountId, ownerId, ownerName,
             req.Name, req.Description, req.Visibility, req.StorageProvider);
         return Results.Created($"/api/git/repos/{repo.OwnerName}/{repo.Slug}", RepoDto(repo));
     }
@@ -780,7 +821,7 @@ public static class DaisiGitApiEndpoints
 
 // ── Request DTOs ──
 
-public record CreateRepoRequest(string Name, string? Description, GitRepoVisibility Visibility = GitRepoVisibility.Private, StorageProvider? StorageProvider = null);
+public record CreateRepoRequest(string Name, string? Description, string? Owner = null, GitRepoVisibility Visibility = GitRepoVisibility.Private, StorageProvider? StorageProvider = null);
 public record SetStorageProviderRequest(StorageProvider Provider);
 public record CreateIssueRequest(string Title, string? Description, List<string>? Labels = null);
 public record UpdateIssueRequest(string? Title = null, string? Description = null, string? Action = null);

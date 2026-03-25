@@ -31,10 +31,10 @@ public class TestClient : IDisposable
     // ── Repos ──
 
     public async Task<RepoDto> CreateRepoAsync(string name, string? description = null,
-        GitRepoVisibility visibility = GitRepoVisibility.Private)
+        GitRepoVisibility visibility = GitRepoVisibility.Private, string? owner = null)
     {
         var response = await _http.PostAsJsonAsync("api/git/repos",
-            new { name, description, visibility }, JsonOptions);
+            new { name, description, owner, visibility }, JsonOptions);
         response.EnsureSuccessStatusCode();
         return (await response.Content.ReadFromJsonAsync<RepoDto>(JsonOptions))!;
     }

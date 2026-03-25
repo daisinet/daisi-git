@@ -18,6 +18,7 @@ public static class DaisiGitApiEndpoints
 
         // Repositories (create/delete require auth; get/list allow anonymous for public repos)
         api.MapPost("/repos", CreateRepository);
+        api.MapPost("/repos/import", ImportRepository);
         api.MapGet("/repos", ListRepositories);
         api.MapDelete("/repos/{owner}/{slug}", DeleteRepository);
 
@@ -219,6 +220,51 @@ public static class DaisiGitApiEndpoints
             accountId, ownerId, ownerName,
             req.Name, req.Description, req.Visibility, req.StorageProvider);
         return Results.Created($"/api/git/repos/{repo.OwnerName}/{repo.Slug}", RepoDto(repo));
+    }
+
+    private static async Task<IResult> ImportRepository(
+        HttpContext ctx, ImportRepoRequest req,
+        ImportService importService, UserProfileService profileService,
+        OrganizationService orgService)
+    {
+        if (string.IsNullOrWhiteSpace(req.Url))
+            return Results.BadRequest("Source URL is required.");
+
+        var userId = GetUserId(ctx);
+        var accountId = GetAccountId(ctx);
+        string ownerId, ownerName;
+
+        if (!string.IsNullOrEmpty(req.Owner))
+        {
+            var org = await orgService.GetBySlugAsync(req.Owner);
+            if (org != null) { ownerId = org.id; ownerName = org.Slug; }
+            else
+            {
+                var profile = await profileService.GetProfileAsync(userId, accountId);
+                if (profile == null || profile.Handle != req.Owner)
+                    return Results.BadRequest("Invalid owner.");
+                ownerId = userId; ownerName = profile.Handle;
+            }
+        }
+        else
+        {
+            var profile = await profileService.GetProfileAsync(userId, accountId);
+            if (profile == null || string.IsNullOrEmpty(profile.Handle))
+                return Results.BadRequest("Set up your personal handle first.");
+            ownerId = userId; ownerName = profile.Handle;
+        }
+
+        try
+        {
+            var repo = await importService.ImportAsync(
+                req.Url, accountId, ownerId, ownerName,
+                req.Name, req.Description, req.Visibility);
+            return Results.Created($"/api/git/repos/{repo.OwnerName}/{repo.Slug}", RepoDto(repo));
+        }
+        catch (Exception ex)
+        {
+            return Results.BadRequest($"Import failed: {ex.Message}");
+        }
     }
 
     private static async Task<IResult> DeleteRepository(
@@ -870,6 +916,7 @@ public record UpdatePrRequest(string? Title = null, string? Description = null, 
 public record MergePrRequest(string? Strategy = null);
 public record CreateApiKeyRequest(string Name);
 public record CreateOrgRequest(string Name, string Handle, string? Description = null);
+public record ImportRepoRequest(string Url, string? Name = null, string? Owner = null, string? Description = null, GitRepoVisibility Visibility = GitRepoVisibility.Private);
 public record CreateCommentRequest(string Body);
 public record SubmitReviewRequest(string? State, string? Body, List<DiffCommentRequest>? DiffComments = null);
 public record DiffCommentRequest(string Path, int Line, string Body, string? Side = null);

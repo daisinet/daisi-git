@@ -1,3 +1,5 @@
+using System.Net.Http.Json;
+using System.Text.Json;
 using DaisiGit.SDK;
 
 namespace DaisiGit.Cli;
@@ -200,8 +202,44 @@ public class CliApp(string[] args)
                 Console.WriteLine($"Forked to {forked.OwnerName}/{forked.Slug}");
                 break;
 
+            case "import":
+                var importUrl = GetArg(2);
+                if (string.IsNullOrEmpty(importUrl))
+                {
+                    Console.Error.WriteLine("Usage: dg repo import <url> [--name name] [--public|--private]");
+                    Environment.ExitCode = 1;
+                    return;
+                }
+                var importName = GetFlag("--name") ?? GetFlag("-n");
+                var importVisibility = HasFlag("--public") ? DaisiGit.Core.Enums.GitRepoVisibility.Public
+                    : DaisiGit.Core.Enums.GitRepoVisibility.Private;
+
+                Console.WriteLine($"Importing from {importUrl}...");
+                try
+                {
+                    var config = CliConfig.Load();
+                    var importHttp = new HttpClient(new HttpClientHandler
+                    {
+                        ServerCertificateCustomValidationCallback = (_, _, _, _) => true
+                    })
+                    { BaseAddress = new Uri(config.ServerUrl!.TrimEnd('/') + "/") };
+                    importHttp.DefaultRequestHeaders.Add("X-Api-Key", config.SessionToken);
+
+                    var importResp = await importHttp.PostAsJsonAsync("api/git/repos/import",
+                        new { url = importUrl, name = importName, visibility = importVisibility });
+                    importResp.EnsureSuccessStatusCode();
+                    var importResult = await importResp.Content.ReadFromJsonAsync<System.Text.Json.JsonElement>();
+                    Console.WriteLine($"Imported to {importResult.GetProperty("ownerName")}/{importResult.GetProperty("slug")}");
+                }
+                catch (Exception ex)
+                {
+                    Console.Error.WriteLine($"Import failed: {ex.Message}");
+                    Environment.ExitCode = 1;
+                }
+                break;
+
             default:
-                Console.WriteLine("Usage: dg repo <list|create|view|fork>");
+                Console.WriteLine("Usage: dg repo <list|create|view|fork|import>");
                 break;
         }
     }

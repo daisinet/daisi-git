@@ -64,6 +64,7 @@ builder.Services.AddScoped<ReviewService>();
 builder.Services.AddScoped<AccountSettingsService>();
 builder.Services.AddScoped<UserProfileService>();
 builder.Services.AddScoped<ApiKeyService>();
+builder.Services.AddScoped<ImportService>();
 builder.Services.AddSingleton<AvatarService>();
 
 // Workflow services

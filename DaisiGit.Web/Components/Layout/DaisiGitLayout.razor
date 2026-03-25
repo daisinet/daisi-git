@@ -44,11 +44,15 @@
             </div>
             <div class="dg-header-right">
                 <div class="dropdown">
-                    <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown">
-                        <i class="fa-duotone fa-user me-1"></i> @userName
+                    <button class="btn btn-sm btn-outline-secondary dropdown-toggle d-flex align-items-center gap-1" type="button" data-bs-toggle="dropdown">
+                        <OwnerAvatar OwnerName="@(userHandle ?? userName)" Size="20" />
+                        @(userHandle ?? userName)
                     </button>
                     <ul class="dropdown-menu dropdown-menu-end">
-                        <li><a class="dropdown-item" href="#" @onclick:preventDefault @onclick="Logout">Logout</a></li>
+                        <li><a class="dropdown-item" href="/settings/profile"><i class="fa-duotone fa-user me-2"></i>Profile</a></li>
+                        <li><a class="dropdown-item" href="/settings"><i class="fa-duotone fa-gear me-2"></i>Settings</a></li>
+                        <li><hr class="dropdown-divider" /></li>
+                        <li><a class="dropdown-item" href="#" @onclick:preventDefault @onclick="Logout"><i class="fa-duotone fa-right-from-bracket me-2"></i>Logout</a></li>
                     </ul>
                 </div>
             </div>
@@ -113,9 +117,11 @@ else
     private string accountId = "";
     private string userName = "";
     private string userId = "";
+    private string? userHandle;
 
     [Inject] AuthService Auth { get; set; } = default!;
     [Inject] IHttpContextAccessor HttpContextAccessor { get; set; } = default!;
+    [Inject] UserProfileService ProfileService { get; set; } = default!;
 
     protected override async Task OnInitializedAsync()
     {
@@ -131,6 +137,17 @@ else
             accountId = await Auth.GetAccountIdAsync() ?? "";
             userId = HttpContextAccessor.HttpContext?.User?.Claims
                 .FirstOrDefault(c => c.Type == ClaimTypes.Sid)?.Value ?? "";
+
+            // Load handle
+            if (!string.IsNullOrEmpty(userId) && !string.IsNullOrEmpty(accountId))
+            {
+                try
+                {
+                    var profile = await ProfileService.GetProfileAsync(userId, accountId);
+                    userHandle = profile?.Handle;
+                }
+                catch { }
+            }
         }
         catch
         {

@@ -395,9 +395,14 @@ public partial class RepositoryService(
     /// <summary>
     /// Lists public repositories sorted by star count for the explore page.
     /// </summary>
-    public async Task<List<GitRepository>> GetPublicReposAsync(int skip = 0, int take = 20)
+    public async Task<List<GitRepository>> GetPublicReposAsync(int skip = 0, int take = 20, string? search = null)
     {
-        return await cosmo.GetPublicRepositoriesAsync(skip, take);
+        return await cosmo.GetPublicRepositoriesAsync(skip, take, search);
+    }
+
+    public async Task<List<GitRepository>> SearchRepositoriesAsync(string accountId, string search, int skip = 0, int take = 50)
+    {
+        return await cosmo.SearchRepositoriesAsync(accountId, search, skip, take);
     }
 
     private async Task IncrementStarCountAsync(string repositoryId, int delta)

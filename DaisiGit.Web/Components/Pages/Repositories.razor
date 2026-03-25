@@ -3,7 +3,7 @@
 
 <PageTitle>Repositories - Daisi Git</PageTitle>
 
-<div class="d-flex justify-content-between align-items-center mb-4">
+<div class="d-flex justify-content-between align-items-center mb-3">
     <div>
         <ul class="nav nav-pills">
             <li class="nav-item">
@@ -23,27 +23,42 @@
     </a>
 </div>
 
+<div class="mb-3">
+    <div class="input-group" style="max-width: 500px;">
+        <span class="input-group-text"><i class="fa-duotone fa-search"></i></span>
+        <input type="text" class="form-control" placeholder="Find a repository..."
+               value="@searchTerm" @oninput="OnSearchInput" @onkeydown="OnSearchKeyDown" />
+        @if (!string.IsNullOrEmpty(searchTerm))
+        {
+            <button class="btn btn-outline-secondary" @onclick="ClearSearch">
+                <i class="fa-solid fa-xmark"></i>
+            </button>
+        }
+    </div>
+</div>
+
 @if (loading)
 {
-    <div class="text-center py-5">
-        <div class="spinner-border text-primary"></div>
-    </div>
+    <div class="text-center py-5"><div class="spinner-border text-primary"></div></div>
 }
 else if (displayedRepos.Count == 0)
 {
     <div class="text-center py-5">
-        @if (activeTab == "starred")
+        @if (!string.IsNullOrEmpty(searchTerm))
+        {
+            <i class="fa-duotone fa-search fa-3x text-muted mb-3"></i>
+            <h5 class="text-muted">No repositories match "@searchTerm"</h5>
+        }
+        else if (activeTab == "starred")
         {
             <i class="fa-solid fa-star fa-3x text-muted mb-3"></i>
             <h5 class="text-muted">No starred repositories</h5>
-            <p class="text-muted">Star repositories to bookmark them here.</p>
             <a href="/explore" class="btn btn-outline-primary">Explore Repositories</a>
         }
         else
         {
             <i class="fa-duotone fa-code-branch fa-3x text-muted mb-3"></i>
             <h5 class="text-muted">No repositories yet</h5>
-            <p class="text-muted">Create your first repository to get started.</p>
             <a href="/new" class="btn btn-primary">Create Repository</a>
         }
     </div>
@@ -58,17 +73,11 @@ else
                     <div class="d-flex align-items-center gap-2">
                         <OwnerAvatar OwnerName="@repo.OwnerName" Size="32" />
                         <div>
-                        <h5 class="mb-1">
-                            <span class="text-muted">@repo.OwnerName /</span> @repo.Name
-                        </h5>
-                        @if (!string.IsNullOrEmpty(repo.Description))
-                        {
-                            <p class="mb-1 text-muted">@repo.Description</p>
-                        }
-                        @if (!string.IsNullOrEmpty(repo.ForkedFromOwnerName))
-                        {
-                            <small class="text-muted"><i class="fa-duotone fa-code-fork me-1"></i> Forked from @repo.ForkedFromOwnerName/@repo.ForkedFromSlug</small>
-                        }
+                            <h5 class="mb-1"><span class="text-muted">@repo.OwnerName /</span> @repo.Name</h5>
+                            @if (!string.IsNullOrEmpty(repo.Description))
+                            {
+                                <p class="mb-0 text-muted small">@repo.Description</p>
+                            }
                         </div>
                     </div>
                     <div class="text-end">
@@ -79,51 +88,109 @@ else
                         {
                             <span class="ms-2"><i class="fa-solid fa-star text-warning"></i> @repo.StarCount</span>
                         }
-                        <br />
-                        <small class="text-muted">@repo.CreatedUtc.ToString("MMM d, yyyy")</small>
                     </div>
                 </div>
             </a>
         }
+    </div>
+
+    <div class="d-flex justify-content-between align-items-center mt-3">
+        <span class="text-muted small">Page @(currentPage + 1)</span>
+        <div class="btn-group btn-group-sm">
+            <button class="btn btn-outline-secondary" disabled="@(currentPage == 0)" @onclick="PrevPage">
+                <i class="fa-solid fa-chevron-left"></i> Previous
+            </button>
+            <button class="btn btn-outline-secondary" disabled="@(displayedRepos.Count < pageSize)" @onclick="NextPage">
+                Next <i class="fa-solid fa-chevron-right"></i>
+            </button>
+        </div>
     </div>
 }
 
 @code {
     [CascadingParameter(Name = "AccountId")] string AccountId { get; set; } = "";
     [CascadingParameter(Name = "UserId")] string UserId { get; set; } = "";
-    private List<GitRepository> repositories = [];
-    private List<GitRepository> starredRepos = [];
+
     private List<GitRepository> displayedRepos = [];
     private string activeTab = "repos";
+    private string searchTerm = "";
     private bool loading = true;
+    private int currentPage;
+    private const int pageSize = 20;
+    private bool dataLoaded;
 
     protected override async Task OnParametersSetAsync()
     {
-        if (!string.IsNullOrEmpty(AccountId))
+        if (dataLoaded || string.IsNullOrEmpty(AccountId)) return;
+        dataLoaded = true;
+        await LoadPage();
+    }
+
+    private async Task LoadPage()
+    {
+        loading = true;
+        try
         {
-            try
+            if (!string.IsNullOrWhiteSpace(searchTerm))
             {
-                repositories = await RepoService.GetRepositoriesAsync(AccountId);
-                displayedRepos = repositories;
+                displayedRepos = await RepoService.SearchRepositoriesAsync(
+                    AccountId, searchTerm.Trim(), currentPage * pageSize, pageSize);
             }
-            catch { }
-            loading = false;
+            else if (activeTab == "starred")
+            {
+                var all = await RepoService.GetStarredReposAsync(UserId);
+                displayedRepos = all.Skip(currentPage * pageSize).Take(pageSize).ToList();
+            }
+            else
+            {
+                var all = await RepoService.GetRepositoriesAsync(AccountId);
+                displayedRepos = all.Skip(currentPage * pageSize).Take(pageSize).ToList();
+            }
         }
+        catch { }
+        loading = false;
     }
 
     private async Task SwitchTab(string tab)
     {
         activeTab = tab;
-        if (tab == "starred" && starredRepos.Count == 0 && !string.IsNullOrEmpty(UserId))
-        {
-            loading = true;
-            try
-            {
-                starredRepos = await RepoService.GetStarredReposAsync(UserId);
-            }
-            catch { }
-            loading = false;
-        }
-        displayedRepos = tab == "starred" ? starredRepos : repositories;
+        currentPage = 0;
+        searchTerm = "";
+        await LoadPage();
+    }
+
+    private void OnSearchInput(ChangeEventArgs e)
+    {
+        searchTerm = e.Value?.ToString() ?? "";
+    }
+
+    private async Task OnSearchKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter") await DoSearch();
+    }
+
+    private async Task DoSearch()
+    {
+        currentPage = 0;
+        await LoadPage();
+    }
+
+    private async Task ClearSearch()
+    {
+        searchTerm = "";
+        currentPage = 0;
+        await LoadPage();
+    }
+
+    private async Task NextPage()
+    {
+        currentPage++;
+        await LoadPage();
+    }
+
+    private async Task PrevPage()
+    {
+        if (currentPage > 0) currentPage--;
+        await LoadPage();
     }
 }

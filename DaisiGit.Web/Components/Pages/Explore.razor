@@ -3,92 +3,132 @@
 
 <PageTitle>Explore - Daisi Git</PageTitle>
 
-<div class="d-flex justify-content-between align-items-center mb-4">
-    <h3>Explore Public Repositories</h3>
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h3 class="mb-0">Explore Public Repositories</h3>
+</div>
+
+<div class="mb-3">
+    <div class="input-group" style="max-width: 500px;">
+        <span class="input-group-text"><i class="fa-duotone fa-search"></i></span>
+        <input type="text" class="form-control" placeholder="Search repositories..."
+               value="@searchTerm" @oninput="OnSearchInput" @onkeydown="OnSearchKeyDown" />
+        <button class="btn btn-primary" @onclick="DoSearch" disabled="@searching">
+            @if (searching) { <span class="spinner-border spinner-border-sm"></span> }
+            else { <text>Search</text> }
+        </button>
+    </div>
 </div>
 
 @if (loading)
 {
-    <div class="text-center py-5">
-        <div class="spinner-border text-primary" role="status">
-            <span class="visually-hidden">Loading...</span>
-        </div>
-    </div>
+    <div class="text-center py-5"><div class="spinner-border text-primary"></div></div>
 }
-else if (repositories.Count == 0)
+else if (repos.Count == 0)
 {
-    <div class="text-center py-5">
-        <i class="fa-duotone fa-compass fa-3x text-muted mb-3"></i>
-        <h5 class="text-muted">No public repositories yet</h5>
-        <p class="text-muted">Public repositories will appear here, sorted by popularity.</p>
+    <div class="text-center py-5 text-muted">
+        <i class="fa-duotone fa-compass fa-3x mb-3 d-block"></i>
+        @if (!string.IsNullOrEmpty(activeSearch))
+        {
+            <h5>No repositories match "@activeSearch"</h5>
+        }
+        else
+        {
+            <h5>No public repositories yet</h5>
+        }
     </div>
 }
 else
 {
     <div class="list-group">
-        @foreach (var repo in repositories)
+        @foreach (var repo in repos)
         {
             <a href="/@repo.OwnerName/@repo.Slug" class="list-group-item list-group-item-action">
                 <div class="d-flex w-100 justify-content-between">
                     <div class="d-flex align-items-center gap-2">
                         <OwnerAvatar OwnerName="@repo.OwnerName" Size="32" />
                         <div>
-                        <h5 class="mb-1">
-                            <span class="text-muted">@repo.OwnerName /</span> @repo.Name
-                        </h5>
-                        @if (!string.IsNullOrEmpty(repo.Description))
-                        {
-                            <p class="mb-1 text-muted">@repo.Description</p>
-                        }
-                        @if (!string.IsNullOrEmpty(repo.ForkedFromOwnerName))
-                        {
-                            <small class="text-muted"><i class="fa-duotone fa-code-fork me-1"></i> Forked from @repo.ForkedFromOwnerName/@repo.ForkedFromSlug</small>
-                        }
+                            <h5 class="mb-1"><span class="text-muted">@repo.OwnerName /</span> @repo.Name</h5>
+                            @if (!string.IsNullOrEmpty(repo.Description))
+                            {
+                                <p class="mb-0 text-muted small">@repo.Description</p>
+                            }
                         </div>
                     </div>
-                    <div class="text-end">
-                        <span class="me-3" title="Stars"><i class="fa-solid fa-star text-warning me-1"></i> @repo.StarCount</span>
-                        <span title="Forks"><i class="fa-duotone fa-code-fork me-1"></i> @repo.ForkCount</span>
+                    <div class="text-end text-nowrap">
+                        <span class="me-3"><i class="fa-solid fa-star text-warning me-1"></i>@repo.StarCount</span>
+                        <span><i class="fa-duotone fa-code-fork me-1"></i>@repo.ForkCount</span>
                     </div>
                 </div>
             </a>
         }
     </div>
 
-    @if (repositories.Count >= pageSize)
-    {
-        <div class="text-center mt-3">
-            <button class="btn btn-outline-primary" @onclick="LoadMore">Load More</button>
+    <div class="d-flex justify-content-between align-items-center mt-3">
+        <span class="text-muted small">Page @(currentPage + 1)</span>
+        <div class="btn-group btn-group-sm">
+            <button class="btn btn-outline-secondary" disabled="@(currentPage == 0)" @onclick="PrevPage">
+                <i class="fa-solid fa-chevron-left"></i> Previous
+            </button>
+            <button class="btn btn-outline-secondary" disabled="@(repos.Count < pageSize)" @onclick="NextPage">
+                Next <i class="fa-solid fa-chevron-right"></i>
+            </button>
         </div>
-    }
+    </div>
 }
 
 @code {
-    private List<GitRepository> repositories = [];
+    private List<GitRepository> repos = [];
+    private string searchTerm = "";
+    private string? activeSearch;
     private bool loading = true;
-    private int page;
+    private bool searching;
+    private int currentPage;
     private const int pageSize = 20;
 
     protected override async Task OnInitializedAsync()
     {
-        await LoadRepositories();
+        await LoadPage();
     }
 
-    private async Task LoadRepositories()
+    private async Task LoadPage()
     {
         loading = true;
         try
         {
-            repositories = await RepoService.GetPublicReposAsync(page * pageSize, pageSize);
+            repos = await RepoService.GetPublicReposAsync(currentPage * pageSize, pageSize, activeSearch);
         }
         catch { }
         loading = false;
     }
 
-    private async Task LoadMore()
+    private void OnSearchInput(ChangeEventArgs e)
     {
-        page++;
-        var more = await RepoService.GetPublicReposAsync(page * pageSize, pageSize);
-        repositories.AddRange(more);
+        searchTerm = e.Value?.ToString() ?? "";
+    }
+
+    private async Task OnSearchKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter") await DoSearch();
+    }
+
+    private async Task DoSearch()
+    {
+        searching = true;
+        currentPage = 0;
+        activeSearch = string.IsNullOrWhiteSpace(searchTerm) ? null : searchTerm.Trim();
+        await LoadPage();
+        searching = false;
+    }
+
+    private async Task NextPage()
+    {
+        currentPage++;
+        await LoadPage();
+    }
+
+    private async Task PrevPage()
+    {
+        if (currentPage > 0) currentPage--;
+        await LoadPage();
     }
 }

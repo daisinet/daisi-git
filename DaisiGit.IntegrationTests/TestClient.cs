@@ -30,13 +30,13 @@ public class TestClient : IDisposable
 
     // ── Repos ──
 
-    public async Task<GitRepository> CreateRepoAsync(string name, string? description = null,
+    public async Task<RepoDto> CreateRepoAsync(string name, string? description = null,
         GitRepoVisibility visibility = GitRepoVisibility.Private)
     {
         var response = await _http.PostAsJsonAsync("api/git/repos",
             new { name, description, visibility }, JsonOptions);
         response.EnsureSuccessStatusCode();
-        return (await response.Content.ReadFromJsonAsync<GitRepository>(JsonOptions))!;
+        return (await response.Content.ReadFromJsonAsync<RepoDto>(JsonOptions))!;
     }
 
     public async Task<RepoDto?> GetRepoAsync(string owner, string slug)
@@ -53,8 +53,8 @@ public class TestClient : IDisposable
 
     public async Task DeleteRepoAsync(string owner, string slug)
     {
-        // Delete via the settings page API — not yet a direct API endpoint
-        // For now we'll skip cleanup or call the internal endpoint
+        var response = await _http.DeleteAsync($"api/git/repos/{owner}/{slug}");
+        // Don't throw on 404 — repo may already be deleted
     }
 
     // ── Branches ──
@@ -138,11 +138,11 @@ public class TestClient : IDisposable
 
     // ── Forks ──
 
-    public async Task<GitRepository> ForkRepoAsync(string owner, string slug)
+    public async Task<RepoDto> ForkRepoAsync(string owner, string slug)
     {
         var response = await _http.PostAsJsonAsync($"api/git/repos/{owner}/{slug}/forks", new { }, JsonOptions);
         response.EnsureSuccessStatusCode();
-        return (await response.Content.ReadFromJsonAsync<GitRepository>(JsonOptions))!;
+        return (await response.Content.ReadFromJsonAsync<RepoDto>(JsonOptions))!;
     }
 
     // ── Stars ──

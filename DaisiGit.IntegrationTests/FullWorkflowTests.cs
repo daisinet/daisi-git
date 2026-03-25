@@ -15,8 +15,7 @@ public class FullWorkflowTests : IAsyncLifetime
 {
     private readonly TestClient _client;
     private readonly string _testId = DateTime.UtcNow.ToString("HHmmss");
-    private string _repoOwner = "";
-    private string _repoSlug = "";
+    private readonly List<(string owner, string slug)> _createdRepos = [];
 
     public FullWorkflowTests()
     {
@@ -26,12 +25,24 @@ public class FullWorkflowTests : IAsyncLifetime
         _client = new TestClient(TestConfig.ServerUrl, TestConfig.ApiKey);
     }
 
+    /// <summary>Creates a repo and tracks it for cleanup.</summary>
+    private async Task<RepoDto> CreateAndTrackRepoAsync(string name,
+        string? description = null, GitRepoVisibility visibility = GitRepoVisibility.Private)
+    {
+        var repo = await _client.CreateRepoAsync(name, description, visibility);
+        _createdRepos.Add((repo.OwnerName, repo.Slug));
+        return repo;
+    }
+
     public Task InitializeAsync() => Task.CompletedTask;
 
     public async Task DisposeAsync()
     {
-        // Cleanup: try to delete the test repo
-        // (may fail if already deleted by tests, that's OK)
+        // Delete all repos created during this test run
+        foreach (var (owner, slug) in _createdRepos)
+        {
+            try { await _client.DeleteRepoAsync(owner, slug); } catch { }
+        }
         _client.Dispose();
     }
 
@@ -40,22 +51,19 @@ public class FullWorkflowTests : IAsyncLifetime
     [Fact]
     public async Task T01_CreateRepository()
     {
-        var repo = await _client.CreateRepoAsync($"test-repo-{_testId}", "Integration test repo", GitRepoVisibility.Public);
+        var repo = await CreateAndTrackRepoAsync($"test-repo-{_testId}", "Integration test repo", GitRepoVisibility.Public);
 
         Assert.NotNull(repo);
         Assert.Equal($"test-repo-{_testId}", repo.Name);
-        Assert.Equal(GitRepoVisibility.Public, repo.Visibility);
+        Assert.Equal("Public", repo.Visibility);
         Assert.Equal("main", repo.DefaultBranch);
-
-        _repoOwner = repo.OwnerName;
-        _repoSlug = repo.Slug;
     }
 
     [Fact]
     public async Task T02_ListRepositories()
     {
         // Create a repo, then verify it's retrievable by owner/slug
-        var repo = await _client.CreateRepoAsync($"list-test-{_testId}");
+        var repo = await CreateAndTrackRepoAsync($"list-test-{_testId}");
         var fetched = await _client.GetRepoAsync(repo.OwnerName, repo.Slug);
 
         Assert.NotNull(fetched);
@@ -65,7 +73,7 @@ public class FullWorkflowTests : IAsyncLifetime
     [Fact]
     public async Task T03_GetRepository()
     {
-        var created = await _client.CreateRepoAsync($"get-test-{_testId}");
+        var created = await CreateAndTrackRepoAsync($"get-test-{_testId}");
         var repo = await _client.GetRepoAsync(created.OwnerName, created.Slug);
 
         Assert.NotNull(repo);
@@ -77,7 +85,7 @@ public class FullWorkflowTests : IAsyncLifetime
     [Fact]
     public async Task T04_ListBranches()
     {
-        var repo = await _client.CreateRepoAsync($"branch-test-{_testId}");
+        var repo = await CreateAndTrackRepoAsync($"branch-test-{_testId}");
         var branches = await _client.ListBranchesAsync(repo.OwnerName, repo.Slug);
 
         Assert.NotEmpty(branches);
@@ -87,7 +95,7 @@ public class FullWorkflowTests : IAsyncLifetime
     [Fact]
     public async Task T05_ListCommits()
     {
-        var repo = await _client.CreateRepoAsync($"commit-test-{_testId}");
+        var repo = await CreateAndTrackRepoAsync($"commit-test-{_testId}");
         var commits = await _client.ListCommitsAsync(repo.OwnerName, repo.Slug);
 
         Assert.NotEmpty(commits);
@@ -97,7 +105,7 @@ public class FullWorkflowTests : IAsyncLifetime
     [Fact]
     public async Task T06_BrowseTree()
     {
-        var repo = await _client.CreateRepoAsync($"tree-test-{_testId}");
+        var repo = await CreateAndTrackRepoAsync($"tree-test-{_testId}");
         var tree = await _client.GetTreeAsync(repo.OwnerName, repo.Slug);
 
         // New repo has empty tree (initial commit has no files)
@@ -110,7 +118,7 @@ public class FullWorkflowTests : IAsyncLifetime
     [Fact]
     public async Task T07_CreateIssue()
     {
-        var repo = await _client.CreateRepoAsync($"issue-test-{_testId}");
+        var repo = await CreateAndTrackRepoAsync($"issue-test-{_testId}");
         var issue = await _client.CreateIssueAsync(repo.OwnerName, repo.Slug,
             "Test Issue", "This is a test issue");
 
@@ -123,7 +131,7 @@ public class FullWorkflowTests : IAsyncLifetime
     [Fact]
     public async Task T08_ListIssues()
     {
-        var repo = await _client.CreateRepoAsync($"issuelist-{_testId}");
+        var repo = await CreateAndTrackRepoAsync($"issuelist-{_testId}");
         await _client.CreateIssueAsync(repo.OwnerName, repo.Slug, "Issue A");
         await _client.CreateIssueAsync(repo.OwnerName, repo.Slug, "Issue B");
 
@@ -134,7 +142,7 @@ public class FullWorkflowTests : IAsyncLifetime
     [Fact]
     public async Task T09_CloseIssue()
     {
-        var repo = await _client.CreateRepoAsync($"issueclose-{_testId}");
+        var repo = await CreateAndTrackRepoAsync($"issueclose-{_testId}");
         var issue = await _client.CreateIssueAsync(repo.OwnerName, repo.Slug, "Close Me");
 
         var closed = await _client.CloseIssueAsync(repo.OwnerName, repo.Slug, issue.Number);
@@ -144,7 +152,7 @@ public class FullWorkflowTests : IAsyncLifetime
     [Fact]
     public async Task T10_IssueComment()
     {
-        var repo = await _client.CreateRepoAsync($"issuecomment-{_testId}");
+        var repo = await CreateAndTrackRepoAsync($"issuecomment-{_testId}");
         var issue = await _client.CreateIssueAsync(repo.OwnerName, repo.Slug, "Comment Test");
 
         var comment = await _client.AddIssueCommentAsync(repo.OwnerName, repo.Slug,
@@ -159,7 +167,7 @@ public class FullWorkflowTests : IAsyncLifetime
     [Fact]
     public async Task T11_CreatePullRequest()
     {
-        var repo = await _client.CreateRepoAsync($"pr-test-{_testId}");
+        var repo = await CreateAndTrackRepoAsync($"pr-test-{_testId}");
 
         // PR needs two different branches — create a PR from main to main won't work
         // but the API should still accept the creation (validation happens at merge)
@@ -174,7 +182,7 @@ public class FullWorkflowTests : IAsyncLifetime
     [Fact]
     public async Task T12_ListPullRequests()
     {
-        var repo = await _client.CreateRepoAsync($"prlist-{_testId}");
+        var repo = await CreateAndTrackRepoAsync($"prlist-{_testId}");
         await _client.CreatePrAsync(repo.OwnerName, repo.Slug, "PR A", "main", "main");
         await _client.CreatePrAsync(repo.OwnerName, repo.Slug, "PR B", "main", "main");
 
@@ -187,7 +195,7 @@ public class FullWorkflowTests : IAsyncLifetime
     [Fact]
     public async Task T13_StarAndUnstar()
     {
-        var repo = await _client.CreateRepoAsync($"star-test-{_testId}");
+        var repo = await CreateAndTrackRepoAsync($"star-test-{_testId}");
 
         await _client.StarRepoAsync(repo.OwnerName, repo.Slug);
         var starred = await _client.GetRepoAsync(repo.OwnerName, repo.Slug);
@@ -203,9 +211,10 @@ public class FullWorkflowTests : IAsyncLifetime
     [Fact]
     public async Task T14_ForkRepository()
     {
-        var repo = await _client.CreateRepoAsync($"fork-src-{_testId}", visibility: GitRepoVisibility.Public);
+        var repo = await CreateAndTrackRepoAsync($"fork-src-{_testId}", visibility: GitRepoVisibility.Public);
 
         var fork = await _client.ForkRepoAsync(repo.OwnerName, repo.Slug);
+        _createdRepos.Add((fork.OwnerName, fork.Slug));
         Assert.NotNull(fork);
         Assert.Equal(repo.id, fork.ForkedFromId);
     }
@@ -215,7 +224,7 @@ public class FullWorkflowTests : IAsyncLifetime
     [Fact]
     public async Task T15_CreateWorkflow()
     {
-        var repo = await _client.CreateRepoAsync($"workflow-test-{_testId}");
+        var repo = await CreateAndTrackRepoAsync($"workflow-test-{_testId}");
 
         var wf = await _client.CreateWorkflowAsync(repo.OwnerName, repo.Slug,
             "Test Workflow", GitTriggerType.PushToRef);
@@ -228,7 +237,7 @@ public class FullWorkflowTests : IAsyncLifetime
     [Fact]
     public async Task T16_ListWorkflows()
     {
-        var repo = await _client.CreateRepoAsync($"wflist-{_testId}");
+        var repo = await CreateAndTrackRepoAsync($"wflist-{_testId}");
         await _client.CreateWorkflowAsync(repo.OwnerName, repo.Slug, "WF A", GitTriggerType.PushToRef);
         await _client.CreateWorkflowAsync(repo.OwnerName, repo.Slug, "WF B", GitTriggerType.IssueCreated);
 
@@ -241,7 +250,7 @@ public class FullWorkflowTests : IAsyncLifetime
     [Fact]
     public async Task T17_EventsEmitted()
     {
-        var repo = await _client.CreateRepoAsync($"events-test-{_testId}");
+        var repo = await CreateAndTrackRepoAsync($"events-test-{_testId}");
 
         // Create an issue — should emit an event
         await _client.CreateIssueAsync(repo.OwnerName, repo.Slug, "Event Test Issue");
@@ -259,11 +268,11 @@ public class FullWorkflowTests : IAsyncLifetime
     [Fact]
     public async Task T18_DuplicateRepoNameFails()
     {
-        var repo = await _client.CreateRepoAsync($"dup-test-{_testId}");
+        var repo = await CreateAndTrackRepoAsync($"dup-test-{_testId}");
 
         await Assert.ThrowsAsync<HttpRequestException>(async () =>
         {
-            await _client.CreateRepoAsync($"dup-test-{_testId}");
+            await CreateAndTrackRepoAsync($"dup-test-{_testId}");
         });
     }
 
@@ -272,7 +281,7 @@ public class FullWorkflowTests : IAsyncLifetime
     [Fact]
     public async Task T19_SubmitReview()
     {
-        var repo = await _client.CreateRepoAsync($"review-test-{_testId}");
+        var repo = await CreateAndTrackRepoAsync($"review-test-{_testId}");
         var pr = await _client.CreatePrAsync(repo.OwnerName, repo.Slug, "Review PR", "main", "main");
 
         var review = await _client.SubmitReviewAsync(repo.OwnerName, repo.Slug,

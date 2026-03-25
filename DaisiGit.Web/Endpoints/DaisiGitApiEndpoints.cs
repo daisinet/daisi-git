@@ -16,9 +16,10 @@ public static class DaisiGitApiEndpoints
         // Authenticated endpoints (mutations + user-specific)
         var api = app.MapGroup("/api/git").RequireAuthorization();
 
-        // Repositories (create requires auth; get/list allow anonymous for public repos)
+        // Repositories (create/delete require auth; get/list allow anonymous for public repos)
         api.MapPost("/repos", CreateRepository);
         api.MapGet("/repos", ListRepositories);
+        api.MapDelete("/repos/{owner}/{slug}", DeleteRepository);
 
         // Issues (create/update require auth)
         api.MapPost("/repos/{owner}/{slug}/issues", CreateIssue);
@@ -172,6 +173,17 @@ public static class DaisiGitApiEndpoints
             GetAccountId(ctx), userId, userName,
             req.Name, req.Description, req.Visibility, req.StorageProvider);
         return Results.Created($"/api/git/repos/{repo.OwnerName}/{repo.Slug}", RepoDto(repo));
+    }
+
+    private static async Task<IResult> DeleteRepository(
+        HttpContext ctx, string owner, string slug,
+        RepositoryService repoService, PermissionService permissionService)
+    {
+        var (repo, error) = await RequireWrite(ctx, owner, slug, repoService, permissionService);
+        if (error != null) return error;
+
+        await repoService.DeleteRepositoryAsync(repo!.id, repo.AccountId);
+        return Results.NoContent();
     }
 
     // ── Branch endpoints ──

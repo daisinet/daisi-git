@@ -4,19 +4,53 @@ The `dg` command-line tool provides full access to DaisiGit from your terminal. 
 
 ## Installation
 
-Build from source:
+### Option 1: Standalone binary (no dependencies)
+
+Download the binary for your platform from the [releases page](https://github.com/daisinet/daisi-git/releases):
+
+| Platform | File |
+|----------|------|
+| Windows x64 | `dg-win-x64.exe` |
+| Linux x64 | `dg-linux-x64` |
+| macOS Intel | `dg-osx-x64` |
+| macOS Apple Silicon | `dg-osx-arm64` |
+
+Then move it to a directory in your PATH:
 
 ```bash
-cd DaisiGit.Cli
-dotnet build
+# Linux / macOS
+chmod +x dg-linux-x64
+sudo mv dg-linux-x64 /usr/local/bin/dg
+
+# Windows — move dg-win-x64.exe to a folder in your PATH and rename to dg.exe
 ```
 
-The executable is at `bin/Debug/net10.0/dg` (or `dg.exe` on Windows).
-
-To install globally:
+### Option 2: .NET tool (requires .NET SDK)
 
 ```bash
-dotnet tool install --global --add-source ./nupkg DaisiGit.Cli
+dotnet tool install -g DaisiGit.Cli
+```
+
+This installs `dg` globally. Update with:
+
+```bash
+dotnet tool update -g DaisiGit.Cli
+```
+
+### Option 3: Build from source
+
+```bash
+git clone https://github.com/daisinet/daisi-git.git
+cd daisi-git/DaisiGit.Cli
+dotnet build
+# Binary at bin/Debug/net10.0/dg(.exe)
+```
+
+To build standalone binaries for all platforms:
+
+```bash
+./scripts/build-cli.sh
+# Output in dist/
 ```
 
 ## Authentication

@@ -1,0 +1,46 @@
+name: Deploy DaisiGit
+
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout daisi-git
+        uses: actions/checkout@v4
+        with:
+          path: daisi-git
+
+      - name: Checkout daisi-sdk-dotnet
+        uses: actions/checkout@v4
+        with:
+          repository: daisinet/daisi-sdk-dotnet
+          token: ${{ secrets.SDK_PAT }}
+          path: daisi-sdk-dotnet
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Publish DaisiGit.Web
+        run: dotnet publish daisi-git/DaisiGit.Web -c Release
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy to Azure App Service
+        uses: azure/webapps-deploy@v3
+        with:
+          app-name: ${{ secrets.AZURE_WEBAPP_NAME }}
+          package: daisi-git/DaisiGit.Web/bin/Release/net10.0/publish

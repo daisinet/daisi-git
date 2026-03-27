@@ -1,0 +1,70 @@
+@page "/settings/account"
+@inject AccountSettingsService SettingsService
+
+<PageTitle>Account Settings - Daisi Git</PageTitle>
+
+<h4 class="mb-3">
+    <a href="/settings" class="text-muted text-decoration-none">Settings</a>
+    <span class="text-muted">/</span> Account
+</h4>
+
+<div class="card" style="max-width: 600px;">
+    <div class="card-header fw-semibold">Default Storage Provider</div>
+    <div class="card-body">
+        <p class="text-muted small">
+            Choose the default storage backend for new repositories. Individual repos can override this at creation time.
+        </p>
+        <select class="form-select" style="max-width: 300px;" value="@storageProvider" @onchange="OnStorageChange">
+            <option value="DaisiDrive">Daisi Drive</option>
+            <option value="AzureBlob">Azure Blob Storage</option>
+        </select>
+
+        @if (!string.IsNullOrEmpty(error))
+        {
+            <div class="alert alert-danger mt-3">@error</div>
+        }
+        @if (saved)
+        {
+            <div class="alert alert-success mt-3">Settings saved.</div>
+        }
+    </div>
+</div>
+
+@code {
+    [CascadingParameter(Name = "AccountId")] string AccountId { get; set; } = "";
+
+    private string storageProvider = "DaisiDrive";
+    private string? error;
+    private bool saved;
+    private bool loaded;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (loaded || string.IsNullOrEmpty(AccountId)) return;
+        loaded = true;
+        try
+        {
+            var settings = await SettingsService.GetSettingsAsync(AccountId);
+            storageProvider = settings.DefaultStorageProvider.ToString();
+        }
+        catch { }
+    }
+
+    private async Task OnStorageChange(ChangeEventArgs e)
+    {
+        var value = e.Value?.ToString() ?? "DaisiDrive";
+        error = null;
+        saved = false;
+        try
+        {
+            var provider = Enum.Parse<StorageProvider>(value);
+            await SettingsService.SetDefaultStorageProviderAsync(AccountId, provider);
+            storageProvider = value;
+            saved = true;
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+        }
+    }
+}

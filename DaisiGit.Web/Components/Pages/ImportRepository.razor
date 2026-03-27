@@ -1,0 +1,152 @@
+@page "/import"
+@inject ImportService ImportService
+@inject UserProfileService ProfileService
+@inject OrganizationService OrgService
+@inject NavigationManager Nav
+
+<PageTitle>Import Repository - Daisi Git</PageTitle>
+
+<div class="row justify-content-center">
+    <div class="col-md-8 col-lg-6">
+        <h3 class="mb-4">Import a repository</h3>
+        <p class="text-muted mb-4">Import a public git repository from GitHub, GitLab, Bitbucket, or any public git URL.</p>
+
+        <div class="card">
+            <div class="card-body">
+                <div class="mb-3">
+                    <label class="form-label fw-semibold">Source URL</label>
+                    <input type="url" class="form-control" @bind="sourceUrl"
+                           placeholder="https://github.com/owner/repo.git" />
+                    <div class="form-text">The public clone URL of the repository to import.</div>
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label">Owner</label>
+                    <select class="form-select" @bind="selectedOwner">
+                        @if (!string.IsNullOrEmpty(userHandle))
+                        {
+                            <option value="@userHandle">@userHandle (personal)</option>
+                        }
+                        @foreach (var org in orgs)
+                        {
+                            <option value="@org.Slug">@org.Slug (@org.Name)</option>
+                        }
+                    </select>
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label">Repository name <span class="text-muted">(optional, auto-detected from URL)</span></label>
+                    <input type="text" class="form-control" @bind="repoName" placeholder="Leave blank to use source repo name" />
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label">Visibility</label>
+                    <select class="form-select" @bind="visibility" style="max-width: 250px;">
+                        <option value="@GitRepoVisibility.Private">Private</option>
+                        <option value="@GitRepoVisibility.Internal">Internal</option>
+                        <option value="@GitRepoVisibility.Public">Public</option>
+                    </select>
+                </div>
+
+                @if (!string.IsNullOrEmpty(error))
+                {
+                    <div class="alert alert-danger">@error</div>
+                }
+
+                @if (!string.IsNullOrEmpty(progressMessage))
+                {
+                    <div class="alert alert-info">
+                        <span class="spinner-border spinner-border-sm me-2"></span>
+                        @progressMessage
+                    </div>
+                }
+
+                <button class="btn btn-primary" @onclick="DoImport" disabled="@importing">
+                    @if (importing)
+                    {
+                        <span class="spinner-border spinner-border-sm me-1"></span>
+                    }
+                    <i class="fa-duotone fa-download me-1"></i> Import Repository
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    [CascadingParameter(Name = "AccountId")] string AccountId { get; set; } = "";
+    [CascadingParameter(Name = "UserId")] string UserId { get; set; } = "";
+
+    private string sourceUrl = "";
+    private string? repoName;
+    private string selectedOwner = "";
+    private string? userHandle;
+    private List<GitOrganization> orgs = [];
+    private GitRepoVisibility visibility = GitRepoVisibility.Private;
+    private string? error;
+    private string? progressMessage;
+    private bool importing;
+    private bool loaded;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (loaded || string.IsNullOrEmpty(AccountId)) return;
+        loaded = true;
+        try
+        {
+            var profile = await ProfileService.GetProfileAsync(UserId, AccountId);
+            userHandle = profile?.Handle;
+            orgs = await OrgService.ListAsync(AccountId);
+            selectedOwner = userHandle ?? (orgs.Count > 0 ? orgs[0].Slug : "");
+        }
+        catch { }
+    }
+
+    private async Task DoImport()
+    {
+        if (string.IsNullOrWhiteSpace(sourceUrl))
+        {
+            error = "Source URL is required.";
+            return;
+        }
+        if (string.IsNullOrEmpty(selectedOwner))
+        {
+            error = "Select an owner.";
+            return;
+        }
+
+        importing = true;
+        error = null;
+        progressMessage = null;
+
+        try
+        {
+            var ownerId = UserId;
+            var ownerName = selectedOwner;
+
+            var org = orgs.FirstOrDefault(o => o.Slug == selectedOwner);
+            if (org != null)
+            {
+                ownerId = org.id;
+                ownerName = org.Slug;
+            }
+
+            var repo = await ImportService.ImportAsync(
+                sourceUrl.Trim(), AccountId, ownerId, ownerName,
+                string.IsNullOrWhiteSpace(repoName) ? null : repoName.Trim(),
+                null, visibility, null,
+                msg => { progressMessage = msg; InvokeAsync(StateHasChanged); });
+
+            Nav.NavigateTo($"/{repo.OwnerName}/{repo.Slug}");
+        }
+        catch (Exception ex)
+        {
+            error = $"Import failed: {ex.Message}";
+            progressMessage = null;
+        }
+        finally
+        {
+            importing = false;
+        }
+    }
+}

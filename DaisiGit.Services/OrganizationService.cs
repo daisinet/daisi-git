@@ -15,13 +15,22 @@ public partial class OrganizationService(DaisiGitCosmo cosmo)
     /// </summary>
     public async Task<GitOrganization> CreateAsync(
         string accountId, string name, string? description,
-        string creatorUserId, string creatorUserName)
+        string creatorUserId, string creatorUserName,
+        string? handle = null)
     {
-        var slug = Slugify(name);
+        var slug = !string.IsNullOrWhiteSpace(handle) ? Slugify(handle) : Slugify(name);
+
+        if (DaisiGit.Core.ReservedNames.IsDisallowed(slug))
+            throw new InvalidOperationException($"'{slug}' is not available.");
 
         var existing = await cosmo.GetOrganizationBySlugAsync(slug);
         if (existing != null)
-            throw new InvalidOperationException($"Organization '{slug}' already exists.");
+            throw new InvalidOperationException($"Handle '{slug}' is already taken.");
+
+        // Check against user handles too
+        var existingUser = await cosmo.GetUserProfileByHandleAsync(slug);
+        if (existingUser != null)
+            throw new InvalidOperationException($"Handle '{slug}' is already taken.");
 
         var org = await cosmo.CreateOrganizationAsync(new GitOrganization
         {
@@ -63,6 +72,32 @@ public partial class OrganizationService(DaisiGitCosmo cosmo)
     }
 
     /// <summary>
+    /// Deletes an organization, all its repos (with full cascade), members, and teams.
+    /// </summary>
+    public async Task DeleteAsync(GitOrganization org, RepositoryService? repoService = null)
+    {
+        // Delete all repos owned by this org
+        if (repoService != null)
+        {
+            var repos = await cosmo.GetRepositoriesByOwnerAsync(org.Slug);
+            foreach (var repo in repos)
+                try { await repoService.DeleteRepositoryAsync(repo.id, repo.AccountId); } catch { }
+        }
+
+        // Delete teams
+        var teams = await cosmo.GetTeamsAsync(org.id);
+        foreach (var t in teams)
+            try { await cosmo.DeleteTeamAsync(t.id, org.id); } catch { }
+
+        // Delete members
+        var members = await cosmo.GetOrgMembersAsync(org.id);
+        foreach (var m in members)
+            try { await cosmo.DeleteOrgMemberAsync(m.id, org.id); } catch { }
+
+        await cosmo.DeleteOrganizationAsync(org.id, org.AccountId);
+    }
+
+    /// <summary>
     /// Lists organizations a user belongs to.
     /// </summary>
     public async Task<List<GitOrganization>> GetUserOrganizationsAsync(string userId, string accountId)
@@ -79,10 +114,24 @@ public partial class OrganizationService(DaisiGitCosmo cosmo)
     }
 
     /// <summary>
-    /// Updates organization metadata.
+    /// Updates organization metadata. Validates slug uniqueness if changed.
     /// </summary>
-    public async Task<GitOrganization> UpdateAsync(GitOrganization org)
+    public async Task<GitOrganization> UpdateAsync(GitOrganization org, string? newHandle = null)
     {
+        if (!string.IsNullOrWhiteSpace(newHandle))
+        {
+            var newSlug = Slugify(newHandle);
+            if (newSlug != org.Slug)
+            {
+                if (DaisiGit.Core.ReservedNames.IsDisallowed(newSlug))
+                    throw new InvalidOperationException($"'{newSlug}' is not available.");
+                var existing = await cosmo.GetOrganizationBySlugAsync(newSlug);
+                if (existing != null && existing.id != org.id)
+                    throw new InvalidOperationException($"Handle '{newSlug}' is already taken.");
+                org.Slug = newSlug;
+            }
+        }
+
         return await cosmo.UpdateOrganizationAsync(org);
     }
 

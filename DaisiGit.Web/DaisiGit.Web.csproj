@@ -8,6 +8,8 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="Azure.Storage.Blobs" Version="12.24.0" />
+    <PackageReference Include="Markdig" Version="1.1.1" />
     <PackageReference Include="MudBlazor" Version="8.5.0" />
   </ItemGroup>
 

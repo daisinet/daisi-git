@@ -1,6 +1,9 @@
 @inject RepositoryService RepoService
 @inject GitRefService RefService
 @inject BrowseService BrowseService
+@inject OrganizationService OrgService
+@inject UserProfileService ProfileService
+@inject PermissionService PermissionService
 @inject NavigationManager Nav
 
 @if (loading)
@@ -11,11 +14,15 @@
         </div>
     </div>
 }
-else if (Repository == null)
+else if (Repository == null || !hasAccess)
 {
     <div class="text-center py-5">
         <h4 class="text-muted">Repository not found</h4>
         <p class="text-muted">@Owner/@RepoSlug does not exist or you don't have access.</p>
+        @if (!isLoggedIn)
+        {
+            <a href="/" class="btn btn-primary mt-2">Sign in</a>
+        }
     </div>
 }
 else
@@ -24,10 +31,30 @@ else
     <div class="repo-header">
         <div class="d-flex justify-content-between align-items-start mb-3">
             <div>
-                <h3 class="mb-1">
+                <h3 class="mb-1 d-flex align-items-center gap-2">
+                    <OwnerAvatar OwnerName="@Owner" Size="28" />
                     <a href="/@Owner" class="text-muted text-decoration-none">@Owner</a>
-                    <span class="text-muted">/</span>
+                    <span class="text-muted mx-1">/</span>
                     <a href="/@Owner/@RepoSlug" class="text-decoration-none"><strong>@Repository.Name</strong></a>
+                    <span class="text-muted mx-1">/</span>
+                    <div class="dropdown d-inline-block">
+                        <a class="text-decoration-none dropdown-toggle" href="#" role="button"
+                           data-bs-toggle="dropdown" aria-expanded="false">@SelectedBranch</a>
+                        <ul class="dropdown-menu" style="max-height: 300px; overflow-y: auto;">
+                            @foreach (var branch in branches)
+                            {
+                                var bName = branch;
+                                <li>
+                                    <a class="dropdown-item @(bName == SelectedBranch ? "active" : "")"
+                                       href="/@Owner/@RepoSlug/tree/@bName">@bName</a>
+                                </li>
+                            }
+                            @if (branches.Count == 0)
+                            {
+                                <li><span class="dropdown-item text-muted">No branches</span></li>
+                            }
+                        </ul>
+                    </div>
                 </h3>
                 @if (!string.IsNullOrEmpty(Repository.Description))
                 {
@@ -35,12 +62,24 @@ else
                 }
             </div>
             <div class="d-flex align-items-center gap-2">
-                <button class="btn btn-sm btn-outline-secondary" @onclick="ToggleStar" title="@(hasStarred ? "Unstar" : "Star")">
-                    <i class="@(hasStarred ? "fa-solid" : "fa-regular") fa-star me-1"></i> @Repository.StarCount
-                </button>
-                <button class="btn btn-sm btn-outline-secondary" @onclick="ForkRepo" title="Fork">
-                    <i class="fa-duotone fa-code-fork me-1"></i> @Repository.ForkCount
-                </button>
+                @if (isLoggedIn)
+                {
+                    <button class="btn btn-sm btn-outline-secondary" @onclick="ToggleStar" title="@(hasStarred ? "Unstar" : "Star")">
+                        <i class="@(hasStarred ? "fa-solid" : "fa-regular") fa-star me-1"></i> @Repository.StarCount
+                    </button>
+                    <button class="btn btn-sm btn-outline-secondary" @onclick="ShowForkDialog" title="Fork">
+                        <i class="fa-duotone fa-code-fork me-1"></i> @Repository.ForkCount
+                    </button>
+                }
+                else
+                {
+                    <span class="btn btn-sm btn-outline-secondary disabled">
+                        <i class="fa-regular fa-star me-1"></i> @Repository.StarCount
+                    </span>
+                    <span class="btn btn-sm btn-outline-secondary disabled">
+                        <i class="fa-duotone fa-code-fork me-1"></i> @Repository.ForkCount
+                    </span>
+                }
                 <span class="badge bg-@(Repository.Visibility == GitRepoVisibility.Public ? "success" : Repository.Visibility == GitRepoVisibility.Internal ? "warning" : "secondary")">
                     @Repository.Visibility
                 </span>
@@ -82,6 +121,19 @@ else
                     <i class="fa-duotone fa-circle-dot me-1"></i> Issues
                 </a>
             </li>
+            @if (isLoggedIn)
+            {
+                <li class="nav-item">
+                    <a class="nav-link @(ActiveTab == "workflows" ? "active" : "")" href="/@Owner/@RepoSlug/workflows">
+                        <i class="fa-duotone fa-bolt me-1"></i> Workflows
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link @(ActiveTab == "settings" ? "active" : "")" href="/@Owner/@RepoSlug/settings">
+                        <i class="fa-duotone fa-gear me-1"></i> Settings
+                    </a>
+                </li>
+            }
         </ul>
     </div>
 
@@ -89,6 +141,48 @@ else
     <div class="mt-3">
         @ChildContent
     </div>
+
+    <!-- Fork dialog -->
+    @if (showForkConfirm)
+    {
+        <div class="modal d-block" tabindex="-1" style="background: rgba(0,0,0,0.4);">
+            <div class="modal-dialog modal-sm modal-dialog-centered">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title"><i class="fa-duotone fa-code-fork me-1"></i> Fork @Repository.Name</h5>
+                        <button type="button" class="btn-close" @onclick="() => showForkConfirm = false"></button>
+                    </div>
+                    <div class="modal-body">
+                        <label class="form-label">Fork to</label>
+                        <select class="form-select" @bind="forkOwner">
+                            @if (!string.IsNullOrEmpty(userHandle))
+                            {
+                                <option value="@userHandle">@userHandle (personal)</option>
+                            }
+                            @foreach (var org in forkOrgs)
+                            {
+                                <option value="@org.Slug">@org.Slug (@org.Name)</option>
+                            }
+                        </select>
+                        <div class="form-text mt-2">
+                            The repository will be forked as <strong>@forkOwner/@(Slugify(Repository.Name))</strong>
+                        </div>
+                        @if (!string.IsNullOrEmpty(forkError))
+                        {
+                            <div class="alert alert-danger mt-2 mb-0 py-2 small">@forkError</div>
+                        }
+                    </div>
+                    <div class="modal-footer">
+                        <button class="btn btn-outline-secondary btn-sm" @onclick="() => showForkConfirm = false">Cancel</button>
+                        <button class="btn btn-success btn-sm" @onclick="ForkRepo" disabled="@forking">
+                            @if (forking) { <span class="spinner-border spinner-border-sm me-1"></span> }
+                            Create Fork
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    }
 }
 
 @code {
@@ -103,21 +197,66 @@ else
 
     public GitRepository? Repository { get; private set; }
     private bool loading = true;
+    private bool isLoggedIn;
+    private bool hasAccess = true;
     private bool hasStarred;
+    private bool showForkConfirm;
+    private bool forking;
+    private string forkOwner = "";
+    private string? forkError;
+    private string? userHandle;
+    private List<GitOrganization> forkOrgs = [];
+    private List<string> branches = [];
+    private bool branchesLoaded;
+    private string? loadedOwner;
+    private string? loadedSlug;
 
     protected override async Task OnParametersSetAsync()
     {
+        // Only reload when the route actually changes
+        if (loadedOwner == Owner && loadedSlug == RepoSlug)
+            return;
+
+        loadedOwner = Owner;
+        loadedSlug = RepoSlug;
         loading = true;
+        branchesLoaded = false;
+        isLoggedIn = !string.IsNullOrEmpty(UserId);
         try
         {
             Repository = await RepoService.GetRepositoryBySlugAsync(Owner, RepoSlug);
-            if (Repository != null && string.IsNullOrEmpty(SelectedBranch))
-                SelectedBranch = Repository.DefaultBranch;
-            if (Repository != null && !string.IsNullOrEmpty(UserId))
-                hasStarred = await RepoService.HasStarredAsync(UserId, Repository.id);
+            if (Repository != null)
+            {
+                // Check read permission
+                hasAccess = await PermissionService.CanReadAsync(UserId ?? "", Repository);
+                if (!hasAccess) { loading = false; return; }
+
+                if (string.IsNullOrEmpty(SelectedBranch))
+                    SelectedBranch = Repository.DefaultBranch;
+                if (!string.IsNullOrEmpty(UserId))
+                    hasStarred = await RepoService.HasStarredAsync(UserId, Repository.id);
+                await LoadBranches();
+            }
         }
         catch { }
         loading = false;
+    }
+
+    private async Task LoadBranches()
+    {
+        if (branchesLoaded || Repository == null) return;
+        branchesLoaded = true;
+        try
+        {
+            var refs = await RefService.GetAllRefsAsync(Repository.id);
+            branches = refs.Keys
+                .Where(r => r.StartsWith("refs/heads/"))
+                .Select(r => r["refs/heads/".Length..])
+                .OrderByDescending(b => b == Repository.DefaultBranch)
+                .ThenBy(b => b)
+                .ToList();
+        }
+        catch { }
     }
 
     private async Task ToggleStar()
@@ -137,10 +276,55 @@ else
         }
     }
 
+    private async Task ShowForkDialog()
+    {
+        var profile = await ProfileService.GetProfileAsync(UserId, AccountId);
+        userHandle = profile?.Handle;
+        forkOwner = userHandle ?? "";
+        forkError = null;
+        try
+        {
+            if (forkOrgs.Count == 0)
+                forkOrgs = await OrgService.ListAsync(AccountId);
+        }
+        catch { }
+        showForkConfirm = true;
+    }
+
     private async Task ForkRepo()
     {
         if (Repository == null) return;
-        var fork = await RepoService.ForkRepositoryAsync(AccountId, UserId, UserName, Repository);
-        Nav.NavigateTo($"/{fork.OwnerName}/{fork.Slug}");
+        forking = true;
+        forkError = null;
+        try
+        {
+            var ownerName = forkOwner;
+            var ownerId = UserId;
+
+            var org = forkOrgs.FirstOrDefault(o => o.Slug == forkOwner);
+            if (org != null)
+            {
+                ownerName = org.Slug;
+                ownerId = org.id;
+            }
+
+            var fork = await RepoService.ForkRepositoryAsync(AccountId, ownerId, ownerName, Repository);
+            showForkConfirm = false;
+            Nav.NavigateTo($"/{fork.OwnerName}/{fork.Slug}");
+        }
+        catch (Exception ex)
+        {
+            forkError = ex.Message;
+        }
+        finally
+        {
+            forking = false;
+        }
+    }
+
+    private static string Slugify(string name)
+    {
+        return System.Text.RegularExpressions.Regex.Replace(
+            name.ToLowerInvariant().Trim(), @"[^a-z0-9\-]", "-").Trim('-');
     }
 }

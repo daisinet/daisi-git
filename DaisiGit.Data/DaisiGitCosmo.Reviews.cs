@@ -118,4 +118,34 @@ public partial class DaisiGitCosmo
         }
         return results;
     }
+
+    public virtual async Task<List<Review>> GetAllReviewsAsync(string repositoryId)
+    {
+        var container = await GetContainerAsync(ReviewsContainerName);
+        var query = new QueryDefinition(
+            "SELECT * FROM c WHERE c.RepositoryId = @repoId AND (c.Type = 'Review' OR c.Type = 'DiffComment')")
+            .WithParameter("@repoId", repositoryId);
+
+        var results = new List<Review>();
+        using var iterator = container.GetItemQueryIterator<Review>(query, requestOptions: new QueryRequestOptions
+        {
+            PartitionKey = GetReviewPartitionKey(repositoryId)
+        });
+        while (iterator.HasMoreResults)
+        {
+            var response = await iterator.ReadNextAsync();
+            results.AddRange(response);
+        }
+        return results;
+    }
+
+    public virtual async Task DeleteReviewAsync(string id, string repositoryId)
+    {
+        try
+        {
+            var container = await GetContainerAsync(ReviewsContainerName);
+            await container.DeleteItemAsync<Review>(id, GetReviewPartitionKey(repositoryId));
+        }
+        catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound) { }
+    }
 }

@@ -1,0 +1,259 @@
+@page "/settings/profile"
+@inject UserProfileService ProfileService
+@inject ApiKeyService KeyService
+@inject IJSRuntime JS
+@inject NavigationManager Nav
+
+<PageTitle>Personal Profile - Daisi Git</PageTitle>
+
+<h4 class="mb-3">
+    <a href="/settings" class="text-muted text-decoration-none">Settings</a>
+    <span class="text-muted">/</span> Personal Profile
+</h4>
+
+<div class="card" style="max-width: 600px;">
+    <div class="card-body">
+        <div class="mb-4">
+            <label class="form-label fw-semibold">Avatar</label>
+            <AvatarUpload EntityType="user" EntityId="@UserId" CurrentUrl="@avatarUrl"
+                          OnAvatarChanged="OnAvatarChanged" />
+        </div>
+
+        <div class="mb-3">
+            <label class="form-label fw-semibold">Handle</label>
+            <div class="input-group">
+                <span class="input-group-text text-muted">@@</span>
+                <input type="text" class="form-control" @bind="handle" placeholder="my-handle" />
+            </div>
+            <div class="form-text">Your unique URL handle. Lowercase letters, numbers, and hyphens. Must be unique across all users and organizations.</div>
+        </div>
+
+        <div class="mb-3">
+            <label class="form-label fw-semibold">Display Name</label>
+            <input type="text" class="form-control" @bind="displayName" placeholder="Your Name" />
+        </div>
+
+        <div class="mb-3">
+            <label class="form-label fw-semibold">Email</label>
+            <input type="email" class="form-control" @bind="email" placeholder="you@example.com" />
+            <div class="form-text">Used for commit attribution.</div>
+        </div>
+
+        <div class="mb-3">
+            <label class="form-label fw-semibold">Bio <span class="text-muted fw-normal">(optional)</span></label>
+            <textarea class="form-control" rows="3" @bind="bio" placeholder="Tell us about yourself"></textarea>
+        </div>
+
+        @if (!string.IsNullOrEmpty(error))
+        {
+            <div class="alert alert-danger">@error</div>
+        }
+        @if (saved)
+        {
+            <div class="alert alert-success">Profile saved.</div>
+        }
+
+        <button class="btn btn-primary" @onclick="Save" disabled="@saving">
+            @if (saving) { <span class="spinner-border spinner-border-sm me-1"></span> }
+            Save Profile
+        </button>
+    </div>
+</div>
+
+<!-- API Keys -->
+<h5 class="mt-4 mb-3">API Keys</h5>
+<div class="card" style="max-width: 600px;">
+    <div class="card-body">
+        <p class="text-muted small">Personal access tokens for CLI and API access. Tokens are shown only once when created.</p>
+
+        <div class="d-flex gap-2 mb-3">
+            <input type="text" class="form-control form-control-sm" @bind="newKeyName" placeholder="Token name (e.g. my-laptop)" />
+            <button type="button" class="btn btn-sm btn-success text-nowrap" @onclick="CreateKey" disabled="@creatingKey">
+                @if (creatingKey) { <span class="spinner-border spinner-border-sm me-1"></span> }
+                Generate Token
+            </button>
+        </div>
+
+        @if (!string.IsNullOrEmpty(newRawToken))
+        {
+            <div class="alert alert-warning">
+                <strong>Copy this token now — it won't be shown again:</strong>
+                <div class="input-group input-group-sm mt-2">
+                    <input type="text" class="form-control font-monospace" readonly value="@newRawToken" />
+                    <button class="btn btn-outline-secondary" type="button" @onclick="CopyToken">
+                        <i class="fa-duotone fa-copy"></i>
+                    </button>
+                </div>
+            </div>
+        }
+
+        @if (apiKeys.Count > 0)
+        {
+            <table class="table table-sm mb-0">
+                <thead><tr><th>Name</th><th>Prefix</th><th>Created</th><th>Last Used</th><th></th></tr></thead>
+                <tbody>
+                    @foreach (var key in apiKeys)
+                    {
+                        var k = key;
+                        <tr>
+                            <td>@k.Name</td>
+                            <td><code>@k.TokenPrefix...</code></td>
+                            <td class="text-muted small">@k.CreatedUtc.ToString("MMM d")</td>
+                            <td class="text-muted small">@(k.LastUsedUtc?.ToString("MMM d") ?? "Never")</td>
+                            <td><button class="btn btn-sm btn-outline-danger" @onclick="() => RevokeKey(k.id)"><i class="fa-solid fa-xmark"></i></button></td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
+        else if (!creatingKey)
+        {
+            <div class="text-muted small">No API keys yet.</div>
+        }
+    </div>
+</div>
+
+@code {
+    [CascadingParameter(Name = "AccountId")] string AccountId { get; set; } = "";
+    [CascadingParameter(Name = "UserId")] string UserId { get; set; } = "";
+    [CascadingParameter(Name = "UserName")] string UserName { get; set; } = "";
+
+    private string handle = "";
+    private string? displayName;
+    private string? email;
+    private string? bio;
+    private string? avatarUrl;
+    private string? error;
+    private bool saving;
+    private bool saved;
+    private bool loaded;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (loaded || string.IsNullOrEmpty(UserId)) return;
+        loaded = true;
+
+        try
+        {
+            var profile = await ProfileService.GetProfileAsync(UserId, AccountId);
+            if (profile != null)
+            {
+                handle = profile.Handle;
+                displayName = profile.DisplayName;
+                email = profile.Email;
+                bio = profile.Bio;
+                avatarUrl = profile.AvatarUrl;
+            }
+            else
+            {
+                // Default handle from SSO username
+                handle = UserName.ToLowerInvariant();
+                displayName = UserName;
+            }
+        }
+        catch { }
+
+        await LoadKeys();
+    }
+
+    private async Task Save()
+    {
+        error = null;
+        saved = false;
+
+        if (string.IsNullOrWhiteSpace(handle))
+        {
+            error = "Handle is required.";
+            return;
+        }
+
+        saving = true;
+        try
+        {
+            var profile = await ProfileService.GetProfileAsync(UserId, AccountId)
+                ?? new DaisiGit.Core.Models.UserProfile
+                {
+                    AccountId = AccountId,
+                    UserId = UserId
+                };
+
+            profile.Handle = handle.Trim();
+            profile.DisplayName = displayName?.Trim();
+            profile.Email = email?.Trim();
+            profile.Bio = bio?.Trim();
+            profile.AvatarUrl = avatarUrl;
+
+            await ProfileService.SaveProfileAsync(profile);
+            saved = true;
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+        }
+        saving = false;
+    }
+
+    private async Task OnAvatarChanged(string? url)
+    {
+        avatarUrl = url;
+        // Save avatar URL immediately
+        try
+        {
+            var profile = await ProfileService.GetProfileAsync(UserId, AccountId);
+            if (profile != null)
+            {
+                profile.AvatarUrl = url;
+                await ProfileService.SaveProfileAsync(profile);
+            }
+        }
+        catch { }
+    }
+
+    // ── API Keys ──
+
+    private List<DaisiGit.Core.Models.ApiKey> apiKeys = [];
+    private string newKeyName = "";
+    private string? newRawToken;
+    private bool creatingKey;
+
+    private async Task LoadKeys()
+    {
+        if (!string.IsNullOrEmpty(UserId))
+        {
+            try { apiKeys = await KeyService.ListKeysAsync(AccountId, UserId); }
+            catch { }
+        }
+    }
+
+    private async Task CreateKey()
+    {
+        if (string.IsNullOrWhiteSpace(newKeyName)) return;
+        creatingKey = true;
+        newRawToken = null;
+        try
+        {
+            var (key, rawToken) = await KeyService.CreateKeyAsync(AccountId, UserId, UserName, newKeyName.Trim());
+            newRawToken = rawToken;
+            newKeyName = "";
+            await LoadKeys();
+        }
+        catch { }
+        creatingKey = false;
+    }
+
+    private async Task RevokeKey(string keyId)
+    {
+        try
+        {
+            await KeyService.RevokeKeyAsync(keyId, AccountId);
+            await LoadKeys();
+        }
+        catch { }
+    }
+
+    private async Task CopyToken()
+    {
+        if (newRawToken != null)
+            await JS.InvokeVoidAsync("navigator.clipboard.writeText", newRawToken);
+    }
+}

@@ -1,21 +1,67 @@
 @page "/new"
 @inject RepositoryService RepoService
+@inject OrganizationService OrgService
+@inject AccountSettingsService SettingsService
+@inject UserProfileService ProfileService
 @inject NavigationManager Nav
 
 <PageTitle>New Repository - Daisi Git</PageTitle>
 
 <div class="row justify-content-center">
     <div class="col-md-8 col-lg-6">
-        <h3 class="mb-4">Create a new repository</h3>
+        <div class="d-flex justify-content-between align-items-center mb-4">
+            <h3 class="mb-0">Create a new repository</h3>
+            <a href="/import" class="btn btn-outline-secondary btn-sm">
+                <i class="fa-duotone fa-download me-1"></i> Import instead
+            </a>
+        </div>
 
         <EditForm Model="model" OnValidSubmit="HandleSubmit" FormName="CreateRepo">
             <div class="mb-3">
-                <label class="form-label">Repository name</label>
-                <InputText @bind-Value="model.Name" class="form-control" placeholder="my-project" />
-                @if (!string.IsNullOrEmpty(slug))
+                <label class="form-label">Owner</label>
+                <select class="form-select" value="@selectedOwner" @onchange="OnOwnerChange">
+                    @if (!string.IsNullOrEmpty(userHandle))
+                    {
+                        <option value="@userHandle">@userHandle (personal)</option>
+                    }
+                    @foreach (var org in orgs)
+                    {
+                        <option value="@org.Slug">@org.Slug (@org.Name)</option>
+                    }
+                </select>
+                @if (string.IsNullOrEmpty(userHandle) && orgs.Count == 0)
+                {
+                    <div class="alert alert-warning mt-2 small">
+                        You need to <a href="/settings/profile">set up your personal handle</a> or join an organization before creating a repository.
+                    </div>
+                }
+                else if (string.IsNullOrEmpty(userHandle))
                 {
                     <div class="form-text">
-                        Your repository will be available at <code>@userName/@slug</code>
+                        <a href="/settings/profile">Set up your personal handle</a> to create personal repositories.
+                    </div>
+                }
+            </div>
+
+            <div class="mb-3">
+                <label class="form-label">Repository name</label>
+                <input type="text" class="form-control @(nameAvailable == false ? "is-invalid" : nameAvailable == true && !string.IsNullOrEmpty(slug) ? "is-valid" : "")"
+                       value="@model.Name"
+                       @oninput="OnNameInput"
+                       @onblur="CheckNameAvailability"
+                       placeholder="my-project" />
+                @if (nameAvailable == false)
+                {
+                    <div class="invalid-feedback">Repository <code>@selectedOwner/@slug</code> already exists.</div>
+                }
+                else if (!string.IsNullOrEmpty(slug))
+                {
+                    <div class="form-text @(nameAvailable == true ? "text-success" : "")">
+                        @if (checkingName)
+                        {
+                            <span class="spinner-border spinner-border-sm me-1"></span>
+                        }
+                        Your repository will be available at <code>@selectedOwner/@slug</code>
                     </div>
                 }
             </div>
@@ -25,7 +71,7 @@
                 <InputText @bind-Value="model.Description" class="form-control" placeholder="A short description of your project" />
             </div>
 
-            <div class="mb-4">
+            <div class="mb-3">
                 <label class="form-label">Visibility</label>
                 <InputSelect @bind-Value="model.Visibility" class="form-select">
                     <option value="@GitRepoVisibility.Private">Private</option>
@@ -45,6 +91,18 @@
                             <text>Anyone can see this repository.</text>
                             break;
                     }
+                </div>
+            </div>
+
+            <div class="mb-4">
+                <label class="form-label">Storage provider</label>
+                <InputSelect @bind-Value="model.StorageProvider" class="form-select">
+                    <option value="">Account default (@accountDefault)</option>
+                    <option value="@StorageProvider.DaisiDrive">Daisi Drive</option>
+                    <option value="@StorageProvider.AzureBlob">Azure Blob Storage</option>
+                </InputSelect>
+                <div class="form-text">
+                    Where git objects are stored. Leave as account default unless you have a specific need.
                 </div>
             </div>
 
@@ -70,9 +128,15 @@
     [CascadingParameter(Name = "UserId")] string UserId { get; set; } = "";
 
     private CreateRepoModel model = new();
+    private List<GitOrganization> orgs = [];
+    private string selectedOwner = "";
+    private string? userHandle;
     private string slug = "";
+    private string accountDefault = "Daisi Drive";
     private string? errorMessage;
     private bool submitting;
+    private bool? nameAvailable;
+    private bool checkingName;
 
     private string ComputeSlug(string name)
     {
@@ -81,16 +145,76 @@
             name.ToLowerInvariant().Trim(), @"[^a-z0-9\-]", "-").Trim('-');
     }
 
-    protected override void OnInitialized()
+    private void OnOwnerChange(ChangeEventArgs e)
     {
-        model.PropertyChanged += (_, _) => { slug = ComputeSlug(model.Name); StateHasChanged(); };
+        selectedOwner = e.Value?.ToString() ?? "";
+        nameAvailable = null;
+    }
+
+    private void OnNameInput(ChangeEventArgs e)
+    {
+        model.Name = e.Value?.ToString() ?? "";
+        slug = ComputeSlug(model.Name);
+        nameAvailable = null; // Reset until blur check
+    }
+
+    private async Task CheckNameAvailability()
+    {
+        if (string.IsNullOrEmpty(slug) || string.IsNullOrEmpty(selectedOwner))
+            return;
+
+        checkingName = true;
+        StateHasChanged();
+        try
+        {
+            var existing = await RepoService.GetRepositoryBySlugAsync(selectedOwner, slug);
+            nameAvailable = existing == null;
+        }
+        catch
+        {
+            nameAvailable = null;
+        }
+        checkingName = false;
+    }
+
+    private bool settingsLoaded;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (!settingsLoaded && !string.IsNullOrEmpty(AccountId))
+        {
+            settingsLoaded = true;
+            try
+            {
+                var profile = await ProfileService.GetProfileAsync(UserId, AccountId);
+                userHandle = profile?.Handle;
+                orgs = await OrgService.ListAsync(AccountId);
+
+                // Default to personal handle if available, otherwise first org
+                selectedOwner = !string.IsNullOrEmpty(userHandle) ? userHandle
+                    : orgs.Count > 0 ? orgs[0].Slug : "";
+
+                var settings = await SettingsService.GetSettingsAsync(AccountId);
+                accountDefault = settings.DefaultStorageProvider switch
+                {
+                    StorageProvider.AzureBlob => "Azure Blob Storage",
+                    _ => "Daisi Drive"
+                };
+            }
+            catch { }
+        }
     }
 
     private async Task HandleSubmit()
     {
-        if (string.IsNullOrWhiteSpace(model.Name))
+        if (string.IsNullOrWhiteSpace(selectedOwner))
         {
-            errorMessage = "Repository name is required.";
+            errorMessage = "Please select an owner. Set up your personal handle or join an organization.";
+            return;
+        }
+        if (string.IsNullOrWhiteSpace(model.Name) || model.Name.Trim().Length < 5)
+        {
+            errorMessage = "Repository name must be at least 5 characters.";
             return;
         }
 
@@ -99,9 +223,21 @@
 
         try
         {
+            var ownerName = selectedOwner;
+            var ownerId = UserId;
+
+            // If owner is an org, use the org slug as owner name
+            var org = orgs.FirstOrDefault(o => o.Slug == selectedOwner);
+            if (org != null)
+            {
+                ownerName = org.Slug;
+                ownerId = org.id;
+            }
+
             var repo = await RepoService.CreateRepositoryAsync(
-                AccountId, UserId, userName,
-                model.Name.Trim(), model.Description?.Trim(), model.Visibility);
+                AccountId, ownerId, ownerName,
+                model.Name.Trim(), model.Description?.Trim(), model.Visibility,
+                model.StorageProvider);
 
             Nav.NavigateTo($"/{repo.OwnerName}/{repo.Slug}");
         }
@@ -109,9 +245,9 @@
         {
             errorMessage = ex.Message;
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            errorMessage = "Failed to create repository. Please try again.";
+            errorMessage = $"Failed to create repository: {ex.Message}";
         }
         finally
         {
@@ -142,6 +278,8 @@
             get => _visibility;
             set { _visibility = value; PropertyChanged?.Invoke(this, new(nameof(Visibility))); }
         }
+
+        public StorageProvider? StorageProvider { get; set; }
 
         public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
     }

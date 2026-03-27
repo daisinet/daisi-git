@@ -14,15 +14,19 @@ public partial class RepositoryService(
     DaisiGitCosmo cosmo,
     GitObjectStore objectStore,
     GitRefService refService,
-    IDriveAdapter drive)
+    StorageAdapterFactory storageFactory)
 {
     /// <summary>
     /// Creates a new git repository with an initial empty commit.
     /// </summary>
     public async Task<GitRepository> CreateRepositoryAsync(
         string accountId, string ownerId, string ownerName,
-        string name, string? description, GitRepoVisibility visibility)
+        string name, string? description, GitRepoVisibility visibility,
+        StorageProvider? storageProviderOverride = null)
     {
+        if (name.Trim().Length < 5)
+            throw new InvalidOperationException("Repository name must be at least 5 characters.");
+
         var slug = Slugify(name);
 
         // Check for duplicate slug under the same owner
@@ -30,7 +34,12 @@ public partial class RepositoryService(
         if (existing != null)
             throw new InvalidOperationException($"Repository '{ownerName}/{slug}' already exists.");
 
-        // Create a Drive repository for storage
+        // Resolve storage provider: explicit override > account default
+        var accountDefault = await storageFactory.GetAccountDefaultAsync(accountId);
+        var provider = storageProviderOverride ?? accountDefault;
+        var drive = storageFactory.GetAdapter(provider);
+
+        // Create a storage container/repository
         var driveRepoId = await drive.CreateRepositoryAsync($"git-{ownerName}-{slug}");
 
         var repo = await cosmo.CreateRepositoryAsync(new GitRepository
@@ -43,12 +52,13 @@ public partial class RepositoryService(
             Description = description,
             Visibility = visibility,
             DriveRepositoryId = driveRepoId,
-            DefaultBranch = "main"
+            DefaultBranch = "main",
+            StorageProvider = storageProviderOverride
         });
 
         // Create initial empty tree + commit
         var emptyTree = new GitTree { Entries = [] };
-        var treeSha = await objectStore.StoreObjectAsync(repo.id, driveRepoId, emptyTree);
+        var treeSha = await objectStore.StoreObjectAsync(repo, emptyTree);
 
         var signature = new GitSignature
         {
@@ -65,7 +75,7 @@ public partial class RepositoryService(
             Committer = signature,
             Message = "Initial commit\n"
         };
-        var commitSha = await objectStore.StoreObjectAsync(repo.id, driveRepoId, initialCommit);
+        var commitSha = await objectStore.StoreObjectAsync(repo, initialCommit);
 
         // Set up refs
         await refService.SetRefAsync(repo.id, "refs/heads/main", commitSha);
@@ -111,25 +121,125 @@ public partial class RepositoryService(
     }
 
     /// <summary>
-    /// Deletes a repository and its Drive storage.
+    /// Deletes a repository and its storage.
+    /// If the repo has forks and a promotedForkId is specified, that fork becomes the new
+    /// upstream and all other forks are re-pointed to it. If no forks exist, just deletes.
     /// </summary>
-    public async Task DeleteRepositoryAsync(string id, string accountId)
+    public async Task DeleteRepositoryAsync(string id, string accountId, string? promotedForkId = null)
     {
         var repo = await cosmo.GetRepositoryAsync(id, accountId);
         if (repo == null) return;
 
-        // Delete Drive repository
+        // Handle fork promotion
+        var forks = await cosmo.GetForksAsync(id);
+        if (forks.Count > 0)
+        {
+            if (!string.IsNullOrEmpty(promotedForkId))
+            {
+                // Promote the selected fork to standalone (clear its ForkedFrom)
+                var promoted = forks.FirstOrDefault(f => f.id == promotedForkId);
+                if (promoted != null)
+                {
+                    promoted.ForkedFromId = null;
+                    promoted.ForkedFromOwnerName = null;
+                    promoted.ForkedFromSlug = null;
+                    promoted.ForkCount = forks.Count - 1;
+                    await cosmo.UpdateRepositoryAsync(promoted);
+
+                    // Re-point all other forks to the promoted repo
+                    foreach (var fork in forks.Where(f => f.id != promotedForkId))
+                    {
+                        fork.ForkedFromId = promoted.id;
+                        fork.ForkedFromOwnerName = promoted.OwnerName;
+                        fork.ForkedFromSlug = promoted.Slug;
+                        await cosmo.UpdateRepositoryAsync(fork);
+                    }
+                }
+            }
+            else
+            {
+                // No promotion — make all forks standalone
+                foreach (var fork in forks)
+                {
+                    fork.ForkedFromId = null;
+                    fork.ForkedFromOwnerName = null;
+                    fork.ForkedFromSlug = null;
+                    await cosmo.UpdateRepositoryAsync(fork);
+                }
+            }
+        }
+
+        // Delete storage
+        var drive = await storageFactory.GetAdapterAsync(repo);
         await drive.DeleteRepositoryAsync(repo.DriveRepositoryId);
 
-        // Delete Cosmos records
-        await cosmo.DeleteRepositoryAsync(id, accountId);
+        // Clean up all related Cosmos data
+        await CleanupRepoDataAsync(id, accountId);
+    }
+
+    private async Task CleanupRepoDataAsync(string repoId, string accountId)
+    {
+        // Refs
+        var refs = await refService.GetAllRefsAsync(repoId);
+        foreach (var (refName, _) in refs)
+            try { await cosmo.DeleteRefAsync(repoId, refName); } catch { }
+        try { await cosmo.DeleteRefAsync(repoId, "HEAD"); } catch { }
+
+        // Object records
+        var objects = await cosmo.GetAllObjectRecordsAsync(repoId);
+        var objContainer = await cosmo.GetContainerAsync(DaisiGitCosmo.GitObjectsContainerName);
+        foreach (var obj in objects)
+            try { await objContainer.DeleteItemAsync<GitObjectRecord>(obj.id, new Microsoft.Azure.Cosmos.PartitionKey(repoId)); } catch { }
+
+        // Issues
+        var issues = await cosmo.GetIssuesAsync(repoId);
+        foreach (var i in issues)
+            try { await cosmo.DeleteIssueAsync(i.id, repoId); } catch { }
+
+        // Pull requests
+        var prs = await cosmo.GetPullRequestsAsync(repoId);
+        foreach (var pr in prs)
+            try { await cosmo.DeletePullRequestAsync(pr.id, repoId); } catch { }
+
+        // Comments
+        var comments = await cosmo.GetAllCommentsAsync(repoId);
+        foreach (var c in comments)
+            try { await cosmo.DeleteCommentAsync(c.id, repoId); } catch { }
+
+        // Reviews
+        var reviews = await cosmo.GetAllReviewsAsync(repoId);
+        foreach (var r in reviews)
+            try { await cosmo.DeleteReviewAsync(r.id, repoId); } catch { }
+
+        // Stars
+        var stars = await cosmo.GetStarsForRepoAsync(repoId);
+        foreach (var s in stars)
+            try { await cosmo.DeleteStarAsync(s.id, repoId); } catch { }
+
+        // Events
+        var events = await cosmo.GetRecentEventsAsync(repoId, 1000);
+        var evtContainer = await cosmo.GetContainerAsync(DaisiGitCosmo.EventsContainerName);
+        foreach (var e in events)
+            try { await evtContainer.DeleteItemAsync<GitEvent>(e.id, new Microsoft.Azure.Cosmos.PartitionKey(repoId)); } catch { }
+
+        // Repository document
+        await cosmo.DeleteRepositoryAsync(repoId, accountId);
     }
 
     /// <summary>
     /// Updates repository metadata.
+    /// StorageProvider and DriveRepositoryId are immutable after creation and will be
+    /// restored from the persisted record to prevent accidental corruption.
     /// </summary>
     public async Task<GitRepository> UpdateRepositoryAsync(GitRepository repo)
     {
+        var existing = await cosmo.GetRepositoryAsync(repo.id, repo.AccountId);
+        if (existing != null)
+        {
+            repo.StorageProvider = existing.StorageProvider;
+            repo.DriveRepositoryId = existing.DriveRepositoryId;
+        }
+
         return await cosmo.UpdateRepositoryAsync(repo);
     }
 
@@ -137,7 +247,7 @@ public partial class RepositoryService(
 
     /// <summary>
     /// Forks a repository. Returns existing fork if user already forked it.
-    /// Copies object records (sharing Drive files) and refs, then increments upstream ForkCount.
+    /// Copies object records (sharing storage file IDs) and refs, then increments upstream ForkCount.
     /// </summary>
     public async Task<GitRepository> ForkRepositoryAsync(
         string accountId, string forkOwnerId, string forkOwnerName, GitRepository upstream)
@@ -154,7 +264,12 @@ public partial class RepositoryService(
         if (existing != null)
             slug = $"{slug}-{Guid.NewGuid().ToString("N")[..4]}";
 
-        // Create Drive repo for the fork (future pushes go here)
+        // Fork inherits the upstream's storage provider
+        var provider = upstream.StorageProvider
+            ?? (await storageFactory.GetAccountDefaultAsync(upstream.AccountId));
+        var drive = storageFactory.GetAdapter(provider);
+
+        // Create storage container for the fork (future pushes go here)
         var driveRepoId = await drive.CreateRepositoryAsync($"git-{forkOwnerName}-{slug}");
 
         var fork = await cosmo.CreateRepositoryAsync(new GitRepository
@@ -171,7 +286,8 @@ public partial class RepositoryService(
             IsEmpty = upstream.IsEmpty,
             ForkedFromId = upstream.id,
             ForkedFromOwnerName = upstream.OwnerName,
-            ForkedFromSlug = upstream.Slug
+            ForkedFromSlug = upstream.Slug,
+            StorageProvider = upstream.StorageProvider
         });
 
         // Copy object records (same DriveFileId, new RepositoryId)
@@ -181,10 +297,12 @@ public partial class RepositoryService(
             await cosmo.UpsertObjectRecordAsync(new GitObjectRecord
             {
                 id = obj.id,
+                Sha = obj.Sha,
                 RepositoryId = fork.id,
                 DriveFileId = obj.DriveFileId,
                 ObjectType = obj.ObjectType,
-                SizeBytes = obj.SizeBytes
+                SizeBytes = obj.SizeBytes,
+                StorageProvider = obj.StorageProvider
             });
         }
 
@@ -277,9 +395,14 @@ public partial class RepositoryService(
     /// <summary>
     /// Lists public repositories sorted by star count for the explore page.
     /// </summary>
-    public async Task<List<GitRepository>> GetPublicReposAsync(int skip = 0, int take = 20)
+    public async Task<List<GitRepository>> GetPublicReposAsync(int skip = 0, int take = 20, string? search = null)
     {
-        return await cosmo.GetPublicRepositoriesAsync(skip, take);
+        return await cosmo.GetPublicRepositoriesAsync(skip, take, search);
+    }
+
+    public async Task<List<GitRepository>> SearchRepositoriesAsync(string accountId, string search, int skip = 0, int take = 50)
+    {
+        return await cosmo.SearchRepositoriesAsync(accountId, search, skip, take);
     }
 
     private async Task IncrementStarCountAsync(string repositoryId, int delta)

@@ -1,4 +1,5 @@
 using System.Text;
+using DaisiGit.Core.Enums;
 using DaisiGit.Core.Git;
 using DaisiGit.Core.Git.Pack;
 using DaisiGit.Core.Git.Protocol;
@@ -206,7 +207,8 @@ public static class GitSmartProtocolEndpoints
         RepositoryService repoService,
         GitRefService refService,
         GitObjectStore objectStore,
-        PermissionService permissionService)
+        PermissionService permissionService,
+        GitEventService events)
     {
         var repository = await repoService.GetRepositoryBySlugAsync(owner, repo);
         if (repository == null)
@@ -247,7 +249,7 @@ public static class GitSmartProtocolEndpoints
         if (packData.Length > 0)
         {
             var entries = PackFile.Parse(packData);
-            await StorePackEntriesAsync(repository.id, repository.DriveRepositoryId, entries, objectStore);
+            await StorePackEntriesAsync(repository, entries, objectStore);
         }
 
         // Apply ref updates
@@ -274,6 +276,42 @@ public static class GitSmartProtocolEndpoints
         {
             repository.IsEmpty = false;
             await repoService.UpdateRepositoryAsync(repository);
+        }
+
+        // Emit events for each successful ref update
+        var zeroSha = new string('0', 40);
+        var userName = ctx.Items["userName"] as string ?? "";
+        foreach (var (oldSha, newSha, refName) in refUpdates)
+        {
+            var isCreate = oldSha == zeroSha;
+            var isDelete = newSha == zeroSha;
+            var isBranch = refName.StartsWith("refs/heads/");
+            var isTag = refName.StartsWith("refs/tags/");
+            var shortName = refName.Replace("refs/heads/", "").Replace("refs/tags/", "");
+
+            var eventType = (isBranch, isCreate, isDelete) switch
+            {
+                (true, true, false) => GitTriggerType.BranchCreated,
+                (true, false, true) => GitTriggerType.BranchDeleted,
+                (true, false, false) => GitTriggerType.PushToRef,
+                _ when isTag && isCreate => GitTriggerType.TagCreated,
+                _ when isTag && isDelete => GitTriggerType.TagDeleted,
+                _ => GitTriggerType.PushToRef
+            };
+
+            var payload = new Dictionary<string, string>
+            {
+                ["push.ref"] = refName,
+                ["push.branch"] = isBranch ? shortName : "",
+                ["push.tag"] = isTag ? shortName : "",
+                ["push.oldSha"] = oldSha,
+                ["push.newSha"] = newSha,
+                ["push.isCreate"] = isCreate.ToString(),
+                ["push.isDelete"] = isDelete.ToString()
+            };
+
+            await events.EmitAsync(repository.AccountId, repository.id, eventType,
+                userId, userName, payload);
         }
 
         // Send report
@@ -357,7 +395,7 @@ public static class GitSmartProtocolEndpoints
     /// Stores all entries from a parsed pack file.
     /// </summary>
     private static async Task StorePackEntriesAsync(
-        string repositoryId, string driveRepositoryId,
+        GitRepository repository,
         List<PackEntry> entries, GitObjectStore objectStore)
     {
         // First pass: store non-delta objects and build SHA map
@@ -385,7 +423,7 @@ public static class GitSmartProtocolEndpoints
 
                 entry.Sha = ObjectHasher.HashRaw(raw);
                 resolved[entry.Sha] = entry.Data;
-                await objectStore.StoreRawObjectAsync(repositoryId, driveRepositoryId, raw, typeStr);
+                await objectStore.StoreRawObjectAsync(repository, raw, typeStr);
             }
         }
 
@@ -404,7 +442,7 @@ public static class GitSmartProtocolEndpoints
                 else if (entry.BaseSha != null)
                 {
                     // Try to fetch from store
-                    var baseObj = await objectStore.GetObjectAsync(repositoryId, entry.BaseSha);
+                    var baseObj = await objectStore.GetObjectAsync(repository.id, entry.BaseSha);
                     if (baseObj != null)
                         baseData = baseObj.SerializeContent();
                 }
@@ -416,7 +454,7 @@ public static class GitSmartProtocolEndpoints
                     var typeStr = "blob"; // Default
                     if (entry.BaseSha != null)
                     {
-                        var baseRaw = await objectStore.GetRawObjectAsync(repositoryId, entry.BaseSha);
+                        var baseRaw = await objectStore.GetRawObjectAsync(repository.id, entry.BaseSha);
                         if (baseRaw != null)
                         {
                             var (baseType, _, _) = ObjectHasher.ParseRawObject(baseRaw);
@@ -431,7 +469,7 @@ public static class GitSmartProtocolEndpoints
 
                     entry.Sha = ObjectHasher.HashRaw(raw);
                     resolved[entry.Sha] = result;
-                    await objectStore.StoreRawObjectAsync(repositoryId, driveRepositoryId, raw, typeStr);
+                    await objectStore.StoreRawObjectAsync(repository, raw, typeStr);
                 }
             }
         }

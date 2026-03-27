@@ -1,0 +1,139 @@
+@page "/{Owner}/{RepoSlug}/workflows"
+@inject WorkflowService WorkflowService
+@inject RepositoryService RepoService
+@inject NavigationManager Nav
+
+<PageTitle>Workflows - @Owner/@RepoSlug - Daisi Git</PageTitle>
+
+<RepositoryLayout Owner="@Owner" RepoSlug="@RepoSlug" ActiveTab="workflows">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h5 class="mb-0">Workflows</h5>
+        <a href="/@Owner/@RepoSlug/workflows/new" class="btn btn-sm btn-success">
+            <i class="fa-duotone fa-plus me-1"></i> New Workflow
+        </a>
+    </div>
+
+    @if (loading)
+    {
+        <div class="text-center py-4">
+            <div class="spinner-border spinner-border-sm text-primary"></div>
+        </div>
+    }
+    else if (workflows.Count == 0)
+    {
+        <div class="text-center py-5 text-muted">
+            <i class="fa-duotone fa-bolt fa-3x mb-3 d-block"></i>
+            <h5>No workflows yet</h5>
+            <p>Automate your repository with workflows that trigger on push, PR, issue, and more.</p>
+            <a href="/@Owner/@RepoSlug/workflows/new" class="btn btn-primary">
+                Create your first workflow
+            </a>
+        </div>
+    }
+    else
+    {
+        <div class="list-group">
+            @foreach (var wf in workflows)
+            {
+                <div class="list-group-item">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <div>
+                            <div class="fw-semibold">
+                                <i class="fa-duotone fa-bolt me-1 @(wf.IsEnabled ? "text-success" : "text-muted")"></i>
+                                <a href="/@Owner/@RepoSlug/workflows/edit/@wf.id" class="text-decoration-none">@wf.Name</a>
+                                @if (wf.RepositoryId == null)
+                                {
+                                    <span class="badge bg-info ms-1">Account-wide</span>
+                                }
+                            </div>
+                            <div class="text-muted small mt-1">
+                                <span class="badge bg-secondary">@FormatTrigger(wf.TriggerType)</span>
+                                <span class="ms-2">@wf.Steps.Count step@(wf.Steps.Count != 1 ? "s" : "")</span>
+                                @if (wf.TriggerFilters is { Count: > 0 })
+                                {
+                                    foreach (var (key, value) in wf.TriggerFilters)
+                                    {
+                                        <span class="ms-2 badge bg-outline-secondary border">@key: @value</span>
+                                    }
+                                }
+                            </div>
+                        </div>
+                        <div class="d-flex align-items-center gap-2">
+                            <div class="form-check form-switch mb-0">
+                                <input class="form-check-input" type="checkbox" checked="@wf.IsEnabled"
+                                       @onchange="() => ToggleEnabled(wf)" />
+                            </div>
+                            <a href="/@Owner/@RepoSlug/workflows/@wf.id/history" class="btn btn-sm btn-outline-secondary" title="History">
+                                <i class="fa-duotone fa-clock-rotate-left"></i>
+                            </a>
+                            <a href="/@Owner/@RepoSlug/workflows/edit/@wf.id" class="btn btn-sm btn-outline-primary" title="Edit">
+                                <i class="fa-duotone fa-pen-to-square"></i>
+                            </a>
+                            <button class="btn btn-sm btn-outline-danger" @onclick="() => DeleteWorkflow(wf)" title="Delete">
+                                <i class="fa-duotone fa-trash"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            }
+        </div>
+    }
+</RepositoryLayout>
+
+@code {
+    [Parameter] public string Owner { get; set; } = "";
+    [Parameter] public string RepoSlug { get; set; } = "";
+    [CascadingParameter(Name = "AccountId")] string AccountId { get; set; } = "";
+
+    private List<GitWorkflow> workflows = [];
+    private GitRepository? repo;
+    private bool loading = true;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        loading = true;
+        try
+        {
+            repo = await RepoService.GetRepositoryBySlugAsync(Owner, RepoSlug);
+            if (repo != null)
+            {
+                var all = await WorkflowService.ListAsync(repo.AccountId);
+                workflows = all.Where(w => w.RepositoryId == null || w.RepositoryId == repo.id).ToList();
+            }
+        }
+        catch { }
+        loading = false;
+    }
+
+    private async Task ToggleEnabled(GitWorkflow wf)
+    {
+        wf.IsEnabled = !wf.IsEnabled;
+        await WorkflowService.UpdateAsync(wf);
+    }
+
+    private async Task DeleteWorkflow(GitWorkflow wf)
+    {
+        await WorkflowService.DeleteAsync(wf.id, wf.AccountId);
+        workflows.Remove(wf);
+    }
+
+    private static string FormatTrigger(GitTriggerType trigger) => trigger switch
+    {
+        GitTriggerType.PushToRef => "Push",
+        GitTriggerType.BranchCreated => "Branch Created",
+        GitTriggerType.BranchDeleted => "Branch Deleted",
+        GitTriggerType.TagCreated => "Tag Created",
+        GitTriggerType.TagDeleted => "Tag Deleted",
+        GitTriggerType.PullRequestCreated => "PR Opened",
+        GitTriggerType.PullRequestUpdated => "PR Updated",
+        GitTriggerType.PullRequestClosed => "PR Closed",
+        GitTriggerType.PullRequestMerged => "PR Merged",
+        GitTriggerType.IssueCreated => "Issue Opened",
+        GitTriggerType.IssueClosed => "Issue Closed",
+        GitTriggerType.IssueReopened => "Issue Reopened",
+        GitTriggerType.CommentCreated => "Comment",
+        GitTriggerType.ReviewSubmitted => "Review",
+        GitTriggerType.RepositoryForked => "Fork",
+        _ => trigger.ToString()
+    };
+}

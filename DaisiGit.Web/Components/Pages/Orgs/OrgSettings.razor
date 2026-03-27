@@ -1,5 +1,8 @@
+@page "/{Slug}/settings"
+@page "/{Slug}/settings/{SettingsTab}"
 @page "/org/{Slug}/settings"
 @inject OrganizationService OrgService
+@inject SecretService SecretService
 @inject NavigationManager Navigation
 
 <PageTitle>Settings - @(org?.Name ?? "Organization") - Daisi Git</PageTitle>
@@ -7,58 +10,164 @@
 @if (org != null)
 {
     <h4 class="mb-3">
-        <a href="/org/@Slug" class="text-decoration-none text-muted">@org.Name</a>
+        <a href="/@Slug" class="text-decoration-none text-muted">@org.Name</a>
         <span class="text-muted">/</span> Settings
     </h4>
 
-    <div class="card" style="max-width: 600px;">
-        <div class="card-body">
-            <div class="mb-3">
-                <label class="form-label fw-semibold">Organization name</label>
-                <input type="text" class="form-control" @bind="name" />
+    <div class="row">
+        <!-- Vertical tabs -->
+        <div class="col-md-3">
+            <div class="nav flex-column nav-pills">
+                <a class="nav-link @(activeTab == "general" ? "active" : "")"
+                   href="/@Slug/settings/general">
+                    <i class="fa-duotone fa-sliders me-1"></i> General
+                </a>
+                <a class="nav-link @(activeTab == "secrets" ? "active" : "")"
+                   href="/@Slug/settings/secrets">
+                    <i class="fa-duotone fa-key me-1"></i> Secrets
+                </a>
             </div>
+        </div>
 
-            <div class="mb-3">
-                <label class="form-label fw-semibold">Description</label>
-                <textarea class="form-control" rows="3" @bind="description"></textarea>
-            </div>
-
-            @if (!string.IsNullOrEmpty(error))
+        <!-- Tab content -->
+        <div class="col-md-9">
+            @if (activeTab == "general")
             {
-                <div class="alert alert-danger">@error</div>
-            }
-            @if (saved)
-            {
-                <div class="alert alert-success">Settings saved.</div>
-            }
+                <h5 class="mb-3">General</h5>
+                <div class="card" style="max-width: 600px;">
+                    <div class="card-body">
+                        <div class="mb-4">
+                            <label class="form-label fw-semibold">Avatar</label>
+                            <AvatarUpload EntityType="org" EntityId="@(org?.id ?? "")" CurrentUrl="@orgAvatarUrl"
+                                          OnAvatarChanged="OnOrgAvatarChanged" />
+                        </div>
 
-            <button class="btn btn-primary" @onclick="Save" disabled="@saving">
-                @if (saving)
-                {
-                    <span class="spinner-border spinner-border-sm me-1"></span>
-                }
-                Save Changes
-            </button>
+                        <div class="mb-3">
+                            <label class="form-label fw-semibold">Organization name</label>
+                            <input type="text" class="form-control" @bind="name" />
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label fw-semibold">URL handle</label>
+                            <div class="input-group">
+                                <span class="input-group-text text-muted">/</span>
+                                <input type="text" class="form-control" @bind="handle" />
+                            </div>
+                            <div class="form-text">Changing this will update all URLs. Must be unique.</div>
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label fw-semibold">Description</label>
+                            <textarea class="form-control" rows="3" @bind="description"></textarea>
+                        </div>
+
+                        @if (!string.IsNullOrEmpty(error))
+                        {
+                            <div class="alert alert-danger">@error</div>
+                        }
+                        @if (saved)
+                        {
+                            <div class="alert alert-success">Settings saved.</div>
+                        }
+
+                        <button class="btn btn-primary" @onclick="Save" disabled="@saving">
+                            @if (saving) { <span class="spinner-border spinner-border-sm me-1"></span> }
+                            Save Changes
+                        </button>
+                    </div>
+                </div>
+            }
+            else if (activeTab == "secrets")
+            {
+                <h5 class="mb-3">Organization Secrets</h5>
+                <p class="text-muted small">Secrets set here are inherited by all repositories in this organization. Repo-level secrets with the same name take priority.</p>
+
+                <div class="card" style="max-width: 700px;">
+                    <div class="card-body">
+                        <div class="d-flex gap-2 mb-3">
+                            <input type="text" class="form-control form-control-sm" @bind="newOrgSecretName"
+                                   placeholder="SECRET_NAME" style="max-width: 200px; text-transform: uppercase;" />
+                            <input type="password" class="form-control form-control-sm" @bind="newOrgSecretValue"
+                                   placeholder="Value" />
+                            <button type="button" class="btn btn-sm btn-success text-nowrap" @onclick="AddOrgSecret"
+                                    disabled="@addingOrgSecret">
+                                @if (addingOrgSecret) { <span class="spinner-border spinner-border-sm me-1"></span> }
+                                Add Secret
+                            </button>
+                        </div>
+
+                        @if (!string.IsNullOrEmpty(orgSecretError))
+                        {
+                            <div class="alert alert-danger small py-2">@orgSecretError</div>
+                        }
+                        @if (orgSecretSaved)
+                        {
+                            <div class="alert alert-success small py-2">Secret saved.</div>
+                        }
+
+                        @if (orgSecretNames.Count > 0)
+                        {
+                            <table class="table table-sm mb-0">
+                                <thead><tr><th>Name</th><th>Value</th><th></th></tr></thead>
+                                <tbody>
+                                    @foreach (var sn in orgSecretNames)
+                                    {
+                                        var n = sn;
+                                        <tr>
+                                            <td><code>@n</code></td>
+                                            <td class="text-muted">********</td>
+                                            <td>
+                                                <button class="btn btn-sm btn-outline-danger" @onclick="() => RemoveOrgSecret(n)">
+                                                    <i class="fa-solid fa-xmark"></i>
+                                                </button>
+                                            </td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        }
+                        else
+                        {
+                            <div class="text-muted small">No organization secrets configured.</div>
+                        }
+                    </div>
+                </div>
+            }
         </div>
     </div>
 }
 else if (!loading)
 {
-    <div class="text-center py-4 text-muted">
-        <p>Organization not found.</p>
-    </div>
+    <div class="text-center py-4 text-muted">Organization not found.</div>
 }
 
 @code {
     [Parameter] public string Slug { get; set; } = "";
+    [Parameter] public string? SettingsTab { get; set; }
+
+    private string activeTab => SettingsTab?.ToLowerInvariant() switch
+    {
+        "secrets" => "secrets",
+        _ => "general"
+    };
 
     private GitOrganization? org;
     private string name = "";
+    private string handle = "";
     private string? description;
+    private string? orgAvatarUrl;
     private string? error;
     private bool loading = true;
     private bool saving;
     private bool saved;
+
+    // Org secrets
+    private List<string> orgSecretNames = [];
+    private string newOrgSecretName = "";
+    private string newOrgSecretValue = "";
+    private bool addingOrgSecret;
+    private string? orgSecretError;
+    private bool orgSecretSaved;
 
     protected override async Task OnParametersSetAsync()
     {
@@ -69,7 +178,10 @@ else if (!loading)
             if (org != null)
             {
                 name = org.Name;
+                handle = org.Slug;
                 description = org.Description;
+                orgAvatarUrl = org.AvatarUrl;
+                await LoadOrgSecrets();
             }
         }
         catch { }
@@ -81,19 +193,71 @@ else if (!loading)
         error = null;
         saved = false;
         if (org == null || string.IsNullOrWhiteSpace(name)) { error = "Name is required."; return; }
+        if (string.IsNullOrWhiteSpace(handle)) { error = "URL handle is required."; return; }
 
         saving = true;
         try
         {
             org.Name = name.Trim();
             org.Description = description?.Trim();
-            org = await OrgService.UpdateAsync(org);
+            org.AvatarUrl = orgAvatarUrl;
+            org = await OrgService.UpdateAsync(org, handle.Trim());
             saved = true;
+
+            if (org.Slug != Slug)
+                Navigation.NavigateTo($"/{org.Slug}/settings", replace: true);
         }
-        catch (Exception ex)
-        {
-            error = ex.Message;
-        }
+        catch (Exception ex) { error = ex.Message; }
         saving = false;
+    }
+
+    private async Task OnOrgAvatarChanged(string? url)
+    {
+        orgAvatarUrl = url;
+        if (org != null)
+        {
+            try { org.AvatarUrl = url; await OrgService.UpdateAsync(org); } catch { }
+        }
+    }
+
+    // ── Org Secrets ──
+
+    private async Task LoadOrgSecrets()
+    {
+        if (org != null)
+            try { orgSecretNames = await SecretService.ListOrgSecretNamesAsync(org.id); } catch { }
+    }
+
+    private async Task AddOrgSecret()
+    {
+        if (org == null || string.IsNullOrWhiteSpace(newOrgSecretName) || string.IsNullOrWhiteSpace(newOrgSecretValue))
+        {
+            orgSecretError = "Name and value are required.";
+            return;
+        }
+        addingOrgSecret = true;
+        orgSecretError = null;
+        orgSecretSaved = false;
+        try
+        {
+            await SecretService.SetOrgSecretAsync(org.id, newOrgSecretName.Trim(), newOrgSecretValue);
+            newOrgSecretName = "";
+            newOrgSecretValue = "";
+            orgSecretSaved = true;
+            await LoadOrgSecrets();
+        }
+        catch (Exception ex) { orgSecretError = ex.Message; }
+        addingOrgSecret = false;
+    }
+
+    private async Task RemoveOrgSecret(string secretName)
+    {
+        if (org == null) return;
+        try
+        {
+            await SecretService.DeleteOrgSecretAsync(org.id, secretName);
+            await LoadOrgSecrets();
+        }
+        catch { }
     }
 }

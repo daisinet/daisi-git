@@ -1,3 +1,4 @@
+@page "/{Slug}"
 @page "/org/{Slug}"
 @inject OrganizationService OrgService
 @inject RepositoryService RepoService
@@ -19,7 +20,7 @@
                 <p class="text-muted mb-0">@org.Description</p>
             }
         </div>
-        <a href="/org/@Slug/settings" class="btn btn-sm btn-outline-secondary">
+        <a href="/@Slug/settings" class="btn btn-sm btn-outline-secondary">
             <i class="fa-duotone fa-gear me-1"></i> Settings
         </a>
     </div>
@@ -170,7 +171,7 @@
     {
         <div class="d-flex justify-content-between align-items-center mb-2">
             <h6>Teams</h6>
-            <a href="/org/@Slug/teams/new" class="btn btn-sm btn-outline-primary">
+            <a href="/@Slug/teams/new" class="btn btn-sm btn-outline-primary">
                 <i class="fa-duotone fa-plus me-1"></i> New Team
             </a>
         </div>
@@ -180,7 +181,7 @@
             <div class="list-group">
                 @foreach (var t in teams)
                 {
-                    <a href="/org/@Slug/team/@t.Slug" class="list-group-item list-group-item-action">
+                    <a href="/@Slug/team/@t.Slug" class="list-group-item list-group-item-action">
                         <div class="d-flex justify-content-between align-items-center">
                             <div>
                                 <div class="fw-semibold">@t.Name</div>

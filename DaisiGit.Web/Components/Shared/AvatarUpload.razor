@@ -1,0 +1,95 @@
+@inject DaisiGit.Web.Services.AvatarService AvatarService
+
+<div class="d-flex align-items-center gap-3">
+    <div class="position-relative" style="width: 80px; height: 80px;">
+        @if (!string.IsNullOrEmpty(CurrentUrl))
+        {
+            <img src="@CurrentUrl" alt="Avatar" class="rounded-circle" style="width: 80px; height: 80px; object-fit: cover;" />
+        }
+        else
+        {
+            <div class="rounded-circle bg-secondary d-flex align-items-center justify-content-center"
+                 style="width: 80px; height: 80px;">
+                <i class="fa-duotone fa-@(EntityType == "user" ? "user" : "building") text-white fa-2x"></i>
+            </div>
+        }
+    </div>
+    <div>
+        <label class="btn btn-sm btn-outline-primary">
+            <i class="fa-duotone fa-upload me-1"></i> @(string.IsNullOrEmpty(CurrentUrl) ? "Upload Avatar" : "Change Avatar")
+            <InputFile OnChange="OnFileSelected" accept="image/png,image/jpeg,image/gif,image/webp"
+                       style="display: none;" />
+        </label>
+        @if (!string.IsNullOrEmpty(CurrentUrl))
+        {
+            <button type="button" class="btn btn-sm btn-outline-danger ms-1" @onclick="RemoveAvatar">
+                <i class="fa-duotone fa-trash"></i>
+            </button>
+        }
+        @if (uploading)
+        {
+            <span class="spinner-border spinner-border-sm ms-2"></span>
+        }
+        @if (!string.IsNullOrEmpty(error))
+        {
+            <div class="text-danger small mt-1">@error</div>
+        }
+        <div class="text-muted small mt-1">JPG, PNG, GIF, or WebP. Max 2MB.</div>
+    </div>
+</div>
+
+@code {
+    [Parameter] public string EntityType { get; set; } = "user";
+    [Parameter] public string EntityId { get; set; } = "";
+    [Parameter] public string? CurrentUrl { get; set; }
+    [Parameter] public EventCallback<string?> OnAvatarChanged { get; set; }
+
+    private bool uploading;
+    private string? error;
+
+    private async Task OnFileSelected(InputFileChangeEventArgs e)
+    {
+        error = null;
+        var file = e.File;
+
+        if (file.Size > 2 * 1024 * 1024)
+        {
+            error = "File must be under 2MB.";
+            return;
+        }
+
+        if (!file.ContentType.StartsWith("image/"))
+        {
+            error = "File must be an image.";
+            return;
+        }
+
+        uploading = true;
+        try
+        {
+            using var stream = file.OpenReadStream(2 * 1024 * 1024);
+            var url = await AvatarService.UploadAvatarAsync(EntityType, EntityId, stream, file.ContentType);
+            if (url != null)
+            {
+                CurrentUrl = url;
+                await OnAvatarChanged.InvokeAsync(url);
+            }
+        }
+        catch (Exception ex)
+        {
+            error = $"Upload failed: {ex.Message}";
+        }
+        uploading = false;
+    }
+
+    private async Task RemoveAvatar()
+    {
+        try
+        {
+            await AvatarService.DeleteAvatarAsync(EntityType, EntityId);
+            CurrentUrl = null;
+            await OnAvatarChanged.InvokeAsync(null);
+        }
+        catch { }
+    }
+}

@@ -1,4 +1,5 @@
 using DaisiGit.Core.Enums;
+using System.Text.Json.Serialization;
 
 namespace DaisiGit.Core.Models;
 
@@ -18,6 +19,13 @@ public class GitRepository
     public string DefaultBranch { get; set; } = "main";
     public GitRepoVisibility Visibility { get; set; } = GitRepoVisibility.Private;
     public string DriveRepositoryId { get; set; } = "";
+
+    /// <summary>
+    /// Storage backend for this repository's git objects.
+    /// Null means "use the account default" (which itself defaults to DaisiDrive).
+    /// </summary>
+    [JsonConverter(typeof(JsonStringEnumConverter))]
+    public StorageProvider? StorageProvider { get; set; }
     public bool IsEmpty { get; set; } = true;
     public string? ForkedFromId { get; set; }
     public string? ForkedFromOwnerName { get; set; }

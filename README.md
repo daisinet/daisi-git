@@ -5,13 +5,30 @@ A GitHub-like git hosting service built on the Daisinet platform. Stores git obj
 ## Architecture
 
 ```
-DaisiGit.Core/        — Git object models (blob, tree, commit, tag), pack format, pkt-line protocol
-DaisiGit.Data/         — Cosmos DB data access (repositories, object records, refs)
-DaisiGit.Services/     — Business logic (object storage, ref management, repository lifecycle)
-DaisiGit.Web/          — Blazor Server UI + HTTP smart protocol + REST API endpoints
-DaisiGit.SDK/          — Client SDK for programmatic access to the REST API
-DaisiGit.Tests/        — Unit tests
+DaisiGit.Core/              — Git object models, pack format, pkt-line protocol, reserved names
+DaisiGit.Data/              — Cosmos DB data access (repos, objects, refs, workflows, API keys)
+DaisiGit.Services/          — Business logic (storage, refs, repos, workflows, API keys)
+DaisiGit.Web/               — Blazor Server UI + HTTP smart protocol + REST API endpoints
+DaisiGit.SDK/               — Client SDK for programmatic access to the REST API
+DaisiGit.Cli/               — Command-line tool (dg) for repo/issue/PR management
+DaisiGit.Tests/             — Unit tests (82 tests)
+DaisiGit.IntegrationTests/  — Integration tests against live server (24 tests)
 ```
+
+## CLI Tool
+
+The `dg` command-line tool provides full access to DaisiGit from your terminal.
+
+```bash
+dg auth login --server https://git.daisi.ai --token dg_YOUR_TOKEN
+dg repo list
+dg clone myorg/my-project
+dg issue create "Fix bug" --desc "Steps to reproduce..."
+dg pr create "Add feature" --source feature-branch
+dg pr merge 42
+```
+
+See the [full CLI documentation](docs/cli.md) for all commands and examples.
 
 ## How It Works
 
@@ -29,7 +46,7 @@ Standard git smart HTTP protocol endpoints enable `git clone`, `push`, and `pull
 
 ### REST API
 
-All endpoints are prefixed with `/api/git/` and require Daisi SSO authentication:
+All endpoints are prefixed with `/api/git/`. Authenticated endpoints accept Daisi SSO cookies or API keys (`X-Api-Key` header). Read-only endpoints allow anonymous access for public repos.
 
 | Endpoint | Description |
 |---|---|
@@ -54,7 +71,18 @@ All endpoints are prefixed with `/api/git/` and require Daisi SSO authentication
 | `GET /repos/{owner}/{slug}/forks` | List forks |
 | `PUT /repos/{owner}/{slug}/star` | Star a repository |
 | `DELETE /repos/{owner}/{slug}/star` | Unstar a repository |
+| `DELETE /repos/{owner}/{slug}` | Delete repository |
 | `GET /explore` | Explore public repos by stars |
+| `POST /orgs` | Create organization |
+| `GET /orgs` | List organizations |
+| `DELETE /orgs/{slug}` | Delete organization (cascades repos) |
+| `GET /repos/{owner}/{slug}/workflows` | List workflows |
+| `POST /repos/{owner}/{slug}/workflows` | Create workflow |
+| `GET /repos/{owner}/{slug}/events` | List events |
+| `POST /auth/keys` | Generate API key |
+| `GET /auth/keys` | List API keys |
+| `DELETE /auth/keys/{id}` | Revoke API key |
+| `GET /auth/whoami` | Current user info |
 
 ### Ref Storage
 

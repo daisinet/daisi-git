@@ -1,0 +1,146 @@
+@page "/welcome"
+@layout DaisiGit.Web.Components.Layout.PublicLayout
+@inject NavigationManager Nav
+
+<PageTitle>Daisi Git - Code Hosting for Teams</PageTitle>
+
+<!-- Hero -->
+<section class="py-5" style="background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%); color: white;">
+    <div class="container">
+        <div class="row align-items-center g-4 py-4">
+            <div class="col-lg-7">
+                <h1 style="font-size: 2.8rem; font-weight: 700; line-height: 1.2;">
+                    Host Your Code.<br />
+                    <span style="color: #F78C1D;">Your Way.</span>
+                </h1>
+                <p class="mt-3" style="font-size: 1.15rem; opacity: 0.85; max-width: 500px;">
+                    A modern git hosting platform with built-in CI/CD workflows, code reviews,
+                    issue tracking, and team management. Open source and self-hostable.
+                </p>
+                <div class="d-flex gap-3 mt-4">
+                    <a href="@loginUrl" class="btn btn-lg text-white" style="background: #F78C1D; border: none;">
+                        Sign In
+                    </a>
+                    <a href="/explore" class="btn btn-lg btn-outline-light">
+                        Explore Repos
+                    </a>
+                </div>
+            </div>
+            <div class="col-lg-5 text-center">
+                <div style="background: rgba(255,255,255,0.05); border-radius: 16px; padding: 2rem; border: 1px solid rgba(255,255,255,0.1);">
+                    <div style="font-family: monospace; font-size: 0.85rem; text-align: left; color: #a0d4a0;">
+                        <div>$ dg auth login</div>
+                        <div style="color: #888;">Server URL: https://git.daisi.ai</div>
+                        <div style="color: #F78C1D;">Authenticated ✓</div>
+                        <div class="mt-2">$ dg clone myorg/project</div>
+                        <div style="color: #888;">Cloning into 'project'...</div>
+                        <div style="color: #a0d4a0;">Done.</div>
+                        <div class="mt-2">$ dg pr create "Add feature"</div>
+                        <div style="color: #F78C1D;">Created PR #42</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- Features -->
+<section class="py-5 bg-white">
+    <div class="container">
+        <h2 class="text-center mb-4" style="font-weight: 700;">Everything You Need</h2>
+        <div class="row g-4">
+            <div class="col-md-6 col-lg-4">
+                <div class="card h-100 border-0 shadow-sm">
+                    <div class="card-body text-center py-4">
+                        <i class="fa-duotone fa-code-branch fa-2x mb-3" style="color: #F78C1D;"></i>
+                        <h5>Git Hosting</h5>
+                        <p class="text-muted small">Push, pull, clone with standard git. Branches, tags, and smart HTTP protocol.</p>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-6 col-lg-4">
+                <div class="card h-100 border-0 shadow-sm">
+                    <div class="card-body text-center py-4">
+                        <i class="fa-duotone fa-code-pull-request fa-2x mb-3" style="color: #F78C1D;"></i>
+                        <h5>Pull Requests & Reviews</h5>
+                        <p class="text-muted small">Code reviews with inline comments, approvals, and merge strategies.</p>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-6 col-lg-4">
+                <div class="card h-100 border-0 shadow-sm">
+                    <div class="card-body text-center py-4">
+                        <i class="fa-duotone fa-bolt fa-2x mb-3" style="color: #F78C1D;"></i>
+                        <h5>Workflows & CI/CD</h5>
+                        <p class="text-muted small">Visual workflow designer or YAML-based pipelines. Webhooks, conditions, and scheduling.</p>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-6 col-lg-4">
+                <div class="card h-100 border-0 shadow-sm">
+                    <div class="card-body text-center py-4">
+                        <i class="fa-duotone fa-building fa-2x mb-3" style="color: #F78C1D;"></i>
+                        <h5>Organizations & Teams</h5>
+                        <p class="text-muted small">Fine-grained permissions, team-based access, and org-level settings.</p>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-6 col-lg-4">
+                <div class="card h-100 border-0 shadow-sm">
+                    <div class="card-body text-center py-4">
+                        <i class="fa-duotone fa-terminal fa-2x mb-3" style="color: #F78C1D;"></i>
+                        <h5>CLI Tool</h5>
+                        <p class="text-muted small">The <code>dg</code> CLI for repos, issues, PRs, and cloning — all from your terminal.</p>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-6 col-lg-4">
+                <div class="card h-100 border-0 shadow-sm">
+                    <div class="card-body text-center py-4">
+                        <i class="fa-duotone fa-key fa-2x mb-3" style="color: #F78C1D;"></i>
+                        <h5>API & Secrets</h5>
+                        <p class="text-muted small">Full REST API, personal access tokens, encrypted repo and org-level secrets.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- CTA -->
+<section class="py-5 text-center" style="background: #f8f9fa;">
+    <div class="container">
+        <h2 style="font-weight: 700;">Ready to get started?</h2>
+        <p class="text-muted mb-4">Sign in with your Daisinet account or explore public repositories.</p>
+        <div class="d-flex gap-3 justify-content-center">
+            <a href="@loginUrl" class="btn btn-lg text-white" style="background: #F78C1D; border: none;">
+                Sign In
+            </a>
+            <a href="/explore" class="btn btn-lg btn-outline-secondary">
+                Explore
+            </a>
+        </div>
+    </div>
+</section>
+
+<!-- Footer -->
+<footer class="py-3 text-center text-muted small" style="background: #1a1a2e; color: rgba(255,255,255,0.5) !important;">
+    &copy; @DateTime.UtcNow.Year Daisi Git &mdash; Powered by Daisinet
+</footer>
+
+@code {
+    private string loginUrl = "/";
+
+    protected override void OnInitialized()
+    {
+        var appUrl = Daisi.SDK.Models.DaisiStaticSettings.SsoAppUrl;
+        var authorityUrl = Daisi.SDK.Models.DaisiStaticSettings.SsoAuthorityUrl;
+
+        if (!string.IsNullOrEmpty(authorityUrl) && !string.IsNullOrEmpty(appUrl))
+        {
+            var callbackUrl = Uri.EscapeDataString($"{appUrl}/sso/callback");
+            var origin = Uri.EscapeDataString(appUrl);
+            loginUrl = $"{authorityUrl}/sso/authorize?returnUrl={callbackUrl}&origin={origin}";
+        }
+    }
+}

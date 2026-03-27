@@ -138,16 +138,44 @@ public partial class DaisiGitCosmo
         return null;
     }
 
-    public virtual async Task<List<GitRepository>> GetPublicRepositoriesAsync(int skip, int take)
+    public virtual async Task<List<GitRepository>> GetPublicRepositoriesAsync(int skip, int take, string? search = null)
+    {
+        var container = await GetContainerAsync(RepositoriesContainerName);
+
+        var sql = "SELECT * FROM c WHERE c.Visibility = 2 AND c.Type = 'GitRepository'";
+        if (!string.IsNullOrWhiteSpace(search))
+            sql += " AND (CONTAINS(LOWER(c.Name), @search) OR CONTAINS(LOWER(c.OwnerName), @search) OR CONTAINS(LOWER(c.Description), @search))";
+        sql += " ORDER BY c.StarCount DESC OFFSET @skip LIMIT @take";
+
+        var query = new QueryDefinition(sql)
+            .WithParameter("@skip", skip)
+            .WithParameter("@take", take);
+        if (!string.IsNullOrWhiteSpace(search))
+            query = query.WithParameter("@search", search.Trim().ToLowerInvariant());
+
+        var results = new List<GitRepository>();
+        using var iterator = container.GetItemQueryIterator<GitRepository>(query);
+        while (iterator.HasMoreResults)
+        {
+            var response = await iterator.ReadNextAsync();
+            results.AddRange(response);
+        }
+        return results;
+    }
+
+    public virtual async Task<List<GitRepository>> SearchRepositoriesAsync(string accountId, string search, int skip = 0, int take = 50)
     {
         var container = await GetContainerAsync(RepositoriesContainerName);
         var query = new QueryDefinition(
-            "SELECT * FROM c WHERE c.Visibility = 2 AND c.Type = 'GitRepository' ORDER BY c.StarCount DESC OFFSET @skip LIMIT @take")
+            "SELECT * FROM c WHERE c.AccountId = @accountId AND c.Type = 'GitRepository' AND (CONTAINS(LOWER(c.Name), @search) OR CONTAINS(LOWER(c.OwnerName), @search) OR CONTAINS(LOWER(c.Description), @search)) ORDER BY c.CreatedUtc DESC OFFSET @skip LIMIT @take")
+            .WithParameter("@accountId", accountId)
+            .WithParameter("@search", search.Trim().ToLowerInvariant())
             .WithParameter("@skip", skip)
             .WithParameter("@take", take);
 
         var results = new List<GitRepository>();
-        using var iterator = container.GetItemQueryIterator<GitRepository>(query);
+        using var iterator = container.GetItemQueryIterator<GitRepository>(query,
+            requestOptions: new QueryRequestOptions { PartitionKey = GetRepositoryPartitionKey(accountId) });
         while (iterator.HasMoreResults)
         {
             var response = await iterator.ReadNextAsync();

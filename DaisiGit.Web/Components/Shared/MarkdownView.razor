@@ -1,0 +1,19 @@
+@using Markdig
+
+@if (!string.IsNullOrEmpty(Content))
+{
+    <div class="markdown-body">
+        @((MarkupString)Markdig.Markdown.ToHtml(Content, Pipeline))
+    </div>
+}
+
+@code {
+    [Parameter] public string? Content { get; set; }
+
+    private static readonly MarkdownPipeline Pipeline = new MarkdownPipelineBuilder()
+        .UseAdvancedExtensions()
+        .UseAutoLinks()
+        .UseTaskLists()
+        .UseEmojiAndSmiley()
+        .Build();
+}

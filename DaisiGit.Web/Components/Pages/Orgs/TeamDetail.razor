@@ -1,3 +1,4 @@
+@page "/{OrgSlug}/team/{TeamSlug}"
 @page "/org/{OrgSlug}/team/{TeamSlug}"
 @inject OrganizationService OrgService
 @inject TeamService TeamService
@@ -9,7 +10,7 @@
 @if (team != null && org != null)
 {
     <h4 class="mb-1">
-        <a href="/org/@OrgSlug" class="text-decoration-none text-muted">@org.Name</a>
+        <a href="/@OrgSlug" class="text-decoration-none text-muted">@org.Name</a>
         <span class="text-muted">/</span>
         @team.Name
     </h4>

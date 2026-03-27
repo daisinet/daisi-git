@@ -105,30 +105,26 @@
                                 }
                                 else
                                 {
-                                    @* Simple side-by-side: show old lines as removed, new lines as added *@
-                                    @if (diff.OldContent != null)
+                                    var diffLines = LineDiff.Compute(diff.OldContent, diff.NewContent);
+                                    foreach (var dl in diffLines)
                                     {
-                                        var oldLines = diff.OldContent.Split('\n');
-                                        for (var i = 0; i < oldLines.Length; i++)
+                                        var rowClass = dl.Type switch
                                         {
-                                            <tr class="dg-diff-removed">
-                                                <td class="dg-diff-num">@(i + 1)</td>
-                                                <td class="dg-diff-num"></td>
-                                                <td class="dg-diff-line"><pre>-@oldLines[i]</pre></td>
-                                            </tr>
-                                        }
-                                    }
-                                    @if (diff.NewContent != null)
-                                    {
-                                        var newLines = diff.NewContent.Split('\n');
-                                        for (var i = 0; i < newLines.Length; i++)
+                                            LineDiff.LineType.Added => "dg-diff-added",
+                                            LineDiff.LineType.Removed => "dg-diff-removed",
+                                            _ => ""
+                                        };
+                                        var prefix = dl.Type switch
                                         {
-                                            <tr class="dg-diff-added">
-                                                <td class="dg-diff-num"></td>
-                                                <td class="dg-diff-num">@(i + 1)</td>
-                                                <td class="dg-diff-line"><pre>+@newLines[i]</pre></td>
-                                            </tr>
-                                        }
+                                            LineDiff.LineType.Added => "+",
+                                            LineDiff.LineType.Removed => "-",
+                                            _ => " "
+                                        };
+                                        <tr class="@rowClass">
+                                            <td class="dg-diff-num">@dl.OldLineNum</td>
+                                            <td class="dg-diff-num">@dl.NewLineNum</td>
+                                            <td class="dg-diff-line"><pre>@prefix@dl.Content</pre></td>
+                                        </tr>
                                     }
                                 }
                             </table>

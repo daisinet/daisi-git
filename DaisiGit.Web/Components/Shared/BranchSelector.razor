@@ -1,0 +1,81 @@
+@inject GitRefService RefService
+
+<div class="dropdown" @onfocusout="Close">
+    <div class="input-group input-group-sm">
+        <span class="input-group-text"><i class="fa-duotone fa-code-branch"></i></span>
+        <input type="text" class="form-control" value="@SearchText" placeholder="Search branches..."
+               @oninput="OnSearch" @onfocus="Open" autocomplete="off" />
+    </div>
+    @if (isOpen && filteredBranches.Count > 0)
+    {
+        <ul class="dropdown-menu show w-100" style="max-height: 250px; overflow-y: auto;">
+            @foreach (var branch in filteredBranches)
+            {
+                var b = branch;
+                <li>
+                    <button type="button" class="dropdown-item @(b == Value ? "active" : "")"
+                            @onmousedown="() => Select(b)" @onmousedown:preventDefault>
+                        @b
+                    </button>
+                </li>
+            }
+        </ul>
+    }
+</div>
+
+@code {
+    [Parameter] public string RepositoryId { get; set; } = "";
+    [Parameter] public string Value { get; set; } = "";
+    [Parameter] public EventCallback<string> ValueChanged { get; set; }
+
+    private List<string> allBranches = [];
+    private List<string> filteredBranches = [];
+    private string SearchText = "";
+    private bool isOpen;
+    private bool loaded;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (!loaded && !string.IsNullOrEmpty(RepositoryId))
+        {
+            loaded = true;
+            try
+            {
+                var refs = await RefService.GetAllRefsAsync(RepositoryId);
+                allBranches = refs.Keys
+                    .Where(r => r.StartsWith("refs/heads/"))
+                    .Select(r => r["refs/heads/".Length..])
+                    .OrderBy(b => b)
+                    .ToList();
+                filteredBranches = allBranches;
+            }
+            catch { }
+        }
+        SearchText = Value;
+    }
+
+    private void OnSearch(ChangeEventArgs e)
+    {
+        SearchText = e.Value?.ToString() ?? "";
+        filteredBranches = string.IsNullOrEmpty(SearchText)
+            ? allBranches
+            : allBranches.Where(b => b.Contains(SearchText, StringComparison.OrdinalIgnoreCase)).ToList();
+        isOpen = true;
+    }
+
+    private async Task Select(string branch)
+    {
+        SearchText = branch;
+        isOpen = false;
+        await ValueChanged.InvokeAsync(branch);
+    }
+
+    private void Open() => isOpen = true;
+
+    private async Task Close()
+    {
+        // Small delay to allow button click to register before closing
+        await Task.Delay(200);
+        isOpen = false;
+    }
+}

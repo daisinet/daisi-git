@@ -1,3 +1,6 @@
+using System.IO.Compression;
+using System.Reflection;
+using System.Text;
 using DaisiGit.Core.Git;
 using DaisiGit.Core.Git.Pack;
 
@@ -233,6 +236,97 @@ public class PackFileTests
             var stderr = process.StandardError.ReadToEnd();
             Assert.True(process.ExitCode == 0,
                 $"git unpack-objects failed (exit {process.ExitCode}): {stderr}");
+        }
+        finally
+        {
+            try { Directory.Delete(repoPath, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public void Parse_MultiObjectPack_RoundTripsCorrectly()
+    {
+        // Generate a pack with many objects of varying sizes to stress-test DeflateFromPack
+        var objects = new List<GitObject>();
+        for (var i = 0; i < 20; i++)
+        {
+            var blob = new GitBlob { Data = Encoding.UTF8.GetBytes($"File content #{i}\n" + new string('x', i * 50)) };
+            blob.Sha = ObjectHasher.HashObject(blob);
+            objects.Add(blob);
+        }
+
+        var packData = PackFile.Generate(objects);
+        var entries = PackFile.Parse(packData);
+
+        Assert.Equal(20, entries.Count);
+
+        // Verify each entry has the correct content
+        for (var i = 0; i < 20; i++)
+        {
+            var expected = Encoding.UTF8.GetBytes($"File content #{i}\n" + new string('x', i * 50));
+            Assert.Equal(expected, entries[i].Data);
+        }
+    }
+
+    [Fact]
+    public void Generate_ManyObjects_PackCanBeUnpackedByGit()
+    {
+        // Build a realistic repo with multiple files
+        var blobs = new List<GitObject>();
+        var treeEntries = new List<GitTreeEntry>();
+        for (var i = 0; i < 10; i++)
+        {
+            var blob = new GitBlob { Data = Encoding.UTF8.GetBytes($"// File {i}\nclass C{i} {{ }}") };
+            blob.Sha = ObjectHasher.HashObject(blob);
+            blobs.Add(blob);
+            treeEntries.Add(new GitTreeEntry { Mode = "100644", Name = $"file{i}.cs", Sha = blob.Sha });
+        }
+
+        var tree = new GitTree { Entries = treeEntries };
+        tree.Sha = ObjectHasher.HashObject(tree);
+
+        var sig = new GitSignature { Name = "Test", Email = "test@test.com", Timestamp = DateTimeOffset.UtcNow };
+        var commit = new GitCommit
+        {
+            TreeSha = tree.Sha, ParentShas = [], Author = sig, Committer = sig, Message = "Add files"
+        };
+        commit.Sha = ObjectHasher.HashObject(commit);
+
+        var allObjects = new List<GitObject> { commit, tree };
+        allObjects.AddRange(blobs);
+
+        var packData = PackFile.Generate(allObjects);
+        var repoPath = Path.Combine(Path.GetTempPath(), $"daisigit-multi-{Guid.NewGuid():N}");
+
+        try
+        {
+            Directory.CreateDirectory(repoPath);
+            RunGit(repoPath, "init --bare");
+
+            var process = new System.Diagnostics.Process
+            {
+                StartInfo = new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = "git", Arguments = "unpack-objects", WorkingDirectory = repoPath,
+                    UseShellExecute = false, RedirectStandardInput = true, RedirectStandardOutput = true,
+                    RedirectStandardError = true, CreateNoWindow = true
+                }
+            };
+            process.Start();
+            process.StandardInput.BaseStream.Write(packData);
+            process.StandardInput.Close();
+            process.WaitForExit(10000);
+            var stderr = process.StandardError.ReadToEnd();
+            Assert.True(process.ExitCode == 0, $"git unpack-objects failed: {stderr}");
+
+            // Verify all objects readable
+            var catResult = RunGit(repoPath, $"cat-file -t {commit.Sha}");
+            Assert.Contains("commit", catResult);
+            for (var i = 0; i < 10; i++)
+            {
+                var content = RunGit(repoPath, $"cat-file -p {blobs[i].Sha}");
+                Assert.Contains($"File {i}", content);
+            }
         }
         finally
         {

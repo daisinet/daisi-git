@@ -15,12 +15,22 @@ public partial class DaisiGitCosmo
     /// </summary>
     public virtual async Task<GitObjectRecord> UpsertObjectRecordAsync(GitObjectRecord record)
     {
-        if (string.IsNullOrEmpty(record.id))
-            record.id = record.RepositoryId + ":" + record.DriveFileId;
+        // Use RepositoryId:Sha as the document id so upserts replace existing records
+        // for the same object (e.g. when re-pushing corrects a corrupted object).
+        record.id = record.RepositoryId + ":" + record.Sha;
 
         var container = await GetContainerAsync(GitObjectsContainerName);
         var response = await container.UpsertItemAsync(record, GetObjectPartitionKey(record.RepositoryId));
         return response.Resource;
+    }
+
+    /// <summary>
+    /// Deletes an object record by document id.
+    /// </summary>
+    public virtual async Task DeleteObjectRecordAsync(string documentId, string repositoryId)
+    {
+        var container = await GetContainerAsync(GitObjectsContainerName);
+        await container.DeleteItemAsync<GitObjectRecord>(documentId, GetObjectPartitionKey(repositoryId));
     }
 
     /// <summary>
@@ -29,6 +39,21 @@ public partial class DaisiGitCosmo
     public virtual async Task<GitObjectRecord?> GetObjectRecordAsync(string sha, string repositoryId)
     {
         var container = await GetContainerAsync(GitObjectsContainerName);
+
+        // Try point-read with the canonical id format first (fastest)
+        var canonicalId = $"{repositoryId}:{sha}";
+        try
+        {
+            var pointRead = await container.ReadItemAsync<GitObjectRecord>(
+                canonicalId, GetObjectPartitionKey(repositoryId));
+            return pointRead.Resource;
+        }
+        catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
+        {
+            // Fall through to query for old id format
+        }
+
+        // Query for records with old id format (RepositoryId:DriveFileId)
         var query = new QueryDefinition(
             "SELECT * FROM c WHERE c.RepositoryId = @repoId AND c.Sha = @sha AND c.Type = 'GitObjectRecord'")
             .WithParameter("@repoId", repositoryId)

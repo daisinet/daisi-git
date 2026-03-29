@@ -1,6 +1,8 @@
 using System.Text.Json;
 using DaisiGit.Core.Enums;
+using DaisiGit.Core.Git;
 using DaisiGit.Core.Models;
+using DaisiGit.Data;
 using DaisiGit.Services;
 
 namespace DaisiGit.Web.Endpoints;
@@ -58,6 +60,12 @@ public static class DaisiGitApiEndpoints
         // Account settings (require auth)
         api.MapGet("/account/settings", GetAccountSettings);
         api.MapPut("/account/settings/storage", SetDefaultStorageProvider);
+
+#if DEBUG
+        // Debug endpoints (auth required, dev only)
+        api.MapGet("/debug/repos/{owner}/{slug}/objects", DebugListObjects);
+        api.MapGet("/debug/repos/{owner}/{slug}/objects/{sha}", DebugGetObject);
+#endif
 
         // Anonymous-allowed endpoints (read-only; permission check handles public vs private)
         var pub = app.MapGroup("/api/git");
@@ -943,6 +951,58 @@ public static class DaisiGitApiEndpoints
         r.ForkedFromSlug,
         r.CreatedUtc
     };
+
+#if DEBUG
+    // ── Debug endpoints ──
+
+    private static async Task<IResult> DebugListObjects(
+        HttpContext ctx, string owner, string slug,
+        RepositoryService repoService, PermissionService permissionService,
+        DaisiGitCosmo cosmo)
+    {
+        var (repo, error) = await RequireRead(ctx, owner, slug, repoService, permissionService);
+        if (error != null) return error;
+
+        var records = await cosmo.GetAllObjectRecordsAsync(repo!.id);
+        return Results.Ok(records.Select(r => new
+        {
+            r.id,
+            r.Sha,
+            r.RepositoryId,
+            r.ObjectType,
+            r.SizeBytes,
+            r.DriveFileId,
+            StorageProvider = r.StorageProvider.ToString()
+        }));
+    }
+
+    private static async Task<IResult> DebugGetObject(
+        HttpContext ctx, string owner, string slug, string sha,
+        RepositoryService repoService, PermissionService permissionService,
+        GitObjectStore objectStore)
+    {
+        var (repo, error) = await RequireRead(ctx, owner, slug, repoService, permissionService);
+        if (error != null) return error;
+
+        var obj = await objectStore.GetObjectAsync(repo!.id, sha);
+        if (obj == null) return Results.NotFound($"Object {sha} not found");
+
+        var content = obj.SerializeContent();
+        var raw = obj.Serialize();
+        var computedSha = ObjectHasher.HashRaw(raw);
+
+        return Results.Ok(new
+        {
+            StoredSha = sha,
+            ComputedSha = computedSha,
+            Match = sha == computedSha,
+            Type = obj.TypeString,
+            ContentSize = content.Length,
+            RawSize = raw.Length,
+            ContentHex = content.Length <= 2048 ? Convert.ToHexString(content) : "too large"
+        });
+    }
+#endif
 }
 
 // ── Request DTOs ──

@@ -1,5 +1,6 @@
 using System.Text;
 using DaisiGit.Data;
+using DaisiGit.Services;
 
 namespace DaisiGit.Web.Services;
 
@@ -42,17 +43,36 @@ public class GitAuthMiddleware(RequestDelegate next)
             var username = parts[0];
             var token = parts[1];
 
-            // For now, store credentials in HttpContext items for endpoint handlers.
-            // A full implementation would validate the token against Daisi auth.
-            // Username can be "token" with a personal access token, or a Daisi username with client key.
             context.Items["git-username"] = username;
             context.Items["git-token"] = token;
 
-            // TODO: Validate token via Daisi auth service and resolve accountId/userId
-            // For development, use the token as both accountId and userId
-            context.Items["accountId"] = token;
-            context.Items["userId"] = username;
-            context.Items["userName"] = username;
+            // Check if either field is a PAT (dg_ prefix) and validate via ApiKeyService.
+            // Git clients send Basic auth as username:password — the PAT can be in either field.
+            var rawToken = token.StartsWith("dg_") ? token : username.StartsWith("dg_") ? username : null;
+
+            if (rawToken != null)
+            {
+                var keyService = context.RequestServices.GetRequiredService<ApiKeyService>();
+                var apiKey = await keyService.ValidateTokenAsync(rawToken);
+                if (apiKey == null)
+                {
+                    context.Response.StatusCode = 401;
+                    context.Response.Headers["WWW-Authenticate"] = "Basic realm=\"Daisi Git\"";
+                    return;
+                }
+
+                context.Items["accountId"] = apiKey.AccountId;
+                context.Items["userId"] = apiKey.UserId;
+                context.Items["userName"] = apiKey.UserName;
+            }
+            else
+            {
+                // Non-PAT credentials (e.g. Daisi username + client key) — fall through
+                // with username-based identity for now.
+                context.Items["accountId"] = "";
+                context.Items["userId"] = username;
+                context.Items["userName"] = username;
+            }
         }
         catch
         {

@@ -4,16 +4,32 @@ The `dg` command-line tool provides full access to DaisiGit from your terminal. 
 
 ## Installation
 
-### Option 1: Standalone binary (no dependencies)
+### Quick Install (recommended)
 
-Download the binary for your platform from the [releases page](https://github.com/daisinet/daisi-git/releases):
+**Linux / macOS:**
 
-| Platform | File |
-|----------|------|
-| Windows x64 | `dg-win-x64.exe` |
-| Linux x64 | `dg-linux-x64` |
-| macOS Intel | `dg-osx-x64` |
-| macOS Apple Silicon | `dg-osx-arm64` |
+```bash
+curl -fsSL https://git.daisi.ai/cli/install.sh | sh
+```
+
+**Windows (PowerShell):**
+
+```powershell
+irm https://git.daisi.ai/cli/install.ps1 | iex
+```
+
+This downloads the latest `dg` binary for your platform and adds it to your PATH.
+
+### Option 2: Manual download
+
+Download the binary for your platform:
+
+| Platform | Download |
+|----------|----------|
+| Windows x64 | [dg-win-x64.exe](https://git.daisi.ai/cli/download/dg-win-x64.exe) |
+| Linux x64 | [dg-linux-x64](https://git.daisi.ai/cli/download/dg-linux-x64) |
+| macOS Intel | [dg-osx-x64](https://git.daisi.ai/cli/download/dg-osx-x64) |
+| macOS Apple Silicon | [dg-osx-arm64](https://git.daisi.ai/cli/download/dg-osx-arm64) |
 
 Then move it to a directory in your PATH:
 
@@ -25,7 +41,7 @@ sudo mv dg-linux-x64 /usr/local/bin/dg
 # Windows — move dg-win-x64.exe to a folder in your PATH and rename to dg.exe
 ```
 
-### Option 2: .NET tool (requires .NET SDK)
+### Option 3: .NET tool (requires .NET SDK)
 
 ```bash
 dotnet tool install -g DaisiGit.Cli
@@ -37,10 +53,10 @@ This installs `dg` globally. Update with:
 dotnet tool update -g DaisiGit.Cli
 ```
 
-### Option 3: Build from source
+### Option 4: Build from source
 
 ```bash
-git clone https://github.com/daisinet/daisi-git.git
+git clone https://git.daisi.ai/daisinet/daisi-git.git
 cd daisi-git/DaisiGit.Cli
 dotnet build
 # Binary at bin/Debug/net10.0/dg(.exe)
@@ -73,8 +89,12 @@ Or interactively:
 ```bash
 dg auth login
 # Server URL: https://git.daisi.ai
-# Session token: dg_YOUR_TOKEN_HERE
+# Personal access token: dg_YOUR_TOKEN_HERE
 ```
+
+Login does two things:
+1. Saves your credentials to `~/.daisigit/config.json` for `dg` CLI commands
+2. Configures a git credential helper so that native `git push`, `git pull`, and `git clone` commands authenticate automatically against your DaisiGit server
 
 ### Check Status
 
@@ -88,6 +108,8 @@ dg auth status
 ```bash
 dg auth logout
 ```
+
+Logout clears your stored credentials and removes the git credential helper configuration.
 
 Credentials are stored in `~/.daisigit/config.json`.
 
@@ -145,7 +167,7 @@ dg repo fork someorg/their-repo
 # Forked to myhandle/their-repo
 ```
 
-## Cloning
+## Git Operations
 
 ### Clone a Repository
 
@@ -156,7 +178,38 @@ dg clone myorg/my-project
 dg clone myorg/my-project ./my-local-copy
 ```
 
-This wraps `git clone` with the correct server URL from your config.
+This wraps `git clone` with your server URL and credentials from your config.
+
+### Push
+
+```bash
+dg push
+
+# Pass extra flags to git push
+dg push --force
+dg push origin my-branch
+```
+
+### Pull
+
+```bash
+dg pull
+
+# Pass extra flags to git pull
+dg pull --rebase
+```
+
+### Using Native Git
+
+After `dg auth login`, native git commands work automatically because the credential helper is configured:
+
+```bash
+git clone https://git.daisi.ai/myorg/my-project.git
+git push origin main
+git pull
+```
+
+No extra configuration needed — git will use your stored PAT for authentication.
 
 ## Issues
 
@@ -343,6 +396,12 @@ Stored at `~/.daisigit/config.json`:
 }
 ```
 
+### Git Credential Helper
+
+When you run `dg auth login`, a credential helper script is written to `~/.daisigit/git-credential-daisigit` (or `.bat` on Windows) and registered in your global git config for the server's host. This allows native git commands to authenticate without prompting for credentials.
+
+The helper is scoped to the server host only — it won't interfere with credentials for GitHub, GitLab, or other git hosts.
+
 ## API Key Security
 
 - Tokens are prefixed with `dg_` for easy identification
@@ -350,3 +409,4 @@ Stored at `~/.daisigit/config.json`:
 - Tokens can be revoked from Settings > Personal Profile > API Keys
 - Each token shows its creation date and last-used date
 - Tokens work with both `X-Api-Key` header and `Authorization: Bearer` header
+- For git push/pull/clone, tokens are validated via HTTP Basic auth

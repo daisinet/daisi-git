@@ -19,10 +19,33 @@ DaisiGit.IntegrationTests/  — Integration tests against live server (24 tests)
 
 The `dg` command-line tool provides full access to DaisiGit from your terminal.
 
+### Install
+
 ```bash
+# Linux / macOS
+curl -fsSL https://git.daisi.ai/cli/install.sh | sh
+
+# Windows (PowerShell)
+irm https://git.daisi.ai/cli/install.ps1 | iex
+```
+
+### Usage
+
+```bash
+# Authenticate (also configures git credential helper)
 dg auth login --server https://git.daisi.ai --token dg_YOUR_TOKEN
+
+# Repository operations
 dg repo list
 dg clone myorg/my-project
+dg push
+dg pull
+
+# After login, native git commands also work
+git push origin main
+git pull
+
+# Issues and pull requests
 dg issue create "Fix bug" --desc "Steps to reproduce..."
 dg pr create "Add feature" --source feature-branch
 dg pr merge 42

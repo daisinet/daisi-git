@@ -178,6 +178,9 @@ app.MapGitSmartProtocolEndpoints();
 app.MapDaisiGitApiEndpoints();
 app.MapWorkflowApiEndpoints();
 
+// CLI install and download endpoints (public, no auth required)
+app.MapCliEndpoints();
+
 // Avatar proxy (public, no auth required, cached 10 min)
 app.MapGet("/api/git/avatars/{type}/{id}", async (HttpContext ctx, string type, string id, AvatarService avatarService) =>
 {

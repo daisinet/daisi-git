@@ -15,7 +15,7 @@ namespace DaisiGit.IntegrationTests;
 public class GitAuthTests : IAsyncLifetime
 {
     private readonly TestClient _client;
-    private readonly string _testId = DateTime.UtcNow.ToString("HHmmss");
+    private readonly string _testId = $"{DateTime.UtcNow:HHmmss}-{Guid.NewGuid().ToString("N")[..6]}";
     private readonly List<(string owner, string slug)> _createdRepos = [];
     private readonly HttpClient _http;
     private RepoDto _repo = null!;

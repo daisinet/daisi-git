@@ -30,6 +30,29 @@ public class ApiKeyAuthHandler(
                 token = authHeader["Bearer ".Length..];
         }
 
+        // Try HTTP Basic Auth (used by git clone/push)
+        // Git sends the API key as the password in Basic auth
+        if (string.IsNullOrEmpty(token))
+        {
+            var authHeader = Request.Headers.Authorization.FirstOrDefault();
+            if (authHeader?.StartsWith("Basic ") == true)
+            {
+                try
+                {
+                    var decoded = System.Text.Encoding.UTF8.GetString(
+                        Convert.FromBase64String(authHeader["Basic ".Length..]));
+                    var colonIdx = decoded.IndexOf(':');
+                    if (colonIdx >= 0)
+                    {
+                        var password = decoded[(colonIdx + 1)..];
+                        if (password.StartsWith("dg_"))
+                            token = password;
+                    }
+                }
+                catch { }
+            }
+        }
+
         if (string.IsNullOrEmpty(token))
             return AuthenticateResult.NoResult();
 

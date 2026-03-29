@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization.Metadata;
 
 namespace DaisiGit.Cli;
 
@@ -11,6 +12,12 @@ public class CliConfig
         Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".daisigit");
     private static readonly string ConfigFile = Path.Combine(ConfigDir, "config.json");
 
+    private static readonly JsonSerializerOptions SerializerOptions = new()
+    {
+        WriteIndented = true,
+        TypeInfoResolver = new DefaultJsonTypeInfoResolver()
+    };
+
     public string? ServerUrl { get; set; }
     public string? SessionToken { get; set; }
     public string? UserName { get; set; }
@@ -21,13 +28,13 @@ public class CliConfig
             return new CliConfig();
 
         var json = File.ReadAllText(ConfigFile);
-        return JsonSerializer.Deserialize<CliConfig>(json) ?? new CliConfig();
+        return JsonSerializer.Deserialize<CliConfig>(json, SerializerOptions) ?? new CliConfig();
     }
 
     public void Save()
     {
         Directory.CreateDirectory(ConfigDir);
-        var json = JsonSerializer.Serialize(this, new JsonSerializerOptions { WriteIndented = true });
+        var json = JsonSerializer.Serialize(this, SerializerOptions);
         File.WriteAllText(ConfigFile, json);
     }
 

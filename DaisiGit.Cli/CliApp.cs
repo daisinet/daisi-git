@@ -31,6 +31,15 @@ public class CliApp(string[] args)
             case "clone":
                 await HandleClone();
                 break;
+            case "push":
+                await HandlePush();
+                break;
+            case "pull":
+                await HandlePull();
+                break;
+            case "credential-fill":
+                HandleCredentialFill();
+                break;
             case "issue":
                 await HandleIssue();
                 break;
@@ -75,13 +84,13 @@ public class CliApp(string[] args)
                 }
                 if (string.IsNullOrEmpty(token))
                 {
-                    Console.Write("Session token: ");
+                    Console.Write("Personal access token: ");
                     token = Console.ReadLine()?.Trim();
                 }
 
                 if (string.IsNullOrEmpty(server) || string.IsNullOrEmpty(token))
                 {
-                    Console.Error.WriteLine("Server URL and session token are required.");
+                    Console.Error.WriteLine("Server URL and personal access token are required.");
                     Environment.ExitCode = 1;
                     return;
                 }
@@ -101,13 +110,18 @@ public class CliApp(string[] args)
 
                 var config = new CliConfig { ServerUrl = server, SessionToken = token };
                 config.Save();
+                ConfigureGitCredentialHelper(server);
                 Console.WriteLine($"Authenticated to {server}");
+                Console.WriteLine("Git credential helper configured — git push/pull/clone will use your token automatically.");
                 break;
 
             case "logout":
                 var cfg = CliConfig.Load();
+                var logoutServer = cfg.ServerUrl;
                 cfg.SessionToken = null;
                 cfg.Save();
+                if (!string.IsNullOrEmpty(logoutServer))
+                    RemoveGitCredentialHelper(logoutServer);
                 Console.WriteLine("Logged out.");
                 break;
 
@@ -123,6 +137,65 @@ public class CliApp(string[] args)
                 Console.WriteLine("Usage: dg auth <login|logout|status>");
                 break;
         }
+    }
+
+    /// <summary>
+    /// Configures git to use the dg credential helper for the given server URL.
+    /// This makes native git push/pull/clone work with the stored PAT.
+    /// </summary>
+    private static void ConfigureGitCredentialHelper(string serverUrl)
+    {
+        var uri = new Uri(serverUrl);
+        var host = uri.Host;
+
+        // Write the credential helper script
+        var helperDir = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".daisigit");
+        Directory.CreateDirectory(helperDir);
+
+        // Write a helper script that reads the token from config and returns it in git credential format
+        var helperPath = Path.Combine(helperDir, "git-credential-daisigit");
+
+        if (OperatingSystem.IsWindows())
+        {
+            helperPath += ".bat";
+            // Batch script that invokes dg credential-fill
+            var exePath = Environment.ProcessPath ?? "dg";
+            File.WriteAllText(helperPath, $"""
+                @echo off
+                "{exePath}" credential-fill
+                """);
+        }
+        else
+        {
+            File.WriteAllText(helperPath, $"""
+                #!/bin/sh
+                exec "{Environment.ProcessPath ?? "dg"}" credential-fill
+                """);
+            // Make executable
+            RunGitProcess("", $"chmod +x \"{helperPath}\"", useShell: true);
+        }
+
+        // Configure git to use this helper for the server's host
+        var credentialKey = $"credential.https://{host}.helper";
+
+        // Remove any previous daisigit helper for this host, then add the new one
+        RunGitProcess("", $"config --global --unset-all {credentialKey}");
+        RunGitProcess("", $"config --global {credentialKey} \"\\\"{helperPath}\\\"\"");
+    }
+
+    /// <summary>
+    /// Removes the git credential helper for the given server URL.
+    /// </summary>
+    private static void RemoveGitCredentialHelper(string serverUrl)
+    {
+        try
+        {
+            var uri = new Uri(serverUrl);
+            var credentialKey = $"credential.https://{uri.Host}.helper";
+            RunGitProcess("", $"config --global --unset-all {credentialKey}");
+        }
+        catch { }
     }
 
     // ── Repo ──
@@ -257,15 +330,14 @@ public class CliApp(string[] args)
         }
 
         var config = CliConfig.Load();
-        var serverUrl = config.ServerUrl;
-        if (string.IsNullOrEmpty(serverUrl))
+        if (!config.IsAuthenticated)
         {
             Console.Error.WriteLine("Not authenticated. Run: dg auth login");
             Environment.ExitCode = 1;
             return;
         }
 
-        var cloneUrl = $"{serverUrl.TrimEnd('/')}/{target}.git";
+        var cloneUrl = BuildAuthUrl(config, target);
         var dir = GetArg(2);
 
         var gitArgs = string.IsNullOrEmpty(dir)
@@ -273,17 +345,79 @@ public class CliApp(string[] args)
             : $"clone {cloneUrl} {dir}";
 
         Console.WriteLine($"Cloning {target}...");
-        var process = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+        var exitCode = await RunGitAsync(gitArgs);
+        Environment.ExitCode = exitCode;
+    }
+
+    // ── Push ──
+
+    private async Task HandlePush()
+    {
+        var config = CliConfig.Load();
+        if (!config.IsAuthenticated)
         {
-            FileName = "git",
-            Arguments = gitArgs,
-            UseShellExecute = false
-        });
-        if (process != null)
-        {
-            await process.WaitForExitAsync();
-            Environment.ExitCode = process.ExitCode;
+            Console.Error.WriteLine("Not authenticated. Run: dg auth login");
+            Environment.ExitCode = 1;
+            return;
         }
+
+        // Pass through any extra args (e.g. --force, origin main, etc.)
+        var extraArgs = args.Length > 1 ? string.Join(" ", args[1..]) : "";
+        var gitArgs = $"push {extraArgs}".Trim();
+
+        var exitCode = await RunGitAsync(gitArgs);
+        Environment.ExitCode = exitCode;
+    }
+
+    // ── Pull ──
+
+    private async Task HandlePull()
+    {
+        var config = CliConfig.Load();
+        if (!config.IsAuthenticated)
+        {
+            Console.Error.WriteLine("Not authenticated. Run: dg auth login");
+            Environment.ExitCode = 1;
+            return;
+        }
+
+        var extraArgs = args.Length > 1 ? string.Join(" ", args[1..]) : "";
+        var gitArgs = $"pull {extraArgs}".Trim();
+
+        var exitCode = await RunGitAsync(gitArgs);
+        Environment.ExitCode = exitCode;
+    }
+
+    // ── Credential Fill (internal, called by git credential helper) ──
+
+    private static void HandleCredentialFill()
+    {
+        // Git credential helper protocol: read key=value pairs from stdin,
+        // write back protocol/host/username/password to stdout.
+        var input = new Dictionary<string, string>();
+        string? line;
+        while ((line = Console.ReadLine()) != null && line.Length > 0)
+        {
+            var eq = line.IndexOf('=');
+            if (eq > 0)
+                input[line[..eq]] = line[(eq + 1)..];
+        }
+
+        var config = CliConfig.Load();
+        if (!config.IsAuthenticated || string.IsNullOrEmpty(config.ServerUrl))
+            return;
+
+        var serverUri = new Uri(config.ServerUrl);
+
+        // Only respond if the request matches our server
+        if (input.TryGetValue("host", out var host) && !host.Equals(serverUri.Host, StringComparison.OrdinalIgnoreCase))
+            return;
+
+        Console.WriteLine($"protocol={serverUri.Scheme}");
+        Console.WriteLine($"host={serverUri.Host}");
+        Console.WriteLine("username=token");
+        Console.WriteLine($"password={config.SessionToken}");
+        Console.WriteLine();
     }
 
     // ── Issue ──
@@ -566,6 +700,58 @@ public class CliApp(string[] args)
     private static string Truncate(string s, int max) =>
         s.Length <= max ? s : s[..(max - 1)] + "…";
 
+    /// <summary>
+    /// Builds a clone URL with the PAT embedded for authenticated git operations.
+    /// </summary>
+    private static string BuildAuthUrl(CliConfig config, string ownerSlashRepo)
+    {
+        var uri = new Uri(config.ServerUrl!);
+        return $"{uri.Scheme}://token:{config.SessionToken}@{uri.Host}{uri.AbsolutePath.TrimEnd('/')}/{ownerSlashRepo}.git";
+    }
+
+    /// <summary>
+    /// Runs a git command, inheriting stdin/stdout/stderr so the user sees output.
+    /// </summary>
+    private static async Task<int> RunGitAsync(string arguments)
+    {
+        var process = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+        {
+            FileName = "git",
+            Arguments = arguments,
+            UseShellExecute = false
+        });
+        if (process == null) return 1;
+        await process.WaitForExitAsync();
+        return process.ExitCode;
+    }
+
+    /// <summary>
+    /// Runs a git command synchronously (for config operations during setup).
+    /// </summary>
+    private static void RunGitProcess(string workingDir, string arguments, bool useShell = false)
+    {
+        try
+        {
+            var psi = new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = useShell ? (OperatingSystem.IsWindows() ? "cmd" : "sh") : "git",
+                Arguments = useShell
+                    ? (OperatingSystem.IsWindows() ? $"/c {arguments}" : $"-c \"{arguments}\"")
+                    : arguments,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true
+            };
+            if (!string.IsNullOrEmpty(workingDir))
+                psi.WorkingDirectory = workingDir;
+
+            var process = System.Diagnostics.Process.Start(psi);
+            process?.WaitForExit();
+        }
+        catch { }
+    }
+
     private static void PrintUsage()
     {
         Console.WriteLine("""
@@ -574,16 +760,19 @@ public class CliApp(string[] args)
             Usage: dg <command> [options]
 
             Commands:
-              auth login       Authenticate with a DaisiGit server
-              auth logout      Clear saved credentials
+              auth login       Authenticate and configure git credentials
+              auth logout      Clear saved credentials and git config
               auth status      Show authentication status
 
               repo list        List your repositories
               repo create      Create a new repository
               repo view        View repository details
               repo fork        Fork a repository
+              repo import      Import a repository from a URL
 
-              clone            Clone a repository (wraps git clone)
+              clone            Clone a repository
+              push             Push commits to remote
+              pull             Pull latest changes from remote
               browse           Open repository in browser
 
               issue list       List issues
@@ -602,12 +791,14 @@ public class CliApp(string[] args)
             Flags:
               --repo, -r       Specify repo as owner/slug (auto-detected from git remote)
               --server, -s     Server URL (for auth login)
-              --token, -t      Session token (for auth login)
+              --token, -t      Personal access token (for auth login)
 
             Examples:
-              dg auth login --server https://git.daisi.ai --token <token>
+              dg auth login --server https://git.daisi.ai --token dg_YOUR_TOKEN
               dg repo list
               dg clone myorg/myrepo
+              dg push
+              dg pull
               dg issue create "Fix login bug" --desc "Steps to reproduce..."
               dg pr create "Add feature" --source feature-branch
               dg pr merge 42 --strategy squash

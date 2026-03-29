@@ -74,8 +74,7 @@ public static class PackFile
             var entryStart = offset;
             var (packType, size, newOffset) = ReadTypeAndSize(packData, offset);
             offset = newOffset;
-
-            var entry = new PackEntry();
+            var entry = new PackEntry { PackOffset = entryStart };
 
             if (packType == OBJ_REF_DELTA)
             {
@@ -237,58 +236,50 @@ public static class PackFile
 
     private static byte[] DeflateFromPack(byte[] data, int offset, out int bytesConsumed)
     {
-        // Pack entries use zlib (2-byte header + deflate data + 4-byte Adler32).
-        // .NET's DeflateStream/ZLibStream buffer internally so stream position overshoots.
-        //
-        // Strategy: skip the zlib header, feed data ONE BYTE AT A TIME to DeflateStream.
-        // When DeflateStream finishes, the single-byte stream position is at most 1 byte
-        // past the true deflate end. The Adler32 MUST be at either (position) or (position-1)
-        // relative to the post-header data. We check both positions.
-        var headerSize = 2;
-        var remaining = data.Length - offset - headerSize;
+        // Pack entries use zlib compression (2-byte header + deflate data + 4-byte Adler32).
+        // .NET's ZLibStream reads past the deflate boundary for Adler32 validation, consuming
+        // the entire remaining input. Instead, use DeflateStream directly (skip zlib header)
+        // with SingleByteReadStream so we can track exactly how many bytes inflate consumed.
+        // Then verify the Adler32 position to get the exact compressed size.
 
-        // Decompress using single-byte reads to minimize over-read
-        var sbs = new SingleByteReadStream(data, offset + headerSize, remaining);
-        byte[] decompressed;
-        using (var deflate = new DeflateStream(sbs, CompressionMode.Decompress, leaveOpen: true))
-        using (var output = new MemoryStream())
+        // Skip 2-byte zlib header (CMF + FLG)
+        var deflateStart = offset + 2;
+        var sbs = new SingleByteReadStream(data, deflateStart, data.Length - deflateStart);
+        using var deflate = new DeflateStream(sbs, CompressionMode.Decompress, leaveOpen: true);
+        using var output = new MemoryStream();
+
+        var buf = new byte[4096];
+        int read;
+        while ((read = deflate.Read(buf, 0, buf.Length)) > 0)
         {
-            var buf = new byte[4096];
-            int n;
-            while ((n = deflate.Read(buf, 0, buf.Length)) > 0)
-                output.Write(buf, 0, n);
-            decompressed = output.ToArray();
+            output.Write(buf, 0, read);
         }
 
-        var deflatePos = (int)sbs.Position; // position in post-header data
-        var expectedAdler = ComputeAdler32(decompressed);
+        var decompressed = output.ToArray();
+        var deflateConsumed = (int)sbs.Position;
 
-        // The Adler32 starts right after the deflate data. DeflateStream with single-byte
-        // reads consumes the exact deflate data plus 0-1 extra bytes. So the Adler32 starts
-        // at (deflatePos - overread) where overread is 0 or 1.
-        // Search from (deflatePos - 1) forward to find the first Adler32 match.
-        for (var adlerStart = Math.Max(0, deflatePos - 1); adlerStart <= deflatePos; adlerStart++)
+        // Find the 4-byte Adler32 trailer. It should be right after the deflate data.
+        // DeflateStream may overshoot by ±1 byte, so check nearby positions.
+        var adler32 = ComputeAdler32(decompressed);
+        var adlerSearchStart = deflateStart + deflateConsumed - 1;
+        bytesConsumed = 2 + deflateConsumed + 4; // default fallback
+
+        for (var adj = -1; adj <= 1; adj++)
         {
-            var absPos = offset + headerSize + adlerStart;
-            if (absPos + 4 > data.Length) continue;
-            var candidate = (uint)((data[absPos] << 24) | (data[absPos + 1] << 16) |
-                                    (data[absPos + 2] << 8) | data[absPos + 3]);
-            if (candidate == expectedAdler)
+            var pos = adlerSearchStart + adj;
+            if (pos < offset + 2 || pos + 4 > data.Length) continue;
+            var found = ((uint)data[pos] << 24) | ((uint)data[pos + 1] << 16) |
+                        ((uint)data[pos + 2] << 8) | data[pos + 3];
+            if (found == adler32)
             {
-                bytesConsumed = headerSize + adlerStart + 4;
-                return decompressed;
+                bytesConsumed = pos + 4 - offset;
+                break;
             }
         }
 
-        // Fallback: Adler32 is right after the deflate stream position + 4
-        bytesConsumed = headerSize + deflatePos + 4;
         return decompressed;
     }
 
-    /// <summary>
-    /// A read-only stream that yields at most one byte per Read call.
-    /// Prevents DeflateStream from buffering past the end of the compressed data.
-    /// </summary>
     private sealed class SingleByteReadStream(byte[] data, int start, int length) : Stream
     {
         private int _pos;

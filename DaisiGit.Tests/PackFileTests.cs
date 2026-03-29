@@ -1,4 +1,5 @@
 using System.IO.Compression;
+using System.Reflection;
 using System.Text;
 using DaisiGit.Core.Git;
 using DaisiGit.Core.Git.Pack;

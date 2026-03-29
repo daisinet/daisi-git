@@ -98,6 +98,24 @@ app.Use(async (context, next) =>
         var authHeader = context.Request.Headers.Authorization.FirstOrDefault();
         if (authHeader?.StartsWith("Bearer dg_") == true)
             apiKey = authHeader["Bearer ".Length..];
+
+        // HTTP Basic Auth (used by git clone/push) — API key in the password field
+        if (string.IsNullOrEmpty(apiKey) && authHeader?.StartsWith("Basic ") == true)
+        {
+            try
+            {
+                var decoded = System.Text.Encoding.UTF8.GetString(
+                    Convert.FromBase64String(authHeader["Basic ".Length..]));
+                var colonIdx = decoded.IndexOf(':');
+                if (colonIdx >= 0)
+                {
+                    var password = decoded[(colonIdx + 1)..];
+                    if (password.StartsWith("dg_"))
+                        apiKey = password;
+                }
+            }
+            catch { }
+        }
     }
 
     if (!string.IsNullOrEmpty(apiKey) && apiKey.StartsWith("dg_"))

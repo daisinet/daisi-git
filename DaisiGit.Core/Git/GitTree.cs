@@ -13,9 +13,9 @@ public class GitTree : GitObject
     public override byte[] SerializeContent()
     {
         using var ms = new MemoryStream();
-        foreach (var entry in Entries.OrderBy(e => e.IsTree ? e.Name + "/" : e.Name))
+        foreach (var entry in Entries)
         {
-            var header = Encoding.ASCII.GetBytes($"{entry.Mode} {entry.Name}\0");
+            var header = Encoding.UTF8.GetBytes($"{entry.Mode} {entry.Name}\0");
             ms.Write(header);
             ms.Write(ObjectHasher.ShaToBytes(entry.Sha));
         }

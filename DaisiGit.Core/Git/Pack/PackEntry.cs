@@ -7,7 +7,10 @@ public class PackEntry
 {
     public GitObjectType ObjectType { get; set; }
     public byte[] Data { get; set; } = [];
-    public string Sha { get; set; } = "";
+    public string? Sha { get; set; }
+
+    /// <summary>Offset of this entry within the pack file (for OFS_DELTA base lookup).</summary>
+    public int PackOffset { get; set; }
 
     // For OFS_DELTA / REF_DELTA types
     public string? BaseSha { get; set; }

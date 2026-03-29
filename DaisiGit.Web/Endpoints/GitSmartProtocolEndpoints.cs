@@ -92,13 +92,18 @@ public static class GitSmartProtocolEndpoints
         {
             // Empty repository — advertise capabilities with zero-id
             var zeroId = new string('0', 40);
-            var capLine = $"{zeroId} capabilities^{{}}\0 report-status delete-refs side-band-64k ofs-delta";
+            var emptyCapabilities = service == "git-upload-pack"
+                ? " report-status delete-refs side-band-64k ofs-delta"
+                : " report-status delete-refs ofs-delta";
+            var capLine = $"{zeroId} capabilities^{{}}\0{emptyCapabilities}";
             await stream.WriteAsync(PktLine.Encode(capLine));
             await stream.WriteAsync(PktLine.Flush);
             return;
         }
 
-        var capabilities = " report-status delete-refs ofs-delta";
+        var capabilities = service == "git-upload-pack"
+            ? " report-status delete-refs side-band-64k ofs-delta"
+            : " report-status delete-refs ofs-delta";
         var first = true;
 
         // HEAD first
@@ -152,8 +157,11 @@ public static class GitSmartProtocolEndpoints
 
         ctx.Response.ContentType = "application/x-git-upload-pack-result";
 
-        // Read client wants/haves
+        // Read client wants/haves — client sends wants, flush, then haves+done, flush.
+        // We need to read across the first flush to get done.
         var lines = await PktLine.ReadAllLinesAsync(ctx.Request.Body);
+        var moreLines = await PktLine.ReadAllLinesAsync(ctx.Request.Body);
+        lines.AddRange(moreLines);
 
         var wants = new List<string>();
         var haves = new HashSet<string>();
@@ -192,9 +200,9 @@ public static class GitSmartProtocolEndpoints
         // Generate pack file
         var packData = PackFile.Generate(objectsToSend);
 
-        // Send pack data directly (no sideband framing — simpler and widely compatible)
-        await ctx.Response.Body.WriteAsync(packData);
-        await ctx.Response.Body.FlushAsync();
+        // Send pack data via sideband-64k framing
+        await SendSidebandPackAsync(ctx.Response.Body, packData);
+        await ctx.Response.Body.WriteAsync(PktLine.Flush);
     }
 
     /// <summary>
@@ -226,42 +234,45 @@ public static class GitSmartProtocolEndpoints
 
         ctx.Response.ContentType = "application/x-git-receive-pack-result";
 
-        // Read ref update commands
-        var lines = await PktLine.ReadAllLinesAsync(ctx.Request.Body);
-        var refUpdates = new List<(string oldSha, string newSha, string refName)>();
+        // Read the ENTIRE request body first, then parse pkt-lines and pack data from it.
+        // This avoids stream read-ahead issues where ReadAllLinesAsync consumes pack bytes.
+        var fullBody = await ReadRemainingAsync(ctx.Request.Body);
 
-        foreach (var line in lines)
+        // Find the PACK header in the body — everything before it is pkt-line ref commands
+        var packStart = -1;
+        for (var i = 0; i <= fullBody.Length - 4; i++)
         {
-            if (string.IsNullOrEmpty(line)) continue;
-            // Format: "old-sha new-sha refs/heads/branch\0capabilities"
-            var cleanLine = line.Contains('\0') ? line[..line.IndexOf('\0')] : line;
-            var parts = cleanLine.Split(' ', 3);
-            if (parts.Length == 3 && parts[0].Length == 40)
+            if (fullBody[i] == 'P' && fullBody[i + 1] == 'A' && fullBody[i + 2] == 'C' && fullBody[i + 3] == 'K')
             {
-                refUpdates.Add((parts[0], parts[1], parts[2]));
+                packStart = i;
+                break;
             }
         }
 
-        // Read pack data (rest of the stream)
-        var packData = await ReadRemainingAsync(ctx.Request.Body);
+        // Parse ref commands from the pkt-line portion
+        var refUpdates = new List<(string oldSha, string newSha, string refName)>();
+        if (packStart > 0)
+        {
+            using var refStream = new MemoryStream(fullBody, 0, packStart);
+            var lines = await PktLine.ReadAllLinesAsync(refStream);
+            foreach (var line in lines)
+            {
+                if (string.IsNullOrEmpty(line)) continue;
+                var cleanLine = line.Contains('\0') ? line[..line.IndexOf('\0')] : line;
+                var parts = cleanLine.Split(' ', 3);
+                if (parts.Length == 3 && parts[0].Length == 40)
+                    refUpdates.Add((parts[0], parts[1], parts[2]));
+            }
+        }
+
+        // Extract pack data
+        var packData = packStart >= 0 ? fullBody[packStart..] : Array.Empty<byte>();
 
         // Parse and store objects from pack
         if (packData.Length > 0)
         {
-            // The pack data may need to be trimmed to start at "PACK" header
-            var packStart = 0;
-            for (var i = 0; i <= packData.Length - 4; i++)
-            {
-                if (packData[i] == 'P' && packData[i + 1] == 'A' && packData[i + 2] == 'C' && packData[i + 3] == 'K')
-                {
-                    packStart = i;
-                    break;
-                }
-            }
-            if (packStart > 0)
-                packData = packData[packStart..];
-
-            await UnpackWithGitAsync(repository, packData, objectStore);
+            var entries = PackFile.Parse(packData);
+            await StorePackEntriesAsync(repository, entries, objectStore);
         }
 
         // Apply ref updates
@@ -354,7 +365,10 @@ public static class GitSmartProtocolEndpoints
 
             var obj = await objectStore.GetObjectAsync(repositoryId, sha);
             if (obj == null)
+            {
+                Console.WriteLine($"[CollectObjects] MISSING object: {sha}");
                 continue;
+            }
 
             objects.Add(obj);
 
@@ -402,7 +416,7 @@ public static class GitSmartProtocolEndpoints
     /// This avoids .NET's zlib boundary detection issues by delegating to git's native zlib.
     /// </summary>
     private static async Task UnpackWithGitAsync(
-        GitRepository repository, byte[] packData, GitObjectStore objectStore)
+        GitRepository repository, byte[] packData, GitObjectStore objectStore, GitRefService refService)
     {
         // Create a temp bare repo, feed the pack to git unpack-objects, then read each object
         var tempDir = Path.Combine(Path.GetTempPath(), $"daisigit-unpack-{Guid.NewGuid():N}");
@@ -413,13 +427,22 @@ public static class GitSmartProtocolEndpoints
             // Initialize bare repo
             await RunGitAsync(tempDir, "init --bare");
 
-            // Feed pack data to git unpack-objects
-            var unpack = new Process
+            // Export existing objects from our store into the temp repo so that
+            // delta-compressed objects in thin packs can resolve their base objects.
+            var existingRefs = await refService.GetAllRefsAsync(repository.id);
+            var existingObjects = new HashSet<string>();
+            foreach (var kvp in existingRefs)
+            {
+                await ExportObjectGraphAsync(repository.id, kvp.Value, tempDir, objectStore, existingObjects);
+            }
+
+            // Feed the pack via stdin to index-pack --fix-thin which resolves deltas
+            var indexPack = new Process
             {
                 StartInfo = new ProcessStartInfo
                 {
                     FileName = "git",
-                    Arguments = "unpack-objects -q",
+                    Arguments = "index-pack --fix-thin --stdin",
                     WorkingDirectory = tempDir,
                     UseShellExecute = false,
                     RedirectStandardInput = true,
@@ -428,15 +451,16 @@ public static class GitSmartProtocolEndpoints
                     CreateNoWindow = true
                 }
             };
-            unpack.Start();
-            await unpack.StandardInput.BaseStream.WriteAsync(packData);
-            unpack.StandardInput.Close();
-            await unpack.WaitForExitAsync();
+            indexPack.Start();
+            await indexPack.StandardInput.BaseStream.WriteAsync(packData);
+            indexPack.StandardInput.Close();
+            var indexOut = await indexPack.StandardOutput.ReadToEndAsync();
+            var indexErr = await indexPack.StandardError.ReadToEndAsync();
+            await indexPack.WaitForExitAsync();
 
-            var unpackErr = await unpack.StandardError.ReadToEndAsync();
-            if (unpack.ExitCode != 0)
+            if (indexPack.ExitCode != 0)
                 throw new InvalidOperationException(
-                    $"git unpack-objects failed (exit {unpack.ExitCode}): {unpackErr}");
+                    $"git index-pack failed (exit {indexPack.ExitCode}): {indexErr}");
 
             // List all objects git unpacked
             var listResult = await RunGitAsync(tempDir,
@@ -449,24 +473,79 @@ public static class GitSmartProtocolEndpoints
 
                 var sha = parts[0];
                 var objectType = parts[1];
-                var size = int.Parse(parts[2]);
 
-                // Read the loose object file directly — git stores unpacked objects as
-                // zlib-compressed files at objects/{sha[0:2]}/{sha[2:]}
-                var loosePath = Path.Combine(tempDir, "objects", sha[..2], sha[2..]);
-                if (File.Exists(loosePath))
+                // Read the object content via git cat-file (binary-safe via raw stream)
+                var catFile = new Process
                 {
-                    // The loose object is already zlib-compressed with the git header.
-                    // Decompress to get the raw object, then re-compress with our format.
-                    var compressed = await File.ReadAllBytesAsync(loosePath);
-                    var raw = ObjectHasher.ZlibDecompress(compressed);
-                    await objectStore.StoreRawObjectAsync(repository, raw, objectType);
-                }
+                    StartInfo = new ProcessStartInfo
+                    {
+                        FileName = "git",
+                        Arguments = $"cat-file -p {sha}",
+                        WorkingDirectory = tempDir,
+                        UseShellExecute = false,
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true,
+                        CreateNoWindow = true
+                    }
+                };
+                catFile.Start();
+                using var contentMs = new MemoryStream();
+                await catFile.StandardOutput.BaseStream.CopyToAsync(contentMs);
+                await catFile.WaitForExitAsync();
+                var content = contentMs.ToArray();
+
+                // Build the raw git object (type + space + size + null + content)
+                var header = Encoding.ASCII.GetBytes($"{objectType} {content.Length}\0");
+                var raw = new byte[header.Length + content.Length];
+                Buffer.BlockCopy(header, 0, raw, 0, header.Length);
+                Buffer.BlockCopy(content, 0, raw, header.Length, content.Length);
+
+                await objectStore.StoreRawObjectAsync(repository, raw, objectType);
             }
         }
         finally
         {
             try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    /// <summary>
+    /// Exports an object and its reachable graph from our store into a bare git repo's
+    /// object directory (as loose objects). Used to populate base objects for thin pack resolution.
+    /// </summary>
+    private static async Task ExportObjectGraphAsync(
+        string repositoryId, string sha, string gitDir,
+        GitObjectStore objectStore, HashSet<string> visited)
+    {
+        if (!visited.Add(sha)) return;
+
+        var raw = await objectStore.GetRawObjectAsync(repositoryId, sha);
+        if (raw == null) return;
+
+        // Write as loose object (zlib-compressed)
+        var compressed = ObjectHasher.ZlibCompress(raw);
+        var objDir = Path.Combine(gitDir, "objects", sha[..2]);
+        Directory.CreateDirectory(objDir);
+        var objPath = Path.Combine(objDir, sha[2..]);
+        if (!File.Exists(objPath))
+            await File.WriteAllBytesAsync(objPath, compressed);
+
+        // Walk the object graph
+        var obj = ObjectHasher.ParseObject(raw);
+        switch (obj)
+        {
+            case GitCommit commit:
+                await ExportObjectGraphAsync(repositoryId, commit.TreeSha, gitDir, objectStore, visited);
+                foreach (var parent in commit.ParentShas)
+                    await ExportObjectGraphAsync(repositoryId, parent, gitDir, objectStore, visited);
+                break;
+            case GitTree tree:
+                foreach (var entry in tree.Entries)
+                    await ExportObjectGraphAsync(repositoryId, entry.Sha, gitDir, objectStore, visited);
+                break;
+            case GitTag tag:
+                await ExportObjectGraphAsync(repositoryId, tag.ObjectSha, gitDir, objectStore, visited);
+                break;
         }
     }
 
@@ -527,51 +606,85 @@ public static class GitSmartProtocolEndpoints
             }
         }
 
-        // Second pass: resolve deltas
-        for (var i = 0; i < entries.Count; i++)
+        // Second pass: resolve deltas (may need multiple iterations for chained deltas)
+        var unresolvedCount = entries.Count(e => e.DeltaData != null);
+        var maxIterations = 10;
+        while (unresolvedCount > 0 && maxIterations-- > 0)
         {
-            var entry = entries[i];
-            if (entry.DeltaData != null)
+            var resolvedThisPass = 0;
+            for (var i = 0; i < entries.Count; i++)
             {
-                byte[]? baseData = null;
+                var entry = entries[i];
+                if (entry.DeltaData == null || entry.Sha != null) continue;
 
-                if (entry.BaseSha != null && resolved.TryGetValue(entry.BaseSha, out var data))
+                byte[]? baseData = null;
+                string baseType = "blob";
+
+                // OFS_DELTA: base referenced by pack offset
+                if (entry.BaseOffset > 0)
                 {
-                    baseData = data;
+                    var baseEntry = entries.FirstOrDefault(e => e.PackOffset == entry.BaseOffset);
+                    if (baseEntry?.Sha != null && resolved.TryGetValue(baseEntry.Sha, out var ofsData))
+                    {
+                        baseData = ofsData;
+                        baseType = baseEntry.ObjectType switch
+                        {
+                            GitObjectType.Commit => "commit",
+                            GitObjectType.Tree => "tree",
+                            GitObjectType.Blob => "blob",
+                            GitObjectType.Tag => "tag",
+                            _ => "blob"
+                        };
+                    }
                 }
+                // REF_DELTA: base referenced by SHA
                 else if (entry.BaseSha != null)
                 {
-                    // Try to fetch from store
-                    var baseObj = await objectStore.GetObjectAsync(repository.id, entry.BaseSha);
-                    if (baseObj != null)
-                        baseData = baseObj.SerializeContent();
-                }
-
-                if (baseData != null)
-                {
-                    var result = PackFile.ApplyDelta(baseData, entry.DeltaData);
-                    // Determine type from base object
-                    var typeStr = "blob"; // Default
-                    if (entry.BaseSha != null)
+                    if (resolved.TryGetValue(entry.BaseSha, out var refData))
                     {
-                        var baseRaw = await objectStore.GetRawObjectAsync(repository.id, entry.BaseSha);
-                        if (baseRaw != null)
+                        baseData = refData;
+                    }
+                    else
+                    {
+                        var baseObj = await objectStore.GetObjectAsync(repository.id, entry.BaseSha);
+                        if (baseObj != null)
                         {
-                            var (baseType, _, _) = ObjectHasher.ParseRawObject(baseRaw);
-                            typeStr = baseType;
+                            baseData = baseObj.SerializeContent();
+                            baseType = baseObj.Type switch
+                            {
+                                GitObjectType.Commit => "commit",
+                                GitObjectType.Tree => "tree",
+                                GitObjectType.Blob => "blob",
+                                GitObjectType.Tag => "tag",
+                                _ => "blob"
+                            };
                         }
                     }
-
-                    var header = Encoding.ASCII.GetBytes($"{typeStr} {result.Length}\0");
-                    var raw = new byte[header.Length + result.Length];
-                    Buffer.BlockCopy(header, 0, raw, 0, header.Length);
-                    Buffer.BlockCopy(result, 0, raw, header.Length, result.Length);
-
-                    entry.Sha = ObjectHasher.HashRaw(raw);
-                    resolved[entry.Sha] = result;
-                    await objectStore.StoreRawObjectAsync(repository, raw, typeStr);
                 }
+
+                if (baseData == null) continue;
+
+                var result = PackFile.ApplyDelta(baseData, entry.DeltaData);
+                var header = Encoding.ASCII.GetBytes($"{baseType} {result.Length}\0");
+                var raw = new byte[header.Length + result.Length];
+                Buffer.BlockCopy(header, 0, raw, 0, header.Length);
+                Buffer.BlockCopy(result, 0, raw, header.Length, result.Length);
+
+                entry.Sha = ObjectHasher.HashRaw(raw);
+                entry.ObjectType = baseType switch
+                {
+                    "commit" => GitObjectType.Commit,
+                    "tree" => GitObjectType.Tree,
+                    "tag" => GitObjectType.Tag,
+                    _ => GitObjectType.Blob
+                };
+                resolved[entry.Sha] = result;
+                await objectStore.StoreRawObjectAsync(repository, raw, baseType);
+                resolvedThisPass++;
             }
+
+            unresolvedCount -= resolvedThisPass;
+            if (resolvedThisPass == 0) break;
         }
     }
 

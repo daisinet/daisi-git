@@ -53,6 +53,13 @@ public class GitObjectStore(DaisiGitCosmo cosmo, StorageAdapterFactory storageFa
         var sha = ObjectHasher.HashRaw(rawObject);
 
         // Always write — a re-push of the same SHA ensures corrupted objects get fixed.
+        // Delete any existing record with the old id format before upserting with the new format.
+        var existing = await cosmo.GetObjectRecordAsync(sha, repo.id);
+        if (existing != null && existing.id != $"{repo.id}:{sha}")
+        {
+            try { await cosmo.DeleteObjectRecordAsync(existing.id, repo.id); } catch { }
+        }
+
         var compressed = ObjectHasher.ZlibCompress(rawObject);
         var drive = await storageFactory.GetAdapterAsync(repo);
         var path = $"/objects/{sha[..2]}/{sha[2..]}";
@@ -82,10 +89,18 @@ public class GitObjectStore(DaisiGitCosmo cosmo, StorageAdapterFactory storageFa
         if (record == null)
             return null;
 
-        var drive = storageFactory.GetAdapter(record.StorageProvider);
-        var compressed = await drive.DownloadAsync(record.DriveFileId);
-        var raw = ObjectHasher.ZlibDecompress(compressed);
-        return ObjectHasher.ParseObject(raw);
+        try
+        {
+            var drive = storageFactory.GetAdapter(record.StorageProvider);
+            var compressed = await drive.DownloadAsync(record.DriveFileId);
+            var raw = ObjectHasher.ZlibDecompress(compressed);
+            return ObjectHasher.ParseObject(raw);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[GetObjectAsync] FAILED sha={sha}, driveFileId={record.DriveFileId}, provider={record.StorageProvider}, error={ex.Message}");
+            return null;
+        }
     }
 
     /// <summary>

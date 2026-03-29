@@ -52,10 +52,7 @@ public class GitObjectStore(DaisiGitCosmo cosmo, StorageAdapterFactory storageFa
     {
         var sha = ObjectHasher.HashRaw(rawObject);
 
-        var existing = await cosmo.GetObjectRecordAsync(sha, repo.id);
-        if (existing != null)
-            return sha;
-
+        // Always write — a re-push of the same SHA ensures corrupted objects get fixed.
         var compressed = ObjectHasher.ZlibCompress(rawObject);
         var drive = await storageFactory.GetAdapterAsync(repo);
         var path = $"/objects/{sha[..2]}/{sha[2..]}";

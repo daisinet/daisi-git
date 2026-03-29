@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text;
 using DaisiGit.Core.Enums;
 using DaisiGit.Core.Git;
@@ -247,8 +248,20 @@ public static class GitSmartProtocolEndpoints
         // Parse and store objects from pack
         if (packData.Length > 0)
         {
-            var entries = PackFile.Parse(packData);
-            await StorePackEntriesAsync(repository, entries, objectStore);
+            // The pack data may need to be trimmed to start at "PACK" header
+            var packStart = 0;
+            for (var i = 0; i <= packData.Length - 4; i++)
+            {
+                if (packData[i] == 'P' && packData[i + 1] == 'A' && packData[i + 2] == 'C' && packData[i + 3] == 'K')
+                {
+                    packStart = i;
+                    break;
+                }
+            }
+            if (packStart > 0)
+                packData = packData[packStart..];
+
+            await UnpackWithGitAsync(repository, packData, objectStore);
         }
 
         // Apply ref updates
@@ -382,6 +395,100 @@ public static class GitSmartProtocolEndpoints
             await output.WriteAsync(PktLine.EncodeRaw(sideband));
             offset += chunkSize;
         }
+    }
+
+    /// <summary>
+    /// Unpacks a pack file using the git binary, then stores each object individually.
+    /// This avoids .NET's zlib boundary detection issues by delegating to git's native zlib.
+    /// </summary>
+    private static async Task UnpackWithGitAsync(
+        GitRepository repository, byte[] packData, GitObjectStore objectStore)
+    {
+        // Create a temp bare repo, feed the pack to git unpack-objects, then read each object
+        var tempDir = Path.Combine(Path.GetTempPath(), $"daisigit-unpack-{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+
+            // Initialize bare repo
+            await RunGitAsync(tempDir, "init --bare");
+
+            // Feed pack data to git unpack-objects
+            var unpack = new Process
+            {
+                StartInfo = new ProcessStartInfo
+                {
+                    FileName = "git",
+                    Arguments = "unpack-objects -q",
+                    WorkingDirectory = tempDir,
+                    UseShellExecute = false,
+                    RedirectStandardInput = true,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    CreateNoWindow = true
+                }
+            };
+            unpack.Start();
+            await unpack.StandardInput.BaseStream.WriteAsync(packData);
+            unpack.StandardInput.Close();
+            await unpack.WaitForExitAsync();
+
+            var unpackErr = await unpack.StandardError.ReadToEndAsync();
+            if (unpack.ExitCode != 0)
+                throw new InvalidOperationException(
+                    $"git unpack-objects failed (exit {unpack.ExitCode}): {unpackErr}");
+
+            // List all objects git unpacked
+            var listResult = await RunGitAsync(tempDir,
+                "cat-file --batch-check=%(objectname) %(objecttype) %(objectsize) --batch-all-objects");
+
+            foreach (var line in listResult.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+            {
+                var parts = line.Trim().Split(' ');
+                if (parts.Length < 3) continue;
+
+                var sha = parts[0];
+                var objectType = parts[1];
+                var size = int.Parse(parts[2]);
+
+                // Read the loose object file directly — git stores unpacked objects as
+                // zlib-compressed files at objects/{sha[0:2]}/{sha[2:]}
+                var loosePath = Path.Combine(tempDir, "objects", sha[..2], sha[2..]);
+                if (File.Exists(loosePath))
+                {
+                    // The loose object is already zlib-compressed with the git header.
+                    // Decompress to get the raw object, then re-compress with our format.
+                    var compressed = await File.ReadAllBytesAsync(loosePath);
+                    var raw = ObjectHasher.ZlibDecompress(compressed);
+                    await objectStore.StoreRawObjectAsync(repository, raw, objectType);
+                }
+            }
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    private static async Task<string> RunGitAsync(string workDir, string args)
+    {
+        var process = new Process
+        {
+            StartInfo = new ProcessStartInfo
+            {
+                FileName = "git",
+                Arguments = args,
+                WorkingDirectory = workDir,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true
+            }
+        };
+        process.Start();
+        var output = await process.StandardOutput.ReadToEndAsync();
+        await process.WaitForExitAsync();
+        return output;
     }
 
     /// <summary>

@@ -101,9 +101,9 @@ public class CliApp(string[] args)
                     using var client = new DaisiGitClient(server, token);
                     await client.ListRepositoriesAsync();
                 }
-                catch
+                catch (Exception ex)
                 {
-                    Console.Error.WriteLine("Failed to authenticate. Check your server URL and token.");
+                    Console.Error.WriteLine($"Failed to authenticate: {ex.Message}");
                     Environment.ExitCode = 1;
                     return;
                 }
@@ -146,7 +146,8 @@ public class CliApp(string[] args)
     private static void ConfigureGitCredentialHelper(string serverUrl)
     {
         var uri = new Uri(serverUrl);
-        var host = uri.Host;
+        // Include port if non-default, so credential helper scopes correctly
+        var host = uri.IsDefaultPort ? uri.Host : $"{uri.Host}:{uri.Port}";
 
         // Write the credential helper script
         var helperDir = Path.Combine(
@@ -176,12 +177,14 @@ public class CliApp(string[] args)
             RunGitProcess("", $"chmod +x \"{helperPath}\"", useShell: true);
         }
 
-        // Configure git to use this helper for the server's host
+        // Configure git to use this helper for the server's host.
+        // Git requires forward slashes in paths, even on Windows.
+        var gitHelperPath = helperPath.Replace('\\', '/');
         var credentialKey = $"credential.https://{host}.helper";
 
         // Remove any previous daisigit helper for this host, then add the new one
         RunGitProcess("", $"config --global --unset-all {credentialKey}");
-        RunGitProcess("", $"config --global {credentialKey} \"\\\"{helperPath}\\\"\"");
+        RunGitProcess("", $"config --global {credentialKey} \"{gitHelperPath}\"");
     }
 
     /// <summary>
@@ -192,7 +195,8 @@ public class CliApp(string[] args)
         try
         {
             var uri = new Uri(serverUrl);
-            var credentialKey = $"credential.https://{uri.Host}.helper";
+            var host = uri.IsDefaultPort ? uri.Host : $"{uri.Host}:{uri.Port}";
+            var credentialKey = $"credential.https://{host}.helper";
             RunGitProcess("", $"config --global --unset-all {credentialKey}");
         }
         catch { }

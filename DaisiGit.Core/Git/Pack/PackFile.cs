@@ -201,20 +201,21 @@ public static class PackFile
         }
 
         // Write zlib-compressed content
-        using var zlibStream = new MemoryStream();
-        zlibStream.WriteByte(0x78);
-        zlibStream.WriteByte(0x9C);
-        using (var deflate = new DeflateStream(zlibStream, CompressionLevel.Optimal, leaveOpen: true))
+        if (content.Length == 0)
         {
-            deflate.Write(content);
+            // ZLibStream produces no output for empty input, but git expects a valid
+            // zlib stream. Write the canonical empty zlib stream: header + empty deflate + adler32.
+            stream.Write(new byte[] { 0x78, 0x9C, 0x03, 0x00, 0x00, 0x00, 0x00, 0x01 });
         }
-        var adler = ComputeAdler32(content);
-        zlibStream.WriteByte((byte)(adler >> 24));
-        zlibStream.WriteByte((byte)(adler >> 16));
-        zlibStream.WriteByte((byte)(adler >> 8));
-        zlibStream.WriteByte((byte)adler);
-
-        stream.Write(zlibStream.ToArray());
+        else
+        {
+            using var zlibOutput = new MemoryStream();
+            using (var zlib = new ZLibStream(zlibOutput, CompressionLevel.Optimal, leaveOpen: true))
+            {
+                zlib.Write(content);
+            }
+            stream.Write(zlibOutput.ToArray());
+        }
     }
 
     private static (int type, long size, int newOffset) ReadTypeAndSize(byte[] data, int offset)
@@ -236,29 +237,38 @@ public static class PackFile
 
     private static byte[] DeflateFromPack(byte[] data, int offset, out int bytesConsumed)
     {
-        // Pack entries use zlib compression (2-byte header + deflate + 4-byte adler32).
-        // DeflateStream over-reads from the underlying MemoryStream due to internal buffering,
-        // so we can't rely on stream position. Instead, decompress to get the result,
-        // then re-compress to determine the compressed size.
-        var startOffset = offset;
-        offset += 2; // skip zlib header
+        // Pack entries use zlib compression (2-byte header + deflate data + 4-byte adler32).
+        // We need to decompress and determine how many bytes the compressed stream occupies.
+        // DeflateStream/ZLibStream over-reads due to internal buffering, so we can't use
+        // the stream position. Instead, skip the 2-byte zlib header, decompress with
+        // DeflateStream, then scan for the Adler32 checksum to find the exact end.
+        var zlibHeader = 2; // skip CMF + FLG bytes
 
-        using var input = new MemoryStream(data, offset, data.Length - offset);
+        using var input = new MemoryStream(data, offset + zlibHeader, data.Length - offset - zlibHeader);
         using var deflate = new DeflateStream(input, CompressionMode.Decompress);
         using var output = new MemoryStream();
         deflate.CopyTo(output);
         var decompressed = output.ToArray();
 
-        // Re-compress to determine the exact compressed size
-        using var recompressOutput = new MemoryStream();
-        using (var recompressDeflate = new DeflateStream(recompressOutput, CompressionLevel.Optimal, leaveOpen: true))
-        {
-            recompressDeflate.Write(decompressed);
-        }
-        var compressedSize = (int)recompressOutput.Length;
+        // Calculate the expected Adler32 of the decompressed data, then scan forward
+        // from offset to find where the zlib stream ends (header + deflate + adler32).
+        var expectedAdler = ComputeAdler32(decompressed);
 
-        // Total zlib blob: 2 header + compressedSize + 4 adler32
-        bytesConsumed = 2 + compressedSize + 4;
+        // Scan from the minimum possible position to find the adler32 trailer.
+        // Minimum compressed size: header(2) + at least 1 byte deflate + adler32(4) = 7
+        var searchStart = offset + zlibHeader + 1;
+        var searchEnd = data.Length - 4;
+        bytesConsumed = data.Length - offset; // fallback: consume everything remaining
+
+        for (var i = searchStart; i <= searchEnd; i++)
+        {
+            var candidate = (uint)(data[i] << 24 | data[i + 1] << 16 | data[i + 2] << 8 | data[i + 3]);
+            if (candidate == expectedAdler)
+            {
+                bytesConsumed = (i + 4) - offset;
+                break;
+            }
+        }
 
         return decompressed;
     }

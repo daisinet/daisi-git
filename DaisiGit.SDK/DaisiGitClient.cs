@@ -1,6 +1,7 @@
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.Json.Serialization.Metadata;
 using DaisiGit.Core.Enums;
 using DaisiGit.Core.Models;
 
@@ -15,6 +16,7 @@ public class DaisiGitClient : IDisposable
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNameCaseInsensitive = true,
+        TypeInfoResolver = new DefaultJsonTypeInfoResolver(),
         Converters = { new JsonStringEnumConverter() }
     };
 

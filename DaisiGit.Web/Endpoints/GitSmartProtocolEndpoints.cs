@@ -97,7 +97,7 @@ public static class GitSmartProtocolEndpoints
             return;
         }
 
-        var capabilities = " report-status delete-refs side-band-64k ofs-delta";
+        var capabilities = " report-status delete-refs ofs-delta";
         var first = true;
 
         // HEAD first
@@ -191,10 +191,9 @@ public static class GitSmartProtocolEndpoints
         // Generate pack file
         var packData = PackFile.Generate(objectsToSend);
 
-        // Send pack data via sideband
-        await SendSidebandPackAsync(ctx.Response.Body, packData);
-
-        await ctx.Response.Body.WriteAsync(PktLine.Flush);
+        // Send pack data directly (no sideband framing — simpler and widely compatible)
+        await ctx.Response.Body.WriteAsync(packData);
+        await ctx.Response.Body.FlushAsync();
     }
 
     /// <summary>
@@ -314,17 +313,11 @@ public static class GitSmartProtocolEndpoints
                 userId, userName, payload);
         }
 
-        // Send report
-        // Sideband 1: pack data acknowledgment
-        var reportLines = new List<string> { "unpack ok" };
-        reportLines.AddRange(results);
-
-        foreach (var line in reportLines)
+        // Send report-status as plain pkt-lines (not sideband)
+        await ctx.Response.Body.WriteAsync(PktLine.Encode("unpack ok"));
+        foreach (var line in results)
         {
-            var sidebandData = new byte[line.Length + 2]; // 1 byte sideband channel + line + LF
-            sidebandData[0] = 1; // sideband channel 1
-            Encoding.UTF8.GetBytes(line + "\n", sidebandData.AsSpan(1));
-            await ctx.Response.Body.WriteAsync(PktLine.EncodeRaw(sidebandData));
+            await ctx.Response.Body.WriteAsync(PktLine.Encode(line));
         }
 
         await ctx.Response.Body.WriteAsync(PktLine.Flush);

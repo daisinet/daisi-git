@@ -146,7 +146,8 @@ public class CliApp(string[] args)
     private static void ConfigureGitCredentialHelper(string serverUrl)
     {
         var uri = new Uri(serverUrl);
-        var host = uri.Host;
+        // Include port if non-default, so credential helper scopes correctly
+        var host = uri.IsDefaultPort ? uri.Host : $"{uri.Host}:{uri.Port}";
 
         // Write the credential helper script
         var helperDir = Path.Combine(
@@ -194,7 +195,8 @@ public class CliApp(string[] args)
         try
         {
             var uri = new Uri(serverUrl);
-            var credentialKey = $"credential.https://{uri.Host}.helper";
+            var host = uri.IsDefaultPort ? uri.Host : $"{uri.Host}:{uri.Port}";
+            var credentialKey = $"credential.https://{host}.helper";
             RunGitProcess("", $"config --global --unset-all {credentialKey}");
         }
         catch { }

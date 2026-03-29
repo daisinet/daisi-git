@@ -24,6 +24,12 @@ public static class DaisiGitApiEndpoints
         api.MapGet("/repos", ListRepositories);
         api.MapDelete("/repos/{owner}/{slug}", DeleteRepository);
 
+        // Branches (create requires write access)
+        api.MapPost("/repos/{owner}/{slug}/branches", CreateBranch);
+
+        // File contents (write requires write access)
+        api.MapPut("/repos/{owner}/{slug}/contents/{**path}", WriteFile);
+
         // Issues (create/update require auth)
         api.MapPost("/repos/{owner}/{slug}/issues", CreateIssue);
         api.MapPatch("/repos/{owner}/{slug}/issues/{number:int}", UpdateIssue);
@@ -927,6 +933,164 @@ public static class DaisiGitApiEndpoints
         });
     }
 
+    // ── Branch creation ──
+
+    private static async Task<IResult> CreateBranch(
+        HttpContext ctx, string owner, string slug, CreateBranchRequest req,
+        RepositoryService repoService, PermissionService permissionService,
+        BrowseService browseService, GitRefService refService)
+    {
+        var (repo, error) = await RequireWrite(ctx, owner, slug, repoService, permissionService);
+        if (error != null) return error;
+
+        if (string.IsNullOrWhiteSpace(req.Name))
+            return Results.BadRequest("Branch name is required.");
+
+        // Resolve the source branch/ref
+        var fromRef = req.From ?? repo!.DefaultBranch;
+        var sourceSha = await browseService.ResolveRefAsync(repo!.id, fromRef);
+        if (sourceSha == null)
+            return Results.BadRequest($"Source ref '{fromRef}' not found.");
+
+        // Check if branch already exists
+        var existing = await refService.GetRefAsync(repo.id, $"refs/heads/{req.Name}");
+        if (existing != null)
+            return Results.Conflict($"Branch '{req.Name}' already exists.");
+
+        // Create the branch ref
+        await refService.SetRefAsync(repo.id, $"refs/heads/{req.Name}", sourceSha);
+
+        return Results.Ok(new { name = req.Name, sha = sourceSha });
+    }
+
+    // ── File write/commit ──
+
+    private static async Task<IResult> WriteFile(
+        HttpContext ctx, string owner, string slug, string path, WriteFileRequest req,
+        RepositoryService repoService, PermissionService permissionService,
+        BrowseService browseService, GitObjectStore objectStore,
+        GitRefService refService)
+    {
+        var (repo, error) = await RequireWrite(ctx, owner, slug, repoService, permissionService);
+        if (error != null) return error;
+
+        if (string.IsNullOrWhiteSpace(path))
+            return Results.BadRequest("File path is required.");
+        if (req.Content == null)
+            return Results.BadRequest("Content is required.");
+
+        var branch = req.Branch ?? repo!.DefaultBranch;
+        var message = req.Message ?? $"Update {path}";
+
+        // Resolve the branch to a commit
+        var branchSha = await browseService.ResolveRefAsync(repo!.id, branch);
+        if (branchSha == null)
+            return Results.BadRequest($"Branch '{branch}' not found.");
+
+        var commit = await objectStore.GetObjectAsync(repo.id, branchSha) as GitCommit;
+        if (commit == null)
+            return Results.BadRequest($"Could not resolve commit for branch '{branch}'.");
+
+        // Create the blob
+        var blob = new GitBlob { Data = System.Text.Encoding.UTF8.GetBytes(req.Content) };
+        var blobSha = await objectStore.StoreObjectAsync(repo, blob);
+
+        // Build the new tree by walking the path and replacing/inserting the entry
+        var segments = path.Trim('/').Split('/');
+        var newTreeSha = await BuildTreeWithFileAsync(
+            repo, objectStore, commit.TreeSha, segments, 0, blobSha);
+
+        // Create the commit
+        var userName = GetUserName(ctx);
+        var userId = GetUserId(ctx);
+        var sig = new GitSignature
+        {
+            Name = userName,
+            Email = $"{userName}@daisi.ai",
+            Timestamp = DateTimeOffset.UtcNow
+        };
+
+        var newCommit = new GitCommit
+        {
+            TreeSha = newTreeSha,
+            ParentShas = [branchSha],
+            Author = sig,
+            Committer = sig,
+            Message = message
+        };
+
+        var commitSha = await objectStore.StoreObjectAsync(repo, newCommit);
+
+        // Update the branch ref
+        await refService.SetRefAsync(repo.id, $"refs/heads/{branch}", commitSha);
+
+        return Results.Ok(new { sha = blobSha, commitSha, branch });
+    }
+
+    /// <summary>
+    /// Recursively builds a new tree with a file inserted/updated at the given path.
+    /// </summary>
+    private static async Task<string> BuildTreeWithFileAsync(
+        GitRepository repo, GitObjectStore objectStore,
+        string currentTreeSha, string[] pathSegments, int depth, string blobSha)
+    {
+        var tree = await objectStore.GetObjectAsync(repo.id, currentTreeSha) as GitTree;
+        var entries = tree?.Entries.ToList() ?? [];
+
+        var segment = pathSegments[depth];
+        var isLastSegment = depth == pathSegments.Length - 1;
+
+        if (isLastSegment)
+        {
+            // Replace or insert the blob entry
+            var existingIdx = entries.FindIndex(e => e.Name == segment);
+            var entry = new GitTreeEntry { Name = segment, Mode = "100644", Sha = blobSha };
+
+            if (existingIdx >= 0)
+                entries[existingIdx] = entry;
+            else
+                entries.Add(entry);
+        }
+        else
+        {
+            // Recurse into subtree — create it if it doesn't exist
+            var existingIdx = entries.FindIndex(e => e.Name == segment);
+            string subTreeSha;
+
+            if (existingIdx >= 0 && entries[existingIdx].IsTree)
+            {
+                subTreeSha = await BuildTreeWithFileAsync(
+                    repo, objectStore, entries[existingIdx].Sha, pathSegments, depth + 1, blobSha);
+                entries[existingIdx] = new GitTreeEntry { Name = segment, Mode = "40000", Sha = subTreeSha };
+            }
+            else
+            {
+                // Create a new empty subtree and recurse
+                var emptyTree = new GitTree();
+                var emptySha = await objectStore.StoreObjectAsync(repo, emptyTree);
+                subTreeSha = await BuildTreeWithFileAsync(
+                    repo, objectStore, emptySha, pathSegments, depth + 1, blobSha);
+
+                if (existingIdx >= 0)
+                    entries[existingIdx] = new GitTreeEntry { Name = segment, Mode = "40000", Sha = subTreeSha };
+                else
+                    entries.Add(new GitTreeEntry { Name = segment, Mode = "40000", Sha = subTreeSha });
+            }
+        }
+
+        // Sort entries: trees first, then blobs, alphabetically within each group
+        entries.Sort((a, b) =>
+        {
+            // Git sorts tree entries with trailing '/' for directories
+            var aName = a.IsTree ? a.Name + "/" : a.Name;
+            var bName = b.IsTree ? b.Name + "/" : b.Name;
+            return string.Compare(aName, bName, StringComparison.Ordinal);
+        });
+
+        var newTree = new GitTree { Entries = entries };
+        return await objectStore.StoreObjectAsync(repo, newTree);
+    }
+
     // ── Helpers ──
 
     private static string GetUserId(HttpContext ctx) => ctx.Items["userId"] as string ?? "";
@@ -1021,3 +1185,5 @@ public record SetSecretRequest(string Value);
 public record CreateCommentRequest(string Body);
 public record SubmitReviewRequest(string? State, string? Body, List<DiffCommentRequest>? DiffComments = null);
 public record DiffCommentRequest(string Path, int Line, string Body, string? Side = null);
+public record CreateBranchRequest(string Name, string? From = null);
+public record WriteFileRequest(string? Content, string? Message = null, string? Branch = null, string? Sha = null);

@@ -90,4 +90,222 @@ public class PackFileTests
         var result = PackFile.ApplyDelta(baseData, delta.ToArray());
         Assert.Equal("Hello, World!", System.Text.Encoding.UTF8.GetString(result));
     }
+
+    [Fact]
+    public void Generate_CommitTreeBlob_PackCanBeUnpackedByGit()
+    {
+        // Build a realistic pack with commit + tree + blob (like initial commit)
+        var blob = new GitBlob { Data = "# Test Repo\n"u8.ToArray() };
+        blob.Sha = ObjectHasher.HashObject(blob);
+
+        var tree = new GitTree
+        {
+            Entries = [new GitTreeEntry { Mode = "100644", Name = "README.md", Sha = blob.Sha }]
+        };
+        tree.Sha = ObjectHasher.HashObject(tree);
+
+        var sig = new GitSignature { Name = "Test", Email = "test@test.com", Timestamp = DateTimeOffset.UtcNow };
+        var commit = new GitCommit
+        {
+            TreeSha = tree.Sha,
+            ParentShas = [],
+            Author = sig,
+            Committer = sig,
+            Message = "Initial commit"
+        };
+        commit.Sha = ObjectHasher.HashObject(commit);
+
+        var packData = PackFile.Generate([commit, tree, blob]);
+        var packPath = Path.Combine(Path.GetTempPath(), $"daisigit-test-{Guid.NewGuid():N}.pack");
+        var repoPath = Path.Combine(Path.GetTempPath(), $"daisigit-test-{Guid.NewGuid():N}");
+
+        try
+        {
+            File.WriteAllBytes(packPath, packData);
+            Directory.CreateDirectory(repoPath);
+            RunGit(repoPath, "init --bare");
+
+            var process = new System.Diagnostics.Process
+            {
+                StartInfo = new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = "git",
+                    Arguments = "unpack-objects",
+                    WorkingDirectory = repoPath,
+                    UseShellExecute = false,
+                    RedirectStandardInput = true,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    CreateNoWindow = true
+                }
+            };
+            process.Start();
+            process.StandardInput.BaseStream.Write(packData);
+            process.StandardInput.Close();
+            process.WaitForExit(10000);
+
+            var stderr = process.StandardError.ReadToEnd();
+            Assert.True(process.ExitCode == 0,
+                $"git unpack-objects failed (exit {process.ExitCode}): {stderr}");
+
+            // Verify git can read the objects
+            var catResult = RunGit(repoPath, $"cat-file -t {commit.Sha}");
+            Assert.Contains("commit", catResult);
+        }
+        finally
+        {
+            try { File.Delete(packPath); } catch { }
+            try { Directory.Delete(repoPath, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public void Generate_CommitWithEmptyTree_PackCanBeUnpackedByGit()
+    {
+        // Reproduce exact scenario from test-company-repo: commit + empty tree
+        var tree = new GitTree { Entries = [] };
+        tree.Sha = ObjectHasher.HashObject(tree);
+        Assert.Equal("4b825dc642cb6eb9a060e54bf8d69288fbee4904", tree.Sha);
+        Assert.Empty(tree.SerializeContent()); // 0 bytes
+
+        var sig = new GitSignature { Name = "daisinet", Email = "daisinet@daisigit.local",
+            Timestamp = DateTimeOffset.FromUnixTimeSeconds(1774473350) };
+        var commit = new GitCommit
+        {
+            TreeSha = tree.Sha,
+            ParentShas = [],
+            Author = sig,
+            Committer = sig,
+            Message = "Initial commit"
+        };
+        commit.Sha = ObjectHasher.HashObject(commit);
+
+        // Test with just the empty tree first
+        var emptyTreePack = PackFile.Generate([tree]);
+        var emptyRepoPath = Path.Combine(Path.GetTempPath(), $"daisigit-et-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(emptyRepoPath);
+        RunGit(emptyRepoPath, "init --bare");
+        var etProc = new System.Diagnostics.Process
+        {
+            StartInfo = new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = "git", Arguments = "unpack-objects", WorkingDirectory = emptyRepoPath,
+                UseShellExecute = false, RedirectStandardInput = true, RedirectStandardOutput = true,
+                RedirectStandardError = true, CreateNoWindow = true
+            }
+        };
+        etProc.Start();
+        etProc.StandardInput.BaseStream.Write(emptyTreePack);
+        etProc.StandardInput.Close();
+        etProc.WaitForExit(10000);
+        var etStderr = etProc.StandardError.ReadToEnd();
+        try { Directory.Delete(emptyRepoPath, true); } catch { }
+        Assert.True(etProc.ExitCode == 0,
+            $"Empty tree pack failed (exit {etProc.ExitCode}): {etStderr}\nPack hex: {Convert.ToHexString(emptyTreePack)}");
+
+        var packData = PackFile.Generate([commit, tree]);
+
+        var repoPath = Path.Combine(Path.GetTempPath(), $"daisigit-empty-tree-{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(repoPath);
+            RunGit(repoPath, "init --bare");
+
+            var process = new System.Diagnostics.Process
+            {
+                StartInfo = new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = "git",
+                    Arguments = "unpack-objects",
+                    WorkingDirectory = repoPath,
+                    UseShellExecute = false,
+                    RedirectStandardInput = true,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    CreateNoWindow = true
+                }
+            };
+            process.Start();
+            process.StandardInput.BaseStream.Write(packData);
+            process.StandardInput.Close();
+            process.WaitForExit(10000);
+
+            var stderr = process.StandardError.ReadToEnd();
+            Assert.True(process.ExitCode == 0,
+                $"git unpack-objects failed (exit {process.ExitCode}): {stderr}");
+        }
+        finally
+        {
+            try { Directory.Delete(repoPath, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public void Generate_SingleBlob_PackCanBeUnpackedByGit()
+    {
+        var blob = new GitBlob { Data = "Hello from DaisiGit\n"u8.ToArray() };
+        blob.Sha = ObjectHasher.HashObject(blob);
+
+        var packData = PackFile.Generate([blob]);
+        var packPath = Path.Combine(Path.GetTempPath(), $"daisigit-test-{Guid.NewGuid():N}.pack");
+        var repoPath = Path.Combine(Path.GetTempPath(), $"daisigit-test-{Guid.NewGuid():N}");
+
+        try
+        {
+            File.WriteAllBytes(packPath, packData);
+
+            // Create a bare git repo and try to unpack
+            Directory.CreateDirectory(repoPath);
+            var initResult = RunGit(repoPath, "init --bare");
+            Assert.Contains("Initialized", initResult);
+
+            // Feed the pack to git unpack-objects
+            var process = new System.Diagnostics.Process
+            {
+                StartInfo = new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = "git",
+                    Arguments = "unpack-objects",
+                    WorkingDirectory = repoPath,
+                    UseShellExecute = false,
+                    RedirectStandardInput = true,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    CreateNoWindow = true
+                }
+            };
+            process.Start();
+            process.StandardInput.BaseStream.Write(packData);
+            process.StandardInput.Close();
+            process.WaitForExit(10000);
+
+            var stdout = process.StandardOutput.ReadToEnd();
+            var stderr = process.StandardError.ReadToEnd();
+
+            Assert.True(process.ExitCode == 0,
+                $"git unpack-objects failed (exit {process.ExitCode}): {stderr}");
+        }
+        finally
+        {
+            try { File.Delete(packPath); } catch { }
+            try { Directory.Delete(repoPath, true); } catch { }
+        }
+    }
+
+    private static string RunGit(string workDir, string args)
+    {
+        var process = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+        {
+            FileName = "git",
+            Arguments = args,
+            WorkingDirectory = workDir,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        })!;
+        var output = process.StandardOutput.ReadToEnd() + process.StandardError.ReadToEnd();
+        process.WaitForExit();
+        return output;
+    }
 }

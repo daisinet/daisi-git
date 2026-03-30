@@ -78,6 +78,27 @@ public class DaisiGitClient : IDisposable
         return await GetAsync<List<BranchDto>>($"api/git/repos/{owner}/{slug}/branches");
     }
 
+    /// <summary>
+    /// Creates a new branch from an existing ref.
+    /// </summary>
+    public async Task<BranchDto> CreateBranchAsync(string owner, string slug, string name, string from = "main")
+    {
+        return await PostAsync<BranchDto>($"api/git/repos/{owner}/{slug}/branches",
+            new { name, from });
+    }
+
+    /// <summary>
+    /// Writes a file and creates a commit on the specified branch.
+    /// Creates parent directories as needed.
+    /// </summary>
+    public async Task<FileCommitResult> WriteFileAsync(
+        string owner, string slug, string path, string content,
+        string message, string branch = "main")
+    {
+        return await PutAsync<FileCommitResult>($"api/git/repos/{owner}/{slug}/contents/{path}",
+            new { content, message, branch });
+    }
+
     // ── File Browsing ──
 
     /// <summary>
@@ -90,9 +111,13 @@ public class DaisiGitClient : IDisposable
 
     /// <summary>
     /// Reads a file's content at a given branch and path.
+    /// Uses query parameter for nested paths (workaround for IIS blocking .cs in URL paths).
     /// </summary>
     public async Task<FileResult> GetFileAsync(string owner, string slug, string path, string branch = "main")
     {
+        // Nested paths (containing /) use query param to avoid IIS request filtering
+        if (path.Contains('/'))
+            return await GetAsync<FileResult>($"api/git/repos/{owner}/{slug}/blob/{branch}?path={Uri.EscapeDataString(path)}");
         return await GetAsync<FileResult>($"api/git/repos/{owner}/{slug}/blob/{branch}/{path}");
     }
 
@@ -338,6 +363,13 @@ public class DaisiGitClient : IDisposable
         response.EnsureSuccessStatusCode();
     }
 
+    private async Task<T> PutAsync<T>(string path, object body)
+    {
+        var response = await _http.PutAsJsonAsync(path, body, JsonOptions);
+        response.EnsureSuccessStatusCode();
+        return (await response.Content.ReadFromJsonAsync<T>(JsonOptions))!;
+    }
+
     private async Task DeleteAsync(string path)
     {
         var response = await _http.DeleteAsync(path);
@@ -475,4 +507,14 @@ public class DiffCommentInput
     public int Line { get; set; }
     public string Body { get; set; } = "";
     public string? Side { get; set; }
+}
+
+/// <summary>
+/// Result of writing a file via the contents API.
+/// </summary>
+public class FileCommitResult
+{
+    public string Sha { get; set; } = "";
+    public string CommitSha { get; set; } = "";
+    public string Branch { get; set; } = "";
 }

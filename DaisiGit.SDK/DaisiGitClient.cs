@@ -111,9 +111,13 @@ public class DaisiGitClient : IDisposable
 
     /// <summary>
     /// Reads a file's content at a given branch and path.
+    /// Uses query parameter for nested paths (workaround for IIS blocking .cs in URL paths).
     /// </summary>
     public async Task<FileResult> GetFileAsync(string owner, string slug, string path, string branch = "main")
     {
+        // Nested paths (containing /) use query param to avoid IIS request filtering
+        if (path.Contains('/'))
+            return await GetAsync<FileResult>($"api/git/repos/{owner}/{slug}/blob/{branch}?path={Uri.EscapeDataString(path)}");
         return await GetAsync<FileResult>($"api/git/repos/{owner}/{slug}/blob/{branch}/{path}");
     }
 

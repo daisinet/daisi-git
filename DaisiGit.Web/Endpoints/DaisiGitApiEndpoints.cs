@@ -80,6 +80,8 @@ public static class DaisiGitApiEndpoints
         pub.MapGet("/repos/{owner}/{slug}/branches", ListBranches);
         pub.MapGet("/repos/{owner}/{slug}/tree/{branch}/{**path}", GetTree);
         pub.MapGet("/repos/{owner}/{slug}/blob/{branch}/{**path}", GetBlob);
+        // Alternative: path as query param (workaround for IIS blocking .cs/.config in URL paths)
+        pub.MapGet("/repos/{owner}/{slug}/blob/{branch}", GetBlobQuery);
         pub.MapGet("/repos/{owner}/{slug}/commits/{branch}", ListCommits);
         pub.MapGet("/repos/{owner}/{slug}/commit/{sha}", GetCommit);
         pub.MapGet("/repos/{owner}/{slug}/issues", ListIssues);
@@ -335,6 +337,26 @@ public static class DaisiGitApiEndpoints
     }
 
     private static async Task<IResult> GetBlob(
+        HttpContext ctx, string owner, string slug, string branch, string? path,
+        RepositoryService repoService, BrowseService browseService, PermissionService permissionService)
+    {
+        return await GetBlobInternal(ctx, owner, slug, branch, path, repoService, browseService, permissionService);
+    }
+
+    /// <summary>
+    /// Alternative blob endpoint: path as ?path= query parameter.
+    /// Workaround for IIS/Azure App Service request filtering that blocks
+    /// extensions like .cs, .config, .asax in URL path segments.
+    /// </summary>
+    private static async Task<IResult> GetBlobQuery(
+        HttpContext ctx, string owner, string slug, string branch, string? path,
+        RepositoryService repoService, BrowseService browseService, PermissionService permissionService)
+    {
+        // path comes from query string: ?path=code-reviewer/module.cs
+        return await GetBlobInternal(ctx, owner, slug, branch, path, repoService, browseService, permissionService);
+    }
+
+    private static async Task<IResult> GetBlobInternal(
         HttpContext ctx, string owner, string slug, string branch, string? path,
         RepositoryService repoService, BrowseService browseService, PermissionService permissionService)
     {

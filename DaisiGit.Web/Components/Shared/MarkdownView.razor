@@ -20,7 +20,7 @@
         .UseAdvancedExtensions()
         .UseAutoLinks()
         .UseTaskLists()
-        .UseEmojiAndSmiley()
+        .UseEmojiAndSmiley(enableSmileys: false)
         .Build();
 
     private static readonly Regex MermaidBlockRegex = new(

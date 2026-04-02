@@ -38,6 +38,12 @@ public class WorkflowStep
     // ── Condition ──
     public string? ConditionExpression { get; set; }
     public List<WorkflowConditionBranch>? Branches { get; set; }
+
+    // ── DeployAzureWebApp ──
+    public string? AzureAppName { get; set; }
+    public string? AzureDeployPath { get; set; }
+    public string? AzureUsernameSecret { get; set; }
+    public string? AzurePasswordSecret { get; set; }
 }
 
 /// <summary>

@@ -233,7 +233,7 @@
                             {
                                 @if (readmeFileName?.EndsWith(".md", StringComparison.OrdinalIgnoreCase) == true)
                                 {
-                                    <MarkdownView Content="@readmeContent" />
+                                    <MarkdownView Content="@readmeContent" Owner="@Owner" RepoSlug="@RepoSlug" Branch="@Branch" FilePath="@readmeFileName" />
                                 }
                                 else
                                 {
@@ -244,7 +244,7 @@
                             {
                                 @if (licenseFileName?.EndsWith(".md", StringComparison.OrdinalIgnoreCase) == true)
                                 {
-                                    <MarkdownView Content="@licenseContent" />
+                                    <MarkdownView Content="@licenseContent" Owner="@Owner" RepoSlug="@RepoSlug" Branch="@Branch" FilePath="@licenseFileName" />
                                 }
                                 else
                                 {

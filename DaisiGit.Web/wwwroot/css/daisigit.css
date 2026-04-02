@@ -342,6 +342,24 @@ body {
     font-size: 0.875rem;
 }
 
+/* File editor */
+.dg-editor-wrap { padding: 0; }
+.dg-editor {
+    width: 100%;
+    min-height: 500px;
+    border: none;
+    outline: none;
+    resize: vertical;
+    padding: 1em;
+    font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+    font-size: 0.875rem;
+    line-height: 1.6;
+    tab-size: 4;
+    background: var(--bs-body-bg);
+    color: var(--bs-body-color);
+}
+.dg-editor:focus { box-shadow: inset 0 0 0 2px var(--bs-primary); }
+
 /* Markdown rendered content */
 .markdown-body {
     font-size: 0.95rem;
@@ -388,3 +406,5 @@ body {
 .markdown-body hr { border: none; border-top: 1px solid var(--bs-border-color); margin: 1.5em 0; }
 .markdown-body a { color: var(--bs-primary); }
 .markdown-body input[type="checkbox"] { margin-right: 0.4em; }
+.markdown-body pre.mermaid { background: transparent; text-align: center; padding: 1em 0; }
+.markdown-body pre.mermaid svg { max-width: 100%; height: auto; }

@@ -187,6 +187,12 @@ public static class WorkflowYamlParser
                 if (int.TryParse(with.GetValueOrDefault("days"), out var days))
                     step.WaitDays = days;
                 break;
+            case WorkflowStepType.DeployAzureWebApp:
+                step.AzureAppName = with.GetValueOrDefault("app-name");
+                step.AzureDeployPath = with.GetValueOrDefault("path");
+                step.AzureUsernameSecret = with.GetValueOrDefault("username-secret");
+                step.AzurePasswordSecret = with.GetValueOrDefault("password-secret");
+                break;
         }
 
         // Simple condition from `if:`
@@ -208,6 +214,7 @@ public static class WorkflowYamlParser
         "add-comment" or "comment" => WorkflowStepType.AddComment,
         "require-review" => WorkflowStepType.RequireReview,
         "wait" => WorkflowStepType.Wait,
+        "deploy-azure-webapp" or "deploy-azure" or "azure-deploy" => WorkflowStepType.DeployAzureWebApp,
         _ => null
     };
 

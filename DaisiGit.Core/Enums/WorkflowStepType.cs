@@ -13,5 +13,6 @@ public enum WorkflowStepType
     AddComment,
     RequireReview,
     Condition,
-    Wait
+    Wait,
+    DeployAzureWebApp
 }

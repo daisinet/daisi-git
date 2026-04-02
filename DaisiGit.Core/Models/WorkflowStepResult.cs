@@ -26,4 +26,7 @@ public class WorkflowStepResult
 
     // ── Condition results ──
     public string? BranchTaken { get; set; }
+
+    // ── DeployAzureWebApp results ──
+    public string? DeployUrl { get; set; }
 }

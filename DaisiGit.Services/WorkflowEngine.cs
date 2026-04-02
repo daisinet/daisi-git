@@ -1,6 +1,8 @@
+using System.IO.Compression;
 using System.Net.Http.Headers;
 using System.Text;
 using DaisiGit.Core.Enums;
+using DaisiGit.Core.Git;
 using DaisiGit.Core.Models;
 using DaisiGit.Data;
 
@@ -16,7 +18,8 @@ public class WorkflowEngine(
     IssueService issueService,
     PullRequestService prService,
     CommentService commentService,
-    SecretService secretService)
+    SecretService secretService,
+    GitObjectStore objectStore)
 {
     /// <summary>
     /// Processes an execution, injecting secrets and env into the context.
@@ -82,6 +85,9 @@ public class WorkflowEngine(
                             break;
                         case WorkflowStepType.RequireReview:
                             await ExecuteRequireReview(step, stepResult, execution);
+                            break;
+                        case WorkflowStepType.DeployAzureWebApp:
+                            await ExecuteDeployAzureWebApp(step, stepResult, execution);
                             break;
                         case WorkflowStepType.Condition:
                             stepResult.Success = true;
@@ -268,6 +274,150 @@ public class WorkflowEngine(
             result.Error = $"Requires {required} approvals, only {approvals} found";
 
         await Task.CompletedTask;
+    }
+
+    // ── Deploy Azure Web App ──
+
+    private async Task ExecuteDeployAzureWebApp(WorkflowStep step, WorkflowStepResult result,
+        WorkflowExecution execution)
+    {
+        var appName = WorkflowMergeService.Render(step.AzureAppName ?? "", execution.Context);
+        if (string.IsNullOrWhiteSpace(appName))
+        {
+            result.Success = false;
+            result.Error = "Azure App Name is required";
+            return;
+        }
+
+        var usernameKey = step.AzureUsernameSecret;
+        var passwordKey = step.AzurePasswordSecret;
+        if (string.IsNullOrEmpty(usernameKey) || string.IsNullOrEmpty(passwordKey))
+        {
+            result.Success = false;
+            result.Error = "Deploy username and password secrets must be configured";
+            return;
+        }
+
+        var username = execution.Context.GetValueOrDefault($"secrets.{usernameKey}", "");
+        var password = execution.Context.GetValueOrDefault($"secrets.{passwordKey}", "");
+        if (string.IsNullOrEmpty(username) || string.IsNullOrEmpty(password))
+        {
+            result.Success = false;
+            result.Error = $"Could not resolve secrets '{usernameKey}' and/or '{passwordKey}'. Add them in Settings > Secrets.";
+            return;
+        }
+
+        // Resolve the commit to deploy
+        var repoId = execution.RepositoryId;
+        var commitSha = execution.Context.GetValueOrDefault("push.commit", "");
+        if (string.IsNullOrEmpty(commitSha))
+        {
+            result.Success = false;
+            result.Error = "No commit SHA in context (push.commit)";
+            return;
+        }
+
+        var commit = await objectStore.GetObjectAsync(repoId, commitSha) as GitCommit;
+        if (commit == null)
+        {
+            result.Success = false;
+            result.Error = $"Could not read commit {commitSha[..7]}";
+            return;
+        }
+
+        // Determine the subtree to deploy
+        var deployPath = step.AzureDeployPath?.Trim('/');
+        var treeSha = commit.TreeSha;
+        if (!string.IsNullOrEmpty(deployPath))
+        {
+            var subTree = await WalkToSubtree(repoId, treeSha, deployPath);
+            if (subTree == null)
+            {
+                result.Success = false;
+                result.Error = $"Deploy path '{deployPath}' not found in commit";
+                return;
+            }
+            treeSha = subTree;
+        }
+
+        // Build ZIP from tree
+        using var zipStream = new MemoryStream();
+        using (var archive = new ZipArchive(zipStream, ZipArchiveMode.Create, leaveOpen: true))
+        {
+            await AddTreeToZip(archive, repoId, treeSha, "");
+        }
+        zipStream.Position = 0;
+
+        // Deploy via Kudu ZipDeploy API
+        var kuduUrl = $"https://{appName}.scm.azurewebsites.net/api/zipdeploy";
+        var client = httpClientFactory.CreateClient("WorkflowHttp");
+        client.Timeout = TimeSpan.FromMinutes(5);
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, kuduUrl);
+        var authBytes = Encoding.ASCII.GetBytes($"{username}:{password}");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Basic", Convert.ToBase64String(authBytes));
+        request.Content = new StreamContent(zipStream);
+        request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/zip");
+
+        var response = await client.SendAsync(request);
+        result.HttpStatusCode = (int)response.StatusCode;
+        result.DeployUrl = $"https://{appName}.azurewebsites.net";
+
+        if (response.IsSuccessStatusCode)
+        {
+            result.Success = true;
+            result.RenderedBody = $"Deployed to {result.DeployUrl}";
+        }
+        else
+        {
+            var body = await response.Content.ReadAsStringAsync();
+            result.Success = false;
+            result.Error = $"Deploy failed: HTTP {(int)response.StatusCode} — {(body.Length > 500 ? body[..500] : body)}";
+        }
+    }
+
+    private async Task<string?> WalkToSubtree(string repoId, string treeSha, string path)
+    {
+        var segments = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        var currentSha = treeSha;
+
+        foreach (var segment in segments)
+        {
+            var tree = await objectStore.GetObjectAsync(repoId, currentSha) as GitTree;
+            if (tree == null) return null;
+
+            var entry = tree.Entries.FirstOrDefault(e => e.Name == segment && e.IsTree);
+            if (entry == null) return null;
+            currentSha = entry.Sha;
+        }
+
+        return currentSha;
+    }
+
+    private async Task AddTreeToZip(ZipArchive archive, string repoId, string treeSha, string prefix)
+    {
+        var tree = await objectStore.GetObjectAsync(repoId, treeSha) as GitTree;
+        if (tree == null) return;
+
+        foreach (var entry in tree.Entries)
+        {
+            var entryPath = string.IsNullOrEmpty(prefix) ? entry.Name : $"{prefix}/{entry.Name}";
+
+            if (entry.IsTree)
+            {
+                await AddTreeToZip(archive, repoId, entry.Sha, entryPath);
+            }
+            else
+            {
+                var blob = await objectStore.GetObjectAsync(repoId, entry.Sha) as GitBlob;
+                if (blob != null)
+                {
+                    var zipEntry = archive.CreateEntry(entryPath, CompressionLevel.Fastest);
+                    using var stream = zipEntry.Open();
+                    await stream.WriteAsync(blob.Data);
+                }
+            }
+        }
     }
 
     // ── Wait ──

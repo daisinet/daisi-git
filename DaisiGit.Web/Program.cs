@@ -78,6 +78,7 @@ builder.Services.AddScoped<WorkflowService>();
 builder.Services.AddHostedService<GitWorkflowBackgroundWorker>();
 
 builder.Services.AddScoped<DaisiUserService>();
+builder.Services.AddScoped<FileWriteService>();
 
 // JSON enum serialization for API endpoints
 builder.Services.ConfigureHttpJsonOptions(options =>

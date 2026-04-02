@@ -1,0 +1,198 @@
+@page "/{Owner}/{RepoSlug}/edit/{Branch}/{**Path}"
+@inject BrowseService BrowseService
+@inject RepositoryService RepoService
+@inject PermissionService PermissionService
+@inject FileWriteService FileWriteService
+@inject NavigationManager Nav
+
+<PageTitle>Editing @Path - @Owner/@RepoSlug - Daisi Git</PageTitle>
+
+<RepositoryLayout Owner="@Owner" RepoSlug="@RepoSlug" ActiveTab="code" SelectedBranch="@Branch">
+    @if (!loading && !canWrite)
+    {
+        <div class="alert alert-warning">
+            <i class="fa-duotone fa-lock me-1"></i> You do not have write access to this repository.
+        </div>
+    }
+    else if (fileContent != null)
+    {
+        <!-- Breadcrumb -->
+        <nav aria-label="breadcrumb" class="mb-3">
+            <ol class="breadcrumb">
+                <li class="breadcrumb-item">
+                    <a href="/@Owner/@RepoSlug/tree/@Branch">@RepoSlug</a>
+                </li>
+                @{
+                    var segments = (Path ?? "").Trim('/').Split('/');
+                    var accumulated = "";
+                    for (var i = 0; i < segments.Length; i++)
+                    {
+                        accumulated = string.IsNullOrEmpty(accumulated) ? segments[i] : $"{accumulated}/{segments[i]}";
+                        var isLast = i == segments.Length - 1;
+                        if (isLast)
+                        {
+                            <li class="breadcrumb-item active">@segments[i]</li>
+                        }
+                        else
+                        {
+                            var linkPath = accumulated;
+                            <li class="breadcrumb-item">
+                                <a href="/@Owner/@RepoSlug/tree/@Branch/@linkPath">@segments[i]</a>
+                            </li>
+                        }
+                    }
+                }
+            </ol>
+        </nav>
+
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span>
+                    <i class="fa-duotone fa-pen-to-square me-1"></i>
+                    Editing <strong>@GetFileName()</strong>
+                </span>
+                @if (IsMarkdown)
+                {
+                    <div class="btn-group btn-group-sm">
+                        <button type="button" class="btn @(!showPreview ? "btn-primary" : "btn-outline-secondary")"
+                                @onclick="() => showPreview = false">
+                            <i class="fa-duotone fa-code me-1"></i> Edit
+                        </button>
+                        <button type="button" class="btn @(showPreview ? "btn-primary" : "btn-outline-secondary")"
+                                @onclick="() => showPreview = true">
+                            <i class="fa-duotone fa-eye me-1"></i> Preview
+                        </button>
+                    </div>
+                }
+            </div>
+
+            @if (showPreview && IsMarkdown)
+            {
+                <div class="card-body">
+                    <MarkdownView Content="@editedContent" Owner="@Owner" RepoSlug="@RepoSlug" Branch="@Branch" FilePath="@Path" />
+                </div>
+            }
+            else
+            {
+                <div class="dg-editor-wrap">
+                    <textarea class="dg-editor" @bind="editedContent" @bind:event="oninput" spellcheck="false"></textarea>
+                </div>
+            }
+        </div>
+
+        <!-- Commit form -->
+        <div class="card mt-3">
+            <div class="card-header">
+                <i class="fa-duotone fa-code-commit me-1"></i> Commit changes
+            </div>
+            <div class="card-body">
+                <div class="mb-3">
+                    <input type="text" class="form-control" placeholder="@defaultMessage"
+                           @bind="commitMessage" @bind:event="oninput" />
+                </div>
+                <div class="d-flex gap-2">
+                    <button type="button" class="btn btn-success" @onclick="SaveAsync" disabled="@saving">
+                        @if (saving)
+                        {
+                            <span class="spinner-border spinner-border-sm me-1"></span>
+                        }
+                        <i class="fa-duotone fa-check me-1"></i> Commit changes
+                    </button>
+                    <a href="/@Owner/@RepoSlug/blob/@Branch/@Path" class="btn btn-outline-secondary">
+                        Cancel
+                    </a>
+                </div>
+                @if (errorMessage != null)
+                {
+                    <div class="alert alert-danger mt-3 mb-0">@errorMessage</div>
+                }
+            </div>
+        </div>
+    }
+    else if (!loading)
+    {
+        <div class="text-center py-4 text-muted">
+            <p>File not found.</p>
+        </div>
+    }
+</RepositoryLayout>
+
+@code {
+    [Parameter] public string Owner { get; set; } = "";
+    [Parameter] public string RepoSlug { get; set; } = "";
+    [Parameter] public string Branch { get; set; } = "main";
+    [Parameter] public string? Path { get; set; }
+
+    [CascadingParameter(Name = "UserId")] string UserId { get; set; } = "";
+    [CascadingParameter(Name = "UserName")] string UserName { get; set; } = "";
+
+    private FileContent? fileContent;
+    private string editedContent = "";
+    private string commitMessage = "";
+    private string defaultMessage = "";
+    private bool loading = true;
+    private bool saving;
+    private bool canWrite;
+    private bool showPreview;
+    private string? errorMessage;
+
+    private bool IsMarkdown => GetFileName().EndsWith(".md", StringComparison.OrdinalIgnoreCase);
+
+    protected override async Task OnParametersSetAsync()
+    {
+        loading = true;
+        errorMessage = null;
+        try
+        {
+            var repo = await RepoService.GetRepositoryBySlugAsync(Owner, RepoSlug);
+            if (repo == null) { loading = false; return; }
+
+            if (!string.IsNullOrEmpty(UserId))
+                canWrite = await PermissionService.CanWriteAsync(UserId, repo);
+
+            var commitSha = await BrowseService.ResolveRefAsync(repo.id, Branch);
+            if (commitSha == null) { loading = false; return; }
+
+            var browseResult = await BrowseService.GetTreeAtPathAsync(repo.id, commitSha, Path ?? "");
+            if (browseResult is { IsFile: true, FileSha: not null })
+            {
+                fileContent = await BrowseService.GetFileContentAsync(repo.id, browseResult.FileSha);
+                editedContent = fileContent?.Text ?? "";
+                defaultMessage = $"Update {GetFileName()}";
+            }
+        }
+        catch (Exception ex)
+        {
+            errorMessage = ex.Message;
+        }
+        loading = false;
+    }
+
+    private async Task SaveAsync()
+    {
+        if (string.IsNullOrEmpty(Path)) return;
+
+        saving = true;
+        errorMessage = null;
+        try
+        {
+            var repo = await RepoService.GetRepositoryBySlugAsync(Owner, RepoSlug);
+            if (repo == null) { errorMessage = "Repository not found."; return; }
+
+            var message = string.IsNullOrWhiteSpace(commitMessage) ? defaultMessage : commitMessage;
+            await FileWriteService.WriteFileAsync(repo, Branch, Path, editedContent, message, UserName);
+
+            Nav.NavigateTo($"/{Owner}/{RepoSlug}/blob/{Branch}/{Path}");
+        }
+        catch (Exception ex)
+        {
+            errorMessage = ex.Message;
+        }
+        finally
+        {
+            saving = false;
+        }
+    }
+
+    private string GetFileName() => (Path ?? "").Split('/').LastOrDefault() ?? "";
+}

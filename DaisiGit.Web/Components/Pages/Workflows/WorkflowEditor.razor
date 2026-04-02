@@ -2,6 +2,7 @@
 @page "/{Owner}/{RepoSlug}/workflows/edit/{WorkflowId}"
 @inject WorkflowService WorkflowService
 @inject RepositoryService RepoService
+@inject SecretService SecretService
 @inject NavigationManager Nav
 
 <PageTitle>@(isNew ? "New Workflow" : "Edit Workflow") - @Owner/@RepoSlug - Daisi Git</PageTitle>
@@ -137,146 +138,208 @@
             </div>
         </div>
 
-        <!-- Step editor panel -->
-        @if (selectedStepIndex >= 0 && selectedStepIndex < workflow.Steps.Count)
-        {
-            var step = workflow.Steps[selectedStepIndex];
-            <div class="card mt-3">
-                <div class="card-header d-flex justify-content-between align-items-center">
-                    <strong>Step @(selectedStepIndex + 1): @FormatStepType(step.StepType)</strong>
-                    <button class="btn btn-sm btn-outline-secondary" @onclick="() => selectedStepIndex = -1">
-                        <i class="fa-solid fa-xmark"></i>
-                    </button>
-                </div>
-                <div class="card-body">
-                    <div class="row g-3">
-                        <div class="col-md-6">
-                            <label class="form-label">Step name</label>
-                            <input type="text" class="form-control" @bind="step.Name" placeholder="Optional label" />
-                        </div>
-                        <div class="col-md-6">
-                            <label class="form-label">Type</label>
-                            <select class="form-select" @bind="stepTypeStr">
-                                <option value="HttpRequest">HTTP Request</option>
-                                <option value="AddComment">Add Comment</option>
-                                <option value="SetLabel">Set Label</option>
-                                <option value="RemoveLabel">Remove Label</option>
-                                <option value="CloseIssue">Close Issue</option>
-                                <option value="ClosePullRequest">Close Pull Request</option>
-                                <option value="RequireReview">Require Review</option>
-                                <option value="Wait">Wait</option>
-                            </select>
-                        </div>
-                    </div>
-
-                    <hr />
-
-                    @switch (step.StepType)
-                    {
-                        case WorkflowStepType.HttpRequest:
-                            <div class="row g-3">
-                                <div class="col-md-3">
-                                    <label class="form-label">Method</label>
-                                    <select class="form-select" @bind="step.HttpMethod">
-                                        <option>GET</option>
-                                        <option>POST</option>
-                                        <option>PUT</option>
-                                        <option>PATCH</option>
-                                        <option>DELETE</option>
-                                    </select>
-                                </div>
-                                <div class="col-md-9">
-                                    <label class="form-label">URL</label>
-                                    <input type="text" class="form-control" @bind="step.HttpUrl" placeholder="https://hooks.example.com/webhook" />
-                                </div>
-                                @if (step.HttpMethod is "POST" or "PUT" or "PATCH")
-                                {
-                                    <div class="col-12">
-                                        <label class="form-label">Body</label>
-                                        <textarea class="form-control font-monospace" rows="4" @bind="step.HttpBody"
-                                                  placeholder='{"repo": "{{repo.name}}", "branch": "{{push.branch}}"}'></textarea>
-                                        <div class="form-text">Supports merge fields: <code>@("{{repo.name}}")</code>, <code>@("{{pr.title}}")</code>, <code>@("{{actor.name}}")</code>, etc.</div>
-                                    </div>
-                                }
-                            </div>
-                            break;
-
-                        case WorkflowStepType.AddComment:
-                            <div>
-                                <label class="form-label">Comment body</label>
-                                <textarea class="form-control" rows="3" @bind="step.CommentBody"
-                                          placeholder="Build triggered for {{push.branch}}"></textarea>
-                                <div class="form-text">Added to the PR or issue that triggered this workflow. Supports merge fields.</div>
-                            </div>
-                            break;
-
-                        case WorkflowStepType.SetLabel:
-                        case WorkflowStepType.RemoveLabel:
-                            <div>
-                                <label class="form-label">Label name</label>
-                                <input type="text" class="form-control" @bind="step.LabelName" placeholder="ready-to-merge" />
-                            </div>
-                            break;
-
-                        case WorkflowStepType.CloseIssue:
-                            <div class="text-muted">Closes the issue that triggered this workflow. No configuration needed.</div>
-                            break;
-
-                        case WorkflowStepType.ClosePullRequest:
-                            <div class="text-muted">Closes the pull request that triggered this workflow. No configuration needed.</div>
-                            break;
-
-                        case WorkflowStepType.RequireReview:
-                            <div class="col-md-4">
-                                <label class="form-label">Required approvals</label>
-                                <input type="number" class="form-control" @bind="step.RequiredApprovals" min="1" max="10" />
-                            </div>
-                            break;
-
-                        case WorkflowStepType.Wait:
-                            <div class="row g-3">
-                                <div class="col-md-4">
-                                    <label class="form-label">Days</label>
-                                    <input type="number" class="form-control" @bind="step.WaitDays" min="0" />
-                                </div>
-                                <div class="col-md-4">
-                                    <label class="form-label">Hours</label>
-                                    <input type="number" class="form-control" @bind="step.WaitHours" min="0" max="23" />
-                                </div>
-                                <div class="col-md-4">
-                                    <label class="form-label">Minutes</label>
-                                    <input type="number" class="form-control" @bind="step.WaitMinutes" min="0" max="59" />
-                                </div>
-                            </div>
-                            break;
-                    }
-                </div>
-            </div>
-        }
-
-        <!-- Add step menu (shown when clicking +) -->
+        <!-- Add step dialog -->
         @if (showAddStepMenu)
         {
-            <div class="card mt-3">
-                <div class="card-header">
-                    <strong>Add a step</strong>
-                </div>
-                <div class="card-body">
-                    <div class="row g-2">
-                        <div class="col-md-4"><button class="btn btn-outline-primary w-100" @onclick='() => AddStep(WorkflowStepType.HttpRequest, "HTTP Request")'><i class="fa-duotone fa-globe me-1"></i> HTTP Request</button></div>
-                        <div class="col-md-4"><button class="btn btn-outline-primary w-100" @onclick='() => AddStep(WorkflowStepType.AddComment, "Add Comment")'><i class="fa-duotone fa-comment me-1"></i> Add Comment</button></div>
-                        <div class="col-md-4"><button class="btn btn-outline-primary w-100" @onclick='() => AddStep(WorkflowStepType.SetLabel, "Set Label")'><i class="fa-duotone fa-tag me-1"></i> Set Label</button></div>
-                        <div class="col-md-4"><button class="btn btn-outline-primary w-100" @onclick='() => AddStep(WorkflowStepType.RemoveLabel, "Remove Label")'><i class="fa-duotone fa-tag me-1"></i> Remove Label</button></div>
-                        <div class="col-md-4"><button class="btn btn-outline-primary w-100" @onclick='() => AddStep(WorkflowStepType.CloseIssue, "Close Issue")'><i class="fa-duotone fa-circle-xmark me-1"></i> Close Issue</button></div>
-                        <div class="col-md-4"><button class="btn btn-outline-primary w-100" @onclick='() => AddStep(WorkflowStepType.ClosePullRequest, "Close PR")'><i class="fa-duotone fa-code-pull-request me-1"></i> Close PR</button></div>
-                        <div class="col-md-4"><button class="btn btn-outline-primary w-100" @onclick='() => AddStep(WorkflowStepType.RequireReview, "Require Review")'><i class="fa-duotone fa-check-double me-1"></i> Require Review</button></div>
-                        <div class="col-md-4"><button class="btn btn-outline-primary w-100" @onclick='() => AddStep(WorkflowStepType.Wait, "Wait")'><i class="fa-duotone fa-clock me-1"></i> Wait</button></div>
+            <div class="modal d-block" tabindex="-1" style="background: rgba(0,0,0,0.4);" @onclick="() => showAddStepMenu = false">
+                <div class="modal-dialog modal-dialog-centered modal-lg" @onclick:stopPropagation="true">
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <h5 class="modal-title"><i class="fa-duotone fa-plus-circle me-1"></i> Add a step</h5>
+                            <button type="button" class="btn-close" @onclick="() => showAddStepMenu = false"></button>
+                        </div>
+                        <div class="modal-body">
+                            <input type="text" class="form-control mb-3" placeholder="Search steps..."
+                                   @bind="stepSearchQuery" @bind:event="oninput" />
+
+                            @foreach (var group in StepCatalog.Where(g => g.Steps.Any(s => MatchesSearch(s))))
+                            {
+                                <h6 class="text-muted mt-2 mb-2">@group.GroupName</h6>
+                                <div class="row g-2 mb-3">
+                                    @foreach (var entry in group.Steps.Where(MatchesSearch))
+                                    {
+                                        <div class="col-md-6">
+                                            <button class="btn btn-outline-secondary w-100 text-start wf-step-pick"
+                                                    @onclick="() => AddStep(entry.Type, entry.Name)">
+                                                <i class="@entry.Icon me-2 wf-step-pick-icon" style="color: @entry.Color;"></i>
+                                                <div class="d-inline-block align-middle">
+                                                    <div class="fw-semibold">@entry.Name</div>
+                                                    <div class="text-muted small">@entry.Description</div>
+                                                </div>
+                                            </button>
+                                        </div>
+                                    }
+                                </div>
+                            }
+                        </div>
                     </div>
                 </div>
             </div>
         }
     }
 </RepositoryLayout>
+
+<!-- Step editor aside -->
+@if (selectedStepIndex >= 0 && selectedStepIndex < workflow.Steps.Count)
+{
+    var step = workflow.Steps[selectedStepIndex];
+    var catalogEntry = StepCatalog.SelectMany(g => g.Steps).FirstOrDefault(e => e.Type == step.StepType);
+
+    <div class="wf-aside-backdrop" @onclick="() => selectedStepIndex = -1"></div>
+    <aside class="wf-aside">
+        <div class="wf-aside-header">
+            <div class="d-flex align-items-center gap-2">
+                @if (catalogEntry != null)
+                {
+                    <i class="@catalogEntry.Icon" style="color: @catalogEntry.Color; font-size: 1.2rem;"></i>
+                }
+                <div>
+                    <div class="fw-semibold">@FormatStepType(step.StepType)</div>
+                    @if (catalogEntry != null)
+                    {
+                        <div class="text-muted small">@catalogEntry.Description</div>
+                    }
+                </div>
+            </div>
+            <button class="btn btn-sm btn-outline-secondary" @onclick="() => selectedStepIndex = -1">
+                <i class="fa-solid fa-xmark"></i>
+            </button>
+        </div>
+
+        <div class="wf-aside-body">
+            <div class="mb-3">
+                <label class="form-label">Step name @InfoTip("A display label shown on the workflow canvas. e.g. \"Notify Slack\", \"Deploy staging\"")</label>
+                <input type="text" class="form-control" @bind="step.Name" placeholder="Optional label" />
+            </div>
+
+            @switch (step.StepType)
+            {
+                case WorkflowStepType.HttpRequest:
+                    <div class="mb-3">
+                        <label class="form-label">Method @InfoTip("HTTP verb. GET for read, POST/PUT/PATCH for sending data, DELETE for removal.")</label>
+                        <select class="form-select" @bind="step.HttpMethod">
+                            <option>GET</option>
+                            <option>POST</option>
+                            <option>PUT</option>
+                            <option>PATCH</option>
+                            <option>DELETE</option>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">URL @InfoTip("Full URL including https://. Merge fields allowed: https://hooks.slack.com/{{secrets.SLACK_PATH}}")</label>
+                        <input type="text" class="form-control" @bind="step.HttpUrl" placeholder="https://hooks.example.com/webhook" />
+                    </div>
+                    @if (step.HttpMethod is "POST" or "PUT" or "PATCH")
+                    {
+                        <div class="mb-3">
+                            <label class="form-label">Body @InfoTip("JSON or text payload. Use merge fields like {{repo.name}}, {{push.branch}}, {{pr.title}}, {{actor.name}}, {{secrets.KEY}}")</label>
+                            <textarea class="form-control font-monospace" rows="4" @bind="step.HttpBody"
+                                      placeholder='{"repo": "{{repo.name}}", "branch": "{{push.branch}}"}'></textarea>
+                        </div>
+                    }
+                    break;
+
+                case WorkflowStepType.AddComment:
+                    <div class="mb-3">
+                        <label class="form-label">Comment body @InfoTip("Markdown text posted on the triggering PR or issue. Use merge fields: {{push.branch}}, {{actor.name}}, {{repo.name}}")</label>
+                        <textarea class="form-control" rows="4" @bind="step.CommentBody"
+                                  placeholder="Build triggered for {{push.branch}}"></textarea>
+                    </div>
+                    break;
+
+                case WorkflowStepType.SetLabel:
+                case WorkflowStepType.RemoveLabel:
+                    <div class="mb-3">
+                        <label class="form-label">Label name @InfoTip("Exact label text, case-sensitive. e.g. \"ready-to-merge\", \"bug\", \"needs-review\"")</label>
+                        <input type="text" class="form-control" @bind="step.LabelName" placeholder="ready-to-merge" />
+                    </div>
+                    break;
+
+                case WorkflowStepType.CloseIssue:
+                    <div class="text-muted">Closes the issue that triggered this workflow. No configuration needed.</div>
+                    break;
+
+                case WorkflowStepType.ClosePullRequest:
+                    <div class="text-muted">Closes the pull request that triggered this workflow. No configuration needed.</div>
+                    break;
+
+                case WorkflowStepType.RequireReview:
+                    <div class="mb-3">
+                        <label class="form-label">Required approvals @InfoTip("Number of approved reviews needed (1-10). Workflow fails this step if the PR has fewer approvals.")</label>
+                        <input type="number" class="form-control" @bind="step.RequiredApprovals" min="1" max="10" />
+                    </div>
+                    break;
+
+                case WorkflowStepType.Wait:
+                    <div class="mb-3">
+                        <label class="form-label">Days @InfoTip("Whole number of days to pause. The workflow resumes automatically after the total wait time elapses.")</label>
+                        <input type="number" class="form-control" @bind="step.WaitDays" min="0" />
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Hours @InfoTip("0-23. Combined with days and minutes for total wait duration.")</label>
+                        <input type="number" class="form-control" @bind="step.WaitHours" min="0" max="23" />
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Minutes @InfoTip("0-59. Minimum total wait is 1 minute if all fields are zero.")</label>
+                        <input type="number" class="form-control" @bind="step.WaitMinutes" min="0" max="59" />
+                    </div>
+                    break;
+
+                case WorkflowStepType.DeployAzureWebApp:
+                    <div class="mb-3">
+                        <label class="form-label">Azure App Name @InfoTip("The App Service resource name from Azure Portal. e.g. \"my-app\" for my-app.azurewebsites.net. Merge fields allowed.")</label>
+                        <input type="text" class="form-control" @bind="step.AzureAppName" placeholder="my-web-app" />
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Deploy path @InfoTip("Optional subdirectory within the repo to deploy. e.g. \"src/web\" or \"publish\". Leave empty to deploy the entire repository.")</label>
+                        <input type="text" class="form-control" @bind="step.AzureDeployPath" placeholder="src/web" />
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Username secret @InfoTip("Select the secret containing the deployment username. This is the $ username from your Azure publish profile (Azure Portal > App Service > Deployment Center > Manage publish profile).")</label>
+                        @if (repoSecrets.Count > 0)
+                        {
+                            <select class="form-select" @bind="step.AzureUsernameSecret">
+                                <option value="">-- select a secret --</option>
+                                @foreach (var s in repoSecrets)
+                                {
+                                    <option value="@s">@s</option>
+                                }
+                            </select>
+                        }
+                        else
+                        {
+                            <input type="text" class="form-control" @bind="step.AzureUsernameSecret" placeholder="AZURE_DEPLOY_USERNAME" />
+                        }
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Password secret @InfoTip("Select the secret containing the deployment password from your Azure publish profile.")</label>
+                        @if (repoSecrets.Count > 0)
+                        {
+                            <select class="form-select" @bind="step.AzurePasswordSecret">
+                                <option value="">-- select a secret --</option>
+                                @foreach (var s in repoSecrets)
+                                {
+                                    <option value="@s">@s</option>
+                                }
+                            </select>
+                        }
+                        else
+                        {
+                            <input type="text" class="form-control" @bind="step.AzurePasswordSecret" placeholder="AZURE_DEPLOY_PASSWORD" />
+                        }
+                    </div>
+                    @if (repoSecrets.Count == 0)
+                    {
+                        <div class="alert alert-warning mb-0">
+                            <i class="fa-duotone fa-key me-1"></i>
+                            No secrets found. <a href="/@Owner/@RepoSlug/settings">Add secrets</a> for your Azure publish profile credentials first.
+                        </div>
+                    }
+                    break;
+            }
+        </div>
+    </aside>
+}
 
 <style>
     .wf-flow {
@@ -314,6 +377,7 @@
     .wf-node--closeissue, .wf-node--closepullrequest { border-left: 4px solid #dc3545; }
     .wf-node--requirereview { border-left: 4px solid #198754; }
     .wf-node--wait { border-left: 4px solid #6c757d; }
+    .wf-node--deployazurewebapp { border-left: 4px solid #0078d4; }
     .wf-node-delete {
         position: absolute;
         top: -8px;
@@ -343,6 +407,44 @@
     .wf-insert-btn:hover { opacity: 1; }
     .wf-node-icon { font-size: 1rem; }
     .wf-node-label { font-size: 0.85rem; font-weight: 500; }
+    .wf-step-pick { padding: 0.6rem 0.75rem; border-radius: 8px; transition: border-color 0.15s, background 0.15s; }
+    .wf-step-pick:hover { background: var(--bs-primary-bg-subtle); border-color: var(--bs-primary); }
+    .wf-step-pick-icon { font-size: 1.2rem; width: 1.5rem; text-align: center; }
+
+    .wf-aside-backdrop {
+        position: fixed; inset: 0; background: rgba(0,0,0,0.25); z-index: 1040;
+    }
+    .wf-aside {
+        position: fixed; top: 0; right: 0; bottom: 0;
+        width: min(420px, 90vw); z-index: 1050;
+        background: var(--bs-body-bg);
+        border-left: 1px solid var(--bs-border-color);
+        box-shadow: -4px 0 24px rgba(0,0,0,0.1);
+        display: flex; flex-direction: column;
+        animation: wf-slide-in 0.15s ease-out;
+    }
+    @@keyframes wf-slide-in { from { transform: translateX(100%); } to { transform: translateX(0); } }
+    .wf-aside-header {
+        display: flex; justify-content: space-between; align-items: flex-start;
+        padding: 1rem 1.25rem; border-bottom: 1px solid var(--bs-border-color);
+    }
+    .wf-aside-body { padding: 1.25rem; overflow-y: auto; flex: 1; }
+
+    .wf-tip {
+        position: relative; cursor: help; margin-left: 4px;
+        color: var(--bs-secondary); font-size: 0.8rem; vertical-align: middle;
+    }
+    .wf-tip:hover { color: var(--bs-primary); }
+    .wf-tip::after {
+        content: attr(data-tip);
+        position: absolute; bottom: calc(100% + 6px); left: 50%; transform: translateX(-50%);
+        background: var(--bs-dark); color: #fff; font-size: 0.75rem; font-weight: 400;
+        padding: 0.4rem 0.6rem; border-radius: 6px; line-height: 1.4;
+        width: max-content; max-width: 280px; white-space: normal;
+        pointer-events: none; opacity: 0; transition: opacity 0.15s;
+        z-index: 9999; box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+    }
+    .wf-tip:hover::after { opacity: 1; }
 </style>
 
 @code {
@@ -361,23 +463,13 @@
     private bool showAddStepMenu;
     private int insertAtIndex;
     private string branchFilter = "";
+    private List<string> repoSecrets = [];
+    private string stepSearchQuery = "";
 
     private string triggerTypeStr
     {
         get => workflow.TriggerType.ToString();
         set { if (Enum.TryParse<GitTriggerType>(value, out var t)) workflow.TriggerType = t; }
-    }
-
-    private string stepTypeStr
-    {
-        get => selectedStepIndex >= 0 && selectedStepIndex < workflow.Steps.Count
-            ? workflow.Steps[selectedStepIndex].StepType.ToString() : "";
-        set
-        {
-            if (selectedStepIndex >= 0 && selectedStepIndex < workflow.Steps.Count
-                && Enum.TryParse<WorkflowStepType>(value, out var t))
-                workflow.Steps[selectedStepIndex].StepType = t;
-        }
     }
 
     private bool IsPushTrigger => workflow.TriggerType is GitTriggerType.PushToRef
@@ -390,6 +482,8 @@
         try
         {
             repo = await RepoService.GetRepositoryBySlugAsync(Owner, RepoSlug);
+            if (repo != null)
+                try { repoSecrets = await SecretService.ListSecretNamesAsync(repo.id); } catch { }
             if (!isNew && repo != null)
             {
                 var wf = await WorkflowService.GetAsync(WorkflowId!, repo.AccountId);
@@ -422,6 +516,7 @@
     {
         insertAtIndex = index;
         showAddStepMenu = true;
+        stepSearchQuery = "";
         selectedStepIndex = -1;
     }
 
@@ -507,6 +602,7 @@
         WorkflowStepType.ClosePullRequest => "⊘",
         WorkflowStepType.RequireReview => "✔",
         WorkflowStepType.Wait => "⏱",
+        WorkflowStepType.DeployAzureWebApp => "☁",
         WorkflowStepType.Condition => "⑂",
         _ => "•"
     };
@@ -521,6 +617,7 @@
         WorkflowStepType.ClosePullRequest => "Close PR",
         WorkflowStepType.RequireReview => "Require Review",
         WorkflowStepType.Wait => "Wait",
+        WorkflowStepType.DeployAzureWebApp => "Deploy to Azure",
         WorkflowStepType.Condition => "Condition",
         _ => type.ToString()
     };
@@ -538,4 +635,41 @@
         GitTriggerType.ReviewSubmitted => "Review",
         _ => t.ToString()
     };
+
+    private static MarkupString InfoTip(string text) =>
+        new($"<span class=\"wf-tip\" data-tip=\"{System.Net.WebUtility.HtmlEncode(text)}\"><i class=\"fa-duotone fa-circle-info\"></i></span>");
+
+    // ── Step catalog for the Add Step dialog ──
+
+    private record StepEntry(WorkflowStepType Type, string Name, string Description, string Icon, string Color);
+    private record StepGroup(string GroupName, StepEntry[] Steps);
+
+    private bool MatchesSearch(StepEntry entry)
+    {
+        if (string.IsNullOrWhiteSpace(stepSearchQuery)) return true;
+        var q = stepSearchQuery.Trim();
+        return entry.Name.Contains(q, StringComparison.OrdinalIgnoreCase)
+            || entry.Description.Contains(q, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static readonly StepGroup[] StepCatalog =
+    [
+        new("Notifications", [
+            new(WorkflowStepType.AddComment, "Add Comment", "Post a comment on the PR or issue", "fa-duotone fa-comment", "#0d6efd"),
+            new(WorkflowStepType.HttpRequest, "HTTP Request", "Call a webhook or external API", "fa-duotone fa-globe", "#fd7e14"),
+        ]),
+        new("Issues & Pull Requests", [
+            new(WorkflowStepType.SetLabel, "Set Label", "Add a label to the issue or PR", "fa-duotone fa-tag", "#6f42c1"),
+            new(WorkflowStepType.RemoveLabel, "Remove Label", "Remove a label from the issue or PR", "fa-duotone fa-tag-slash", "#6f42c1"),
+            new(WorkflowStepType.CloseIssue, "Close Issue", "Close the issue that triggered this workflow", "fa-duotone fa-circle-xmark", "#dc3545"),
+            new(WorkflowStepType.ClosePullRequest, "Close Pull Request", "Close the PR that triggered this workflow", "fa-duotone fa-code-pull-request-closed", "#dc3545"),
+            new(WorkflowStepType.RequireReview, "Require Review", "Check that the PR has enough approvals", "fa-duotone fa-check-double", "#198754"),
+        ]),
+        new("Deployment", [
+            new(WorkflowStepType.DeployAzureWebApp, "Deploy to Azure Web App", "Zip-deploy repo content to Azure App Service", "fa-duotone fa-cloud-arrow-up", "#0078d4"),
+        ]),
+        new("Flow Control", [
+            new(WorkflowStepType.Wait, "Wait", "Pause the workflow for a set duration", "fa-duotone fa-clock", "#6c757d"),
+        ]),
+    ];
 }

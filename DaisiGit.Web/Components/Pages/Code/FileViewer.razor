@@ -57,6 +57,12 @@
                             </button>
                         </div>
                     }
+                    @if (!fileContent.IsBinary && IsEditable)
+                    {
+                        <a href="/@Owner/@RepoSlug/edit/@Branch/@Path" class="btn btn-sm btn-outline-primary">
+                            <i class="fa-duotone fa-pen-to-square me-1"></i> Edit
+                        </a>
+                    }
                     <span class="text-muted">@FormatFileSize(fileContent.SizeBytes)</span>
                 </div>
             </div>
@@ -71,7 +77,7 @@
             else if (IsMarkdown && showPreview)
             {
                 <div class="card-body">
-                    <MarkdownView Content="@fileContent.Text" />
+                    <MarkdownView Content="@fileContent.Text" Owner="@Owner" RepoSlug="@RepoSlug" Branch="@Branch" FilePath="@Path" />
                 </div>
             }
             else
@@ -117,6 +123,26 @@
     private bool showPreview = true;
 
     private bool IsMarkdown => GetFileName().EndsWith(".md", StringComparison.OrdinalIgnoreCase);
+
+    private static readonly HashSet<string> EditableExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".md", ".txt", ".cs", ".js", ".ts", ".tsx", ".jsx", ".json", ".xml", ".yaml", ".yml",
+        ".html", ".css", ".scss", ".less", ".py", ".rb", ".go", ".rs", ".java", ".c", ".cpp",
+        ".h", ".hpp", ".sh", ".bash", ".ps1", ".psm1", ".toml", ".ini", ".cfg", ".conf",
+        ".gitignore", ".env", ".sql", ".graphql", ".proto", ".razor", ".csproj", ".sln",
+        ".slnx", ".props", ".targets", ".editorconfig", ".dockerfile", ".csv", ".log",
+        ".makefile", ".cmake", ".tf", ".hcl", ".vue", ".svelte", ".astro", ".mdx"
+    };
+
+    private bool IsEditable
+    {
+        get
+        {
+            var name = GetFileName();
+            var ext = System.IO.Path.GetExtension(name);
+            return !string.IsNullOrEmpty(ext) ? EditableExtensions.Contains(ext) : EditableExtensions.Contains("." + name.ToLowerInvariant());
+        }
+    }
 
     private string? errorMessage;
 

@@ -101,9 +101,9 @@ public class CliApp(string[] args)
                     using var client = new DaisiGitClient(server, token);
                     await client.ListRepositoriesAsync();
                 }
-                catch
+                catch (Exception ex)
                 {
-                    Console.Error.WriteLine("Failed to authenticate. Check your server URL and token.");
+                    Console.Error.WriteLine($"Failed to authenticate: {ex.Message}");
                     Environment.ExitCode = 1;
                     return;
                 }

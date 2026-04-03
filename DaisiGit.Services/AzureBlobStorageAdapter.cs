@@ -1,8 +1,7 @@
 using Azure.Storage.Blobs;
 using DaisiGit.Core.Enums;
-using DaisiGit.Services;
 
-namespace DaisiGit.Web.Services;
+namespace DaisiGit.Services;
 
 /// <summary>
 /// Implements git object storage using Azure Blob Storage.

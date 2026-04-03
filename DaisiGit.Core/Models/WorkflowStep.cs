@@ -44,6 +44,16 @@ public class WorkflowStep
     public string? AzureDeployPath { get; set; }
     public string? AzureUsernameSecret { get; set; }
     public string? AzurePasswordSecret { get; set; }
+
+    // ── Checkout ──
+    public string? CheckoutRepo { get; set; }
+    public string? CheckoutBranch { get; set; }
+    public string? CheckoutPath { get; set; }
+
+    // ── RunScript ──
+    public string? ScriptCommand { get; set; }
+    public string? ScriptWorkDir { get; set; }
+    public int? ScriptTimeoutSeconds { get; set; }
 }
 
 /// <summary>

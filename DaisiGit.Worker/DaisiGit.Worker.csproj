@@ -1,20 +1,18 @@
-<Project Sdk="Microsoft.NET.Sdk.Web">
+<Project Sdk="Microsoft.NET.Sdk.Worker">
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <UserSecretsId>daisigit-web-2026</UserSecretsId>
     <AzureCosmosDisableNewtonsoftJsonCheck>true</AzureCosmosDisableNewtonsoftJsonCheck>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="Azure.Storage.Queues" Version="12.22.0" />
-    <PackageReference Include="Markdig" Version="1.1.1" />
-    <PackageReference Include="MudBlazor" Version="8.5.0" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.0-preview.1.25080.5" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\DaisiGit.Services\DaisiGit.Services.csproj" />
-    <ProjectReference Include="..\..\daisi-sdk-dotnet\Daisi.SDK.Web\Daisi.SDK.Web.csproj" />
+    <ProjectReference Include="..\..\daisi-sdk-dotnet\Daisi.SDK\Daisi.SDK.csproj" />
   </ItemGroup>
 </Project>

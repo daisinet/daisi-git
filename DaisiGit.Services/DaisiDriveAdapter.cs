@@ -1,8 +1,7 @@
 using Daisi.SDK.Clients.V1.Orc;
 using DaisiGit.Core.Enums;
-using DaisiGit.Services;
 
-namespace DaisiGit.Web.Services;
+namespace DaisiGit.Services;
 
 /// <summary>
 /// Adapts the Daisi Drive SDK client for git object storage.

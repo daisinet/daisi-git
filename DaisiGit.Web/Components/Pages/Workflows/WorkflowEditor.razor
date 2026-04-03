@@ -285,6 +285,37 @@
                     </div>
                     break;
 
+                case WorkflowStepType.Checkout:
+                    <div class="mb-3">
+                        <label class="form-label">Repository @InfoTip("owner/slug of the repo to check out. Leave empty for the repo that triggered this workflow. e.g. \"myorg/my-sdk\"")</label>
+                        <input type="text" class="form-control" @bind="step.CheckoutRepo" placeholder="Leave empty for triggering repo" />
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Branch @InfoTip("Branch name to check out. Leave empty to use the branch from the trigger event. e.g. \"main\", \"dev\", \"{{push.branch}}\"")</label>
+                        <input type="text" class="form-control" @bind="step.CheckoutBranch" placeholder="Leave empty for trigger branch" />
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Path in workspace @InfoTip("Subdirectory within the workspace to place the files. Use this when checking out multiple repos. e.g. \"sdk\", \"src/deps/my-lib\". Leave empty for workspace root.")</label>
+                        <input type="text" class="form-control" @bind="step.CheckoutPath" placeholder="Leave empty for workspace root" />
+                    </div>
+                    break;
+
+                case WorkflowStepType.RunScript:
+                    <div class="mb-3">
+                        <label class="form-label">Command @InfoTip("Shell command to execute. Runs in bash on Linux, cmd on Windows. e.g. \"dotnet publish -c Release\", \"npm install && npm run build\"")</label>
+                        <textarea class="form-control font-monospace" rows="3" @bind="step.ScriptCommand"
+                                  placeholder="dotnet publish -c Release -o publish"></textarea>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Working directory @InfoTip("Directory relative to the workspace root. e.g. \"src/web\" to run the command inside that folder. Leave empty for workspace root.")</label>
+                        <input type="text" class="form-control" @bind="step.ScriptWorkDir" placeholder="Leave empty for workspace root" />
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Timeout (seconds) @InfoTip("Max seconds before the process is killed. Default 300 (5 min), max 1800 (30 min). Long builds like dotnet publish may need 600+.")</label>
+                        <input type="number" class="form-control" @bind="step.ScriptTimeoutSeconds" min="10" max="1800" placeholder="300" />
+                    </div>
+                    break;
+
                 case WorkflowStepType.DeployAzureWebApp:
                     <div class="mb-3">
                         <label class="form-label">Azure App Name @InfoTip("The App Service resource name from Azure Portal. e.g. \"my-app\" for my-app.azurewebsites.net. Merge fields allowed.")</label>
@@ -378,6 +409,8 @@
     .wf-node--requirereview { border-left: 4px solid #198754; }
     .wf-node--wait { border-left: 4px solid #6c757d; }
     .wf-node--deployazurewebapp { border-left: 4px solid #0078d4; }
+    .wf-node--checkout { border-left: 4px solid #0d6efd; }
+    .wf-node--runscript { border-left: 4px solid #212529; }
     .wf-node-delete {
         position: absolute;
         top: -8px;
@@ -603,6 +636,8 @@
         WorkflowStepType.RequireReview => "✔",
         WorkflowStepType.Wait => "⏱",
         WorkflowStepType.DeployAzureWebApp => "☁",
+        WorkflowStepType.Checkout => "📂",
+        WorkflowStepType.RunScript => "▶",
         WorkflowStepType.Condition => "⑂",
         _ => "•"
     };
@@ -618,6 +653,8 @@
         WorkflowStepType.RequireReview => "Require Review",
         WorkflowStepType.Wait => "Wait",
         WorkflowStepType.DeployAzureWebApp => "Deploy to Azure",
+        WorkflowStepType.Checkout => "Checkout",
+        WorkflowStepType.RunScript => "Run Script",
         WorkflowStepType.Condition => "Condition",
         _ => type.ToString()
     };
@@ -665,8 +702,10 @@
             new(WorkflowStepType.ClosePullRequest, "Close Pull Request", "Close the PR that triggered this workflow", "fa-duotone fa-code-pull-request-closed", "#dc3545"),
             new(WorkflowStepType.RequireReview, "Require Review", "Check that the PR has enough approvals", "fa-duotone fa-check-double", "#198754"),
         ]),
-        new("Deployment", [
-            new(WorkflowStepType.DeployAzureWebApp, "Deploy to Azure Web App", "Zip-deploy repo content to Azure App Service", "fa-duotone fa-cloud-arrow-up", "#0078d4"),
+        new("Build & Deploy", [
+            new(WorkflowStepType.Checkout, "Checkout", "Pull a repo into the build workspace", "fa-duotone fa-folder-arrow-down", "#0d6efd"),
+            new(WorkflowStepType.RunScript, "Run Script", "Execute a shell command in the workspace", "fa-duotone fa-terminal", "#212529"),
+            new(WorkflowStepType.DeployAzureWebApp, "Deploy to Azure Web App", "Zip-deploy workspace or repo to Azure App Service", "fa-duotone fa-cloud-arrow-up", "#0078d4"),
         ]),
         new("Flow Control", [
             new(WorkflowStepType.Wait, "Wait", "Pause the workflow for a set duration", "fa-duotone fa-clock", "#6c757d"),

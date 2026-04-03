@@ -22,6 +22,21 @@ public partial class DaisiGitCosmo
         return response.Resource;
     }
 
+    public async Task<WorkflowExecution?> GetWorkflowExecutionAsync(string id, string accountId)
+    {
+        var container = await GetContainerAsync(WorkflowExecutionsContainerName);
+        try
+        {
+            var response = await container.ReadItemAsync<WorkflowExecution>(id,
+                GetWorkflowExecutionPartitionKey(accountId));
+            return response.Resource;
+        }
+        catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
+        {
+            return null;
+        }
+    }
+
     public async Task<WorkflowExecution> UpdateWorkflowExecutionAsync(WorkflowExecution execution)
     {
         execution.UpdatedUtc = DateTime.UtcNow;
@@ -43,6 +58,29 @@ public partial class DaisiGitCosmo
             "SELECT TOP @limit * FROM c WHERE c.Type = 'WorkflowExecution' AND c.Status = 'Running' AND (c.NextRunAt = null OR c.NextRunAt <= @now)")
             .WithParameter("@limit", limit)
             .WithParameter("@now", now);
+
+        var results = new List<WorkflowExecution>();
+        using var iterator = container.GetItemQueryIterator<WorkflowExecution>(query);
+        while (iterator.HasMoreResults)
+        {
+            var response = await iterator.ReadNextAsync();
+            results.AddRange(response);
+        }
+        return results;
+    }
+
+    /// <summary>
+    /// Gets executions stuck in "Dispatched" status for longer than the specified timeout.
+    /// Used by the watchdog to fail stuck executions.
+    /// </summary>
+    public async Task<List<WorkflowExecution>> GetStuckDispatchedExecutionsAsync(TimeSpan timeout, int limit = 50)
+    {
+        var container = await GetContainerAsync(WorkflowExecutionsContainerName);
+        var cutoff = DateTime.UtcNow - timeout;
+        var query = new QueryDefinition(
+            "SELECT TOP @limit * FROM c WHERE c.Type = 'WorkflowExecution' AND c.Status = 'Dispatched' AND c.UpdatedUtc <= @cutoff")
+            .WithParameter("@limit", limit)
+            .WithParameter("@cutoff", cutoff);
 
         var results = new List<WorkflowExecution>();
         using var iterator = container.GetItemQueryIterator<WorkflowExecution>(query);

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.IO.Compression;
 using System.Net.Http.Headers;
 using System.Text;
@@ -19,7 +20,9 @@ public class WorkflowEngine(
     PullRequestService prService,
     CommentService commentService,
     SecretService secretService,
-    GitObjectStore objectStore)
+    GitObjectStore objectStore,
+    BrowseService browseService,
+    RepositoryService repoService)
 {
     /// <summary>
     /// Processes an execution, injecting secrets and env into the context.
@@ -86,6 +89,12 @@ public class WorkflowEngine(
                         case WorkflowStepType.RequireReview:
                             await ExecuteRequireReview(step, stepResult, execution);
                             break;
+                        case WorkflowStepType.Checkout:
+                            await ExecuteCheckout(step, stepResult, execution);
+                            break;
+                        case WorkflowStepType.RunScript:
+                            await ExecuteRunScript(step, stepResult, execution);
+                            break;
                         case WorkflowStepType.DeployAzureWebApp:
                             await ExecuteDeployAzureWebApp(step, stepResult, execution);
                             break;
@@ -119,6 +128,26 @@ public class WorkflowEngine(
             execution.Error = ex.Message;
             await cosmo.UpdateWorkflowExecutionAsync(execution);
         }
+        finally
+        {
+            CleanupWorkspace(execution);
+        }
+    }
+
+    private static void CleanupWorkspace(WorkflowExecution execution)
+    {
+        if (!string.IsNullOrEmpty(execution.WorkspacePath) && Directory.Exists(execution.WorkspacePath))
+            try { Directory.Delete(execution.WorkspacePath, recursive: true); } catch { }
+    }
+
+    private static string EnsureWorkspace(WorkflowExecution execution)
+    {
+        if (string.IsNullOrEmpty(execution.WorkspacePath))
+        {
+            execution.WorkspacePath = Path.Combine(Path.GetTempPath(), "daisigit-builds", execution.id);
+            Directory.CreateDirectory(execution.WorkspacePath);
+        }
+        return execution.WorkspacePath;
     }
 
     // ── Step executors ──
@@ -276,6 +305,192 @@ public class WorkflowEngine(
         await Task.CompletedTask;
     }
 
+    // ── Checkout ──
+
+    private async Task ExecuteCheckout(WorkflowStep step, WorkflowStepResult result,
+        WorkflowExecution execution)
+    {
+        var workspace = EnsureWorkspace(execution);
+
+        // Determine which repo to check out
+        var repoSlug = WorkflowMergeService.Render(step.CheckoutRepo ?? "", execution.Context);
+        string repoId;
+        if (string.IsNullOrWhiteSpace(repoSlug))
+        {
+            // Default: the repo that triggered the workflow
+            repoId = execution.RepositoryId;
+        }
+        else
+        {
+            // Look up by owner/slug
+            var parts = repoSlug.Split('/', 2);
+            if (parts.Length != 2)
+            {
+                result.Success = false;
+                result.Error = $"Invalid repo format '{repoSlug}'. Expected 'owner/slug'.";
+                return;
+            }
+            var repo = await repoService.GetRepositoryBySlugAsync(parts[0], parts[1]);
+            if (repo == null)
+            {
+                result.Success = false;
+                result.Error = $"Repository '{repoSlug}' not found.";
+                return;
+            }
+            repoId = repo.id;
+        }
+
+        // Determine branch
+        var branch = WorkflowMergeService.Render(step.CheckoutBranch ?? "", execution.Context);
+        if (string.IsNullOrWhiteSpace(branch))
+            branch = execution.Context.GetValueOrDefault("push.branch", "main");
+
+        var commitSha = await browseService.ResolveRefAsync(repoId, branch);
+        if (commitSha == null)
+        {
+            result.Success = false;
+            result.Error = $"Branch '{branch}' not found.";
+            return;
+        }
+
+        var commit = await objectStore.GetObjectAsync(repoId, commitSha) as GitCommit;
+        if (commit == null)
+        {
+            result.Success = false;
+            result.Error = $"Could not read commit {commitSha[..7]}.";
+            return;
+        }
+
+        // Target directory within workspace
+        var checkoutDir = workspace;
+        if (!string.IsNullOrWhiteSpace(step.CheckoutPath))
+        {
+            checkoutDir = Path.Combine(workspace, step.CheckoutPath.Trim('/').Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(checkoutDir);
+        }
+
+        // Write all files from the tree to disk
+        var fileCount = await WriteTreeToDisk(repoId, commit.TreeSha, checkoutDir);
+
+        result.Success = true;
+        result.RenderedBody = $"Checked out {branch} ({commitSha[..7]}) — {fileCount} files to {(string.IsNullOrWhiteSpace(step.CheckoutPath) ? "/" : step.CheckoutPath)}";
+    }
+
+    private async Task<int> WriteTreeToDisk(string repoId, string treeSha, string targetDir)
+    {
+        var tree = await objectStore.GetObjectAsync(repoId, treeSha) as GitTree;
+        if (tree == null) return 0;
+
+        var count = 0;
+        foreach (var entry in tree.Entries)
+        {
+            var entryPath = Path.Combine(targetDir, entry.Name);
+            if (entry.IsTree)
+            {
+                Directory.CreateDirectory(entryPath);
+                count += await WriteTreeToDisk(repoId, entry.Sha, entryPath);
+            }
+            else
+            {
+                var blob = await objectStore.GetObjectAsync(repoId, entry.Sha) as GitBlob;
+                if (blob != null)
+                {
+                    await File.WriteAllBytesAsync(entryPath, blob.Data);
+                    count++;
+                }
+            }
+        }
+        return count;
+    }
+
+    // ── Run Script ──
+
+    private async Task ExecuteRunScript(WorkflowStep step, WorkflowStepResult result,
+        WorkflowExecution execution)
+    {
+        var workspace = EnsureWorkspace(execution);
+        var command = WorkflowMergeService.Render(step.ScriptCommand ?? "", execution.Context);
+        if (string.IsNullOrWhiteSpace(command))
+        {
+            result.Success = false;
+            result.Error = "Script command is required.";
+            return;
+        }
+
+        var workDir = workspace;
+        if (!string.IsNullOrWhiteSpace(step.ScriptWorkDir))
+        {
+            workDir = Path.Combine(workspace, step.ScriptWorkDir.Trim('/').Replace('/', Path.DirectorySeparatorChar));
+            if (!Directory.Exists(workDir))
+            {
+                result.Success = false;
+                result.Error = $"Working directory '{step.ScriptWorkDir}' does not exist in workspace.";
+                return;
+            }
+        }
+
+        var timeout = TimeSpan.FromSeconds(step.ScriptTimeoutSeconds ?? 300);
+        if (timeout > TimeSpan.FromMinutes(30)) timeout = TimeSpan.FromMinutes(30);
+
+        // Determine shell
+        var isWindows = OperatingSystem.IsWindows();
+        var shell = isWindows ? "cmd.exe" : "/bin/bash";
+        var shellArg = isWindows ? $"/c {command}" : $"-c {command}";
+
+        using var process = new Process();
+        process.StartInfo = new ProcessStartInfo
+        {
+            FileName = shell,
+            Arguments = shellArg,
+            WorkingDirectory = workDir,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+
+        // Pass workflow secrets as environment variables
+        foreach (var (key, value) in execution.Context)
+        {
+            if (key.StartsWith("secrets."))
+                process.StartInfo.Environment[key.Replace("secrets.", "SECRET_")] = value;
+            else if (key.StartsWith("env."))
+                process.StartInfo.Environment[key.Replace("env.", "")] = value;
+        }
+
+        var output = new StringBuilder();
+        process.OutputDataReceived += (_, e) => { if (e.Data != null) output.AppendLine(e.Data); };
+        process.ErrorDataReceived += (_, e) => { if (e.Data != null) output.AppendLine(e.Data); };
+
+        process.Start();
+        process.BeginOutputReadLine();
+        process.BeginErrorReadLine();
+
+        using var cts = new CancellationTokenSource(timeout);
+        try
+        {
+            await process.WaitForExitAsync(cts.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            try { process.Kill(entireProcessTree: true); } catch { }
+            result.Success = false;
+            result.Error = $"Script timed out after {timeout.TotalSeconds}s";
+            result.ExitCode = -1;
+            result.ScriptOutput = Truncate(output.ToString(), 8000);
+            return;
+        }
+
+        result.ExitCode = process.ExitCode;
+        result.ScriptOutput = Truncate(output.ToString(), 8000);
+        result.Success = process.ExitCode == 0;
+        if (!result.Success)
+            result.Error = $"Script exited with code {process.ExitCode}";
+    }
+
+    private static string Truncate(string s, int max) =>
+        s.Length <= max ? s : s[..max] + "\n... (truncated)";
+
     // ── Deploy Azure Web App ──
 
     private async Task ExecuteDeployAzureWebApp(WorkflowStep step, WorkflowStepResult result,
@@ -307,46 +522,74 @@ public class WorkflowEngine(
             return;
         }
 
-        // Resolve the commit to deploy
-        var repoId = execution.RepositoryId;
-        var commitSha = execution.Context.GetValueOrDefault("push.commit", "");
-        if (string.IsNullOrEmpty(commitSha))
-        {
-            result.Success = false;
-            result.Error = "No commit SHA in context (push.commit)";
-            return;
-        }
-
-        var commit = await objectStore.GetObjectAsync(repoId, commitSha) as GitCommit;
-        if (commit == null)
-        {
-            result.Success = false;
-            result.Error = $"Could not read commit {commitSha[..7]}";
-            return;
-        }
-
-        // Determine the subtree to deploy
+        // Build ZIP — from workspace (if Checkout+Build ran) or from git objects
+        using var zipStream = new MemoryStream();
         var deployPath = step.AzureDeployPath?.Trim('/');
-        var treeSha = commit.TreeSha;
-        if (!string.IsNullOrEmpty(deployPath))
+
+        if (!string.IsNullOrEmpty(execution.WorkspacePath) && Directory.Exists(execution.WorkspacePath))
         {
-            var subTree = await WalkToSubtree(repoId, treeSha, deployPath);
-            if (subTree == null)
+            // Zip from workspace on disk (built artifacts)
+            var sourceDir = execution.WorkspacePath;
+            if (!string.IsNullOrEmpty(deployPath))
+            {
+                sourceDir = Path.Combine(sourceDir, deployPath.Replace('/', Path.DirectorySeparatorChar));
+                if (!Directory.Exists(sourceDir))
+                {
+                    result.Success = false;
+                    result.Error = $"Deploy path '{deployPath}' not found in workspace";
+                    return;
+                }
+            }
+
+            using (var archive = new ZipArchive(zipStream, ZipArchiveMode.Create, leaveOpen: true))
+            {
+                foreach (var file in Directory.GetFiles(sourceDir, "*", SearchOption.AllDirectories))
+                {
+                    var entryName = Path.GetRelativePath(sourceDir, file).Replace('\\', '/');
+                    archive.CreateEntryFromFile(file, entryName, CompressionLevel.Fastest);
+                }
+            }
+            zipStream.Position = 0;
+        }
+        else
+        {
+            // Zip directly from git objects (no build step)
+            var repoId = execution.RepositoryId;
+            var commitSha = execution.Context.GetValueOrDefault("push.commit", "");
+            if (string.IsNullOrEmpty(commitSha))
             {
                 result.Success = false;
-                result.Error = $"Deploy path '{deployPath}' not found in commit";
+                result.Error = "No commit SHA in context (push.commit). Use a Checkout step for built deployments.";
                 return;
             }
-            treeSha = subTree;
-        }
 
-        // Build ZIP from tree
-        using var zipStream = new MemoryStream();
-        using (var archive = new ZipArchive(zipStream, ZipArchiveMode.Create, leaveOpen: true))
-        {
-            await AddTreeToZip(archive, repoId, treeSha, "");
+            var commit = await objectStore.GetObjectAsync(repoId, commitSha) as GitCommit;
+            if (commit == null)
+            {
+                result.Success = false;
+                result.Error = $"Could not read commit {commitSha[..7]}";
+                return;
+            }
+
+            var treeSha = commit.TreeSha;
+            if (!string.IsNullOrEmpty(deployPath))
+            {
+                var subTree = await WalkToSubtree(repoId, treeSha, deployPath);
+                if (subTree == null)
+                {
+                    result.Success = false;
+                    result.Error = $"Deploy path '{deployPath}' not found in commit";
+                    return;
+                }
+                treeSha = subTree;
+            }
+
+            using (var archive = new ZipArchive(zipStream, ZipArchiveMode.Create, leaveOpen: true))
+            {
+                await AddTreeToZip(archive, repoId, treeSha, "");
+            }
+            zipStream.Position = 0;
         }
-        zipStream.Position = 0;
 
         // Deploy via Kudu ZipDeploy API
         var kuduUrl = $"https://{appName}.scm.azurewebsites.net/api/zipdeploy";

@@ -101,6 +101,14 @@
                                                 {
                                                     <a href="@result.DeployUrl" target="_blank" class="ms-1">@result.DeployUrl</a>
                                                 }
+                                                @if (result.ExitCode.HasValue)
+                                                {
+                                                    <span class="ms-1">exit @result.ExitCode</span>
+                                                }
+                                                @if (!string.IsNullOrEmpty(result.ScriptOutput))
+                                                {
+                                                    <details class="ms-1 d-inline"><summary class="d-inline small">output</summary><pre class="mt-1 p-2 bg-dark text-light rounded small" style="max-height:200px;overflow:auto;">@result.ScriptOutput</pre></details>
+                                                }
                                                 else if (!string.IsNullOrEmpty(result.RenderedBody))
                                                 {
                                                     <code class="ms-1">@Truncate(result.RenderedBody, 80)</code>

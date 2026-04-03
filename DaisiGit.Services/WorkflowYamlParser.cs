@@ -193,6 +193,17 @@ public static class WorkflowYamlParser
                 step.AzureUsernameSecret = with.GetValueOrDefault("username-secret");
                 step.AzurePasswordSecret = with.GetValueOrDefault("password-secret");
                 break;
+            case WorkflowStepType.Checkout:
+                step.CheckoutRepo = with.GetValueOrDefault("repo");
+                step.CheckoutBranch = with.GetValueOrDefault("branch");
+                step.CheckoutPath = with.GetValueOrDefault("path");
+                break;
+            case WorkflowStepType.RunScript:
+                step.ScriptCommand = with.GetValueOrDefault("run") ?? with.GetValueOrDefault("command");
+                step.ScriptWorkDir = with.GetValueOrDefault("working-directory");
+                if (int.TryParse(with.GetValueOrDefault("timeout"), out var secs))
+                    step.ScriptTimeoutSeconds = secs;
+                break;
         }
 
         // Simple condition from `if:`
@@ -215,6 +226,8 @@ public static class WorkflowYamlParser
         "require-review" => WorkflowStepType.RequireReview,
         "wait" => WorkflowStepType.Wait,
         "deploy-azure-webapp" or "deploy-azure" or "azure-deploy" => WorkflowStepType.DeployAzureWebApp,
+        "checkout" or "clone" => WorkflowStepType.Checkout,
+        "run" or "script" or "run-script" or "shell" => WorkflowStepType.RunScript,
         _ => null
     };
 

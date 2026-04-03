@@ -1,0 +1,49 @@
+name: Deploy DaisiGit Worker
+
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout daisi-git
+        uses: actions/checkout@v4
+        with:
+          path: daisi-git
+
+      - name: Checkout daisi-sdk-dotnet
+        uses: actions/checkout@v4
+        with:
+          repository: daisinet/daisi-sdk-dotnet
+          token: ${{ secrets.SDK_PAT }}
+          path: daisi-sdk-dotnet
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Log in to ACR
+        run: az acr login --name ${{ secrets.ACR_NAME }}
+
+      - name: Build and push worker image
+        run: |
+          cd daisi-git
+          docker build -f DaisiGit.Worker/Dockerfile -t ${{ secrets.ACR_NAME }}.azurecr.io/daisigit-worker:${{ github.sha }} -t ${{ secrets.ACR_NAME }}.azurecr.io/daisigit-worker:latest .
+          docker push ${{ secrets.ACR_NAME }}.azurecr.io/daisigit-worker:${{ github.sha }}
+          docker push ${{ secrets.ACR_NAME }}.azurecr.io/daisigit-worker:latest
+
+      - name: Update Container Apps Job image
+        run: |
+          az containerapp job update \
+            --name ${{ secrets.WORKER_JOB_NAME }} \
+            --resource-group ${{ secrets.AZURE_RESOURCE_GROUP }} \
+            --image ${{ secrets.ACR_NAME }}.azurecr.io/daisigit-worker:${{ github.sha }}

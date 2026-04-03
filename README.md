@@ -9,11 +9,14 @@ DaisiGit.Core/              — Git object models, pack format, pkt-line protoco
 DaisiGit.Data/              — Cosmos DB data access (repos, objects, refs, workflows, API keys)
 DaisiGit.Services/          — Business logic (storage, refs, repos, workflows, API keys)
 DaisiGit.Web/               — Blazor Server UI + HTTP smart protocol + REST API endpoints
+DaisiGit.Worker/            — Isolated workflow execution worker (Container Apps Job)
 DaisiGit.SDK/               — Client SDK for programmatic access to the REST API
 DaisiGit.Cli/               — Command-line tool (dg) for repo/issue/PR management
 DaisiGit.Tests/             — Unit tests (82 tests)
 DaisiGit.IntegrationTests/  — Integration tests against live server (24 tests)
 ```
+
+See also: [Workflow Isolation Architecture](docs/workflow-isolation.md)
 
 ## CLI Tool
 
@@ -132,6 +135,12 @@ dotnet user-secrets set "Cosmo:ConnectionString" "<your-cosmos-connection-string
 
 ```bash
 dotnet run --project DaisiGit.Web
+```
+
+To run the isolated workflow worker (optional for local dev):
+
+```bash
+dotnet run --project DaisiGit.Worker
 ```
 
 ### Use

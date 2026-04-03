@@ -29,4 +29,8 @@ public class WorkflowStepResult
 
     // ── DeployAzureWebApp results ──
     public string? DeployUrl { get; set; }
+
+    // ── RunScript results ──
+    public int? ExitCode { get; set; }
+    public string? ScriptOutput { get; set; }
 }

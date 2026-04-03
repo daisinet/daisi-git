@@ -35,7 +35,7 @@ public class WorkflowExecution
     public int CurrentStepIndex { get; set; }
     public int TotalSteps { get; set; }
 
-    /// <summary>"Running", "Completed", "Failed", "Cancelled".</summary>
+    /// <summary>"Running", "Dispatched", "Completed", "Failed", "Cancelled".</summary>
     public string Status { get; set; } = "Running";
 
     public string? Error { get; set; }
@@ -46,4 +46,8 @@ public class WorkflowExecution
     public List<WorkflowStepResult> StepResults { get; set; } = [];
     public DateTime CreatedUtc { get; set; } = DateTime.UtcNow;
     public DateTime? UpdatedUtc { get; set; }
+
+    /// <summary>Temp directory on disk for checkout/build steps. Cleaned up after execution.</summary>
+    [JsonIgnore]
+    public string? WorkspacePath { get; set; }
 }

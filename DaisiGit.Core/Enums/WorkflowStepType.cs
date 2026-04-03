@@ -14,5 +14,7 @@ public enum WorkflowStepType
     RequireReview,
     Condition,
     Wait,
-    DeployAzureWebApp
+    DeployAzureWebApp,
+    Checkout,
+    RunScript
 }

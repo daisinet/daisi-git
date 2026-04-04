@@ -22,7 +22,8 @@ public class WorkflowEngine(
     SecretService secretService,
     GitObjectStore objectStore,
     BrowseService browseService,
-    RepositoryService repoService)
+    RepositoryService repoService,
+    EmailService emailService)
 {
     /// <summary>
     /// Processes an execution, injecting secrets and env into the context.
@@ -68,6 +69,7 @@ public class WorkflowEngine(
                             ExecuteWait(step, execution);
                             stepResult.Success = true;
                             execution.StepResults.Add(stepResult);
+                            InjectStepOutputs(execution.Context, step, stepResult);
                             execution.CurrentStepIndex++;
                             await cosmo.UpdateWorkflowExecutionAsync(execution);
                             return; // pause — background worker resumes later
@@ -98,6 +100,9 @@ public class WorkflowEngine(
                         case WorkflowStepType.DeployAzureWebApp:
                             await ExecuteDeployAzureWebApp(step, stepResult, execution);
                             break;
+                        case WorkflowStepType.SendEmail:
+                            await ExecuteSendEmail(step, stepResult, execution);
+                            break;
                         case WorkflowStepType.Condition:
                             stepResult.Success = true;
                             break;
@@ -115,6 +120,7 @@ public class WorkflowEngine(
                 }
 
                 execution.StepResults.Add(stepResult);
+                InjectStepOutputs(execution.Context, step, stepResult);
                 execution.CurrentStepIndex++;
             }
 
@@ -131,6 +137,43 @@ public class WorkflowEngine(
         finally
         {
             CleanupWorkspace(execution);
+        }
+    }
+
+    /// <summary>
+    /// Injects step outputs into the execution context so downstream steps can
+    /// reference them via merge fields: {{steps.0.response}}, {{steps.MyStep.output}}, etc.
+    /// </summary>
+    private static void InjectStepOutputs(Dictionary<string, string> context,
+        WorkflowStep step, WorkflowStepResult result)
+    {
+        var index = result.StepIndex.ToString();
+        var keys = new List<string> { $"steps.{index}" };
+        if (!string.IsNullOrEmpty(step.Name))
+            keys.Add($"steps.{step.Name}");
+
+        foreach (var prefix in keys)
+        {
+            context[$"{prefix}.success"] = result.Success.ToString().ToLowerInvariant();
+
+            if (result.HttpStatusCode.HasValue)
+                context[$"{prefix}.status"] = result.HttpStatusCode.Value.ToString();
+            if (result.HttpResponseBody != null)
+                context[$"{prefix}.response"] = result.HttpResponseBody;
+
+            if (result.ScriptOutput != null)
+                context[$"{prefix}.output"] = result.ScriptOutput;
+            if (result.ExitCode.HasValue)
+                context[$"{prefix}.exitCode"] = result.ExitCode.Value.ToString();
+
+            if (result.DeployUrl != null)
+                context[$"{prefix}.deployUrl"] = result.DeployUrl;
+
+            if (result.RenderedBody != null)
+                context[$"{prefix}.body"] = result.RenderedBody;
+
+            if (result.Error != null)
+                context[$"{prefix}.error"] = result.Error;
         }
     }
 
@@ -311,23 +354,28 @@ public class WorkflowEngine(
         WorkflowExecution execution)
     {
         var workspace = EnsureWorkspace(execution);
-
-        // Determine which repo to check out
         var repoSlug = WorkflowMergeService.Render(step.CheckoutRepo ?? "", execution.Context);
+
+        // External git URL — clone via git
+        if (IsExternalGitUrl(repoSlug))
+        {
+            await ExecuteExternalCheckout(repoSlug, step, result, execution, workspace);
+            return;
+        }
+
+        // Internal repo — read from object store
         string repoId;
         if (string.IsNullOrWhiteSpace(repoSlug))
         {
-            // Default: the repo that triggered the workflow
             repoId = execution.RepositoryId;
         }
         else
         {
-            // Look up by owner/slug
             var parts = repoSlug.Split('/', 2);
             if (parts.Length != 2)
             {
                 result.Success = false;
-                result.Error = $"Invalid repo format '{repoSlug}'. Expected 'owner/slug'.";
+                result.Error = $"Invalid repo format '{repoSlug}'. Expected 'owner/slug' or a .git URL.";
                 return;
             }
             var repo = await repoService.GetRepositoryBySlugAsync(parts[0], parts[1]);
@@ -340,7 +388,6 @@ public class WorkflowEngine(
             repoId = repo.id;
         }
 
-        // Determine branch
         var branch = WorkflowMergeService.Render(step.CheckoutBranch ?? "", execution.Context);
         if (string.IsNullOrWhiteSpace(branch))
             branch = execution.Context.GetValueOrDefault("push.branch", "main");
@@ -361,7 +408,6 @@ public class WorkflowEngine(
             return;
         }
 
-        // Target directory within workspace
         var checkoutDir = workspace;
         if (!string.IsNullOrWhiteSpace(step.CheckoutPath))
         {
@@ -369,11 +415,95 @@ public class WorkflowEngine(
             Directory.CreateDirectory(checkoutDir);
         }
 
-        // Write all files from the tree to disk
         var fileCount = await WriteTreeToDisk(repoId, commit.TreeSha, checkoutDir);
 
         result.Success = true;
         result.RenderedBody = $"Checked out {branch} ({commitSha[..7]}) — {fileCount} files to {(string.IsNullOrWhiteSpace(step.CheckoutPath) ? "/" : step.CheckoutPath)}";
+    }
+
+    private static bool IsExternalGitUrl(string value) =>
+        !string.IsNullOrWhiteSpace(value) &&
+        (value.StartsWith("https://", StringComparison.OrdinalIgnoreCase) ||
+         value.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
+         value.StartsWith("git://", StringComparison.OrdinalIgnoreCase));
+
+    private async Task ExecuteExternalCheckout(string url, WorkflowStep step, WorkflowStepResult result,
+        WorkflowExecution execution, string workspace)
+    {
+        var branch = WorkflowMergeService.Render(step.CheckoutBranch ?? "", execution.Context);
+
+        var checkoutDir = workspace;
+        if (!string.IsNullOrWhiteSpace(step.CheckoutPath))
+        {
+            checkoutDir = Path.Combine(workspace, step.CheckoutPath.Trim('/').Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(checkoutDir);
+        }
+
+        // Build git clone command
+        var args = "clone --depth 1";
+        if (!string.IsNullOrWhiteSpace(branch))
+            args += $" --branch {branch}";
+        args += $" {url} .";
+
+        var timeout = TimeSpan.FromMinutes(10);
+        using var process = new Process();
+        process.StartInfo = new ProcessStartInfo
+        {
+            FileName = "git",
+            Arguments = args,
+            WorkingDirectory = checkoutDir,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+
+        // Pass secrets as env vars (e.g. for private repo token auth via URL)
+        foreach (var (key, value) in execution.Context)
+        {
+            if (key.StartsWith("secrets."))
+                process.StartInfo.Environment[key.Replace("secrets.", "SECRET_")] = value;
+        }
+
+        var output = new StringBuilder();
+        process.OutputDataReceived += (_, e) => { if (e.Data != null) output.AppendLine(e.Data); };
+        process.ErrorDataReceived += (_, e) => { if (e.Data != null) output.AppendLine(e.Data); };
+
+        process.Start();
+        process.BeginOutputReadLine();
+        process.BeginErrorReadLine();
+
+        using var cts = new CancellationTokenSource(timeout);
+        try
+        {
+            await process.WaitForExitAsync(cts.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            try { process.Kill(entireProcessTree: true); } catch { }
+            result.Success = false;
+            result.Error = "Git clone timed out after 10 minutes";
+            result.ScriptOutput = Truncate(output.ToString(), 8000);
+            return;
+        }
+
+        if (process.ExitCode != 0)
+        {
+            result.Success = false;
+            result.Error = $"Git clone failed with exit code {process.ExitCode}";
+            result.ScriptOutput = Truncate(output.ToString(), 8000);
+            return;
+        }
+
+        // Count files cloned (excluding .git directory)
+        var fileCount = Directory.Exists(checkoutDir)
+            ? Directory.GetFiles(checkoutDir, "*", SearchOption.AllDirectories)
+                .Count(f => !f.Replace('\\', '/').Contains("/.git/"))
+            : 0;
+
+        var branchLabel = string.IsNullOrWhiteSpace(branch) ? "default branch" : branch;
+        result.Success = true;
+        result.RenderedBody = $"Cloned {url} ({branchLabel}) — {fileCount} files to {(string.IsNullOrWhiteSpace(step.CheckoutPath) ? "/" : step.CheckoutPath)}";
     }
 
     private async Task<int> WriteTreeToDisk(string repoId, string treeSha, string targetDir)
@@ -491,6 +621,42 @@ public class WorkflowEngine(
     private static string Truncate(string s, int max) =>
         s.Length <= max ? s : s[..max] + "\n... (truncated)";
 
+    // ── Send Email ──
+
+    private async Task ExecuteSendEmail(WorkflowStep step, WorkflowStepResult result,
+        WorkflowExecution execution)
+    {
+        var to = WorkflowMergeService.Render(step.EmailTo ?? "", execution.Context);
+        var subject = WorkflowMergeService.Render(step.EmailSubject ?? "", execution.Context);
+        var body = WorkflowMergeService.Render(step.EmailBody ?? "", execution.Context);
+
+        if (string.IsNullOrWhiteSpace(to))
+        {
+            result.Success = false;
+            result.Error = "Recipient email address is required.";
+            return;
+        }
+
+        if (!emailService.IsEnabled)
+        {
+            result.Success = false;
+            result.Error = "Email is not configured on this DaisiGit instance.";
+            return;
+        }
+
+        try
+        {
+            await emailService.SendAsync(to, subject, body);
+            result.Success = true;
+            result.RenderedBody = $"Email sent to {to}";
+        }
+        catch (Exception ex)
+        {
+            result.Success = false;
+            result.Error = $"Failed to send email: {ex.Message}";
+        }
+    }
+
     // ── Deploy Azure Web App ──
 
     private async Task ExecuteDeployAzureWebApp(WorkflowStep step, WorkflowStepResult result,
@@ -524,21 +690,26 @@ public class WorkflowEngine(
 
         // Build ZIP — from workspace (if Checkout+Build ran) or from git objects
         using var zipStream = new MemoryStream();
+        var workDir = step.AzureWorkDir?.Trim('/');
         var deployPath = step.AzureDeployPath?.Trim('/');
 
         if (!string.IsNullOrEmpty(execution.WorkspacePath) && Directory.Exists(execution.WorkspacePath))
         {
             // Zip from workspace on disk (built artifacts)
             var sourceDir = execution.WorkspacePath;
+
+            // Resolve working directory first, then deploy path within it
+            if (!string.IsNullOrEmpty(workDir))
+                sourceDir = Path.Combine(sourceDir, workDir.Replace('/', Path.DirectorySeparatorChar));
             if (!string.IsNullOrEmpty(deployPath))
-            {
                 sourceDir = Path.Combine(sourceDir, deployPath.Replace('/', Path.DirectorySeparatorChar));
-                if (!Directory.Exists(sourceDir))
-                {
-                    result.Success = false;
-                    result.Error = $"Deploy path '{deployPath}' not found in workspace";
-                    return;
-                }
+
+            if (!Directory.Exists(sourceDir))
+            {
+                var displayPath = string.Join("/", new[] { workDir, deployPath }.Where(p => !string.IsNullOrEmpty(p)));
+                result.Success = false;
+                result.Error = $"Deploy path '{displayPath}' not found in workspace";
+                return;
             }
 
             using (var archive = new ZipArchive(zipStream, ZipArchiveMode.Create, leaveOpen: true))

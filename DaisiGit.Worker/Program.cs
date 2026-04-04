@@ -43,6 +43,8 @@ builder.Services.AddScoped(sp => new SecretService(
     sp.GetRequiredService<DaisiGitCosmo>(),
     builder.Configuration["Daisi:SecretKey"] ?? "default-secret-key"));
 
+builder.Services.AddSingleton<EmailService>();
+
 // Workflow engine
 builder.Services.AddScoped<WorkflowEngine>();
 

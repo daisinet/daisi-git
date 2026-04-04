@@ -15,7 +15,7 @@ public class WorkflowDispatchService(QueueClient? queueClient, ILogger<WorkflowD
     /// <summary>
     /// Enqueues a workflow execution for processing by the worker.
     /// </summary>
-    public async Task DispatchAsync(string executionId, string accountId)
+    public async Task DispatchAsync(string executionId, string accountId, string runtime = "minimal")
     {
         if (queueClient == null)
             throw new InvalidOperationException("Workflow dispatch queue is not configured");
@@ -23,10 +23,12 @@ public class WorkflowDispatchService(QueueClient? queueClient, ILogger<WorkflowD
         var message = JsonSerializer.Serialize(new
         {
             ExecutionId = executionId,
-            AccountId = accountId
+            AccountId = accountId,
+            Runtime = runtime
         });
 
         await queueClient.SendMessageAsync(message);
-        logger.LogInformation("Dispatched workflow execution {ExecutionId} to queue", executionId);
+        logger.LogInformation("Dispatched workflow execution {ExecutionId} to queue (runtime: {Runtime})",
+            executionId, runtime);
     }
 }

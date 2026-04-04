@@ -13,6 +13,11 @@
         </a>
     </div>
 
+    @if (!string.IsNullOrEmpty(runMessage))
+    {
+        <div class="alert alert-danger alert-dismissible">@runMessage</div>
+    }
+
     @if (loading)
     {
         <div class="text-center py-4">
@@ -59,6 +64,17 @@
                             </div>
                         </div>
                         <div class="d-flex align-items-center gap-2">
+                            <button class="btn btn-sm btn-outline-success" @onclick="() => RunNow(wf)" title="Run now"
+                                    disabled="@(runningWorkflowId == wf.id)">
+                                @if (runningWorkflowId == wf.id)
+                                {
+                                    <span class="spinner-border spinner-border-sm"></span>
+                                }
+                                else
+                                {
+                                    <i class="fa-duotone fa-play"></i>
+                                }
+                            </button>
                             <div class="form-check form-switch mb-0">
                                 <input class="form-check-input" type="checkbox" checked="@wf.IsEnabled"
                                        @onchange="() => ToggleEnabled(wf)" />
@@ -69,7 +85,7 @@
                             <a href="/@Owner/@RepoSlug/workflows/edit/@wf.id" class="btn btn-sm btn-outline-primary" title="Edit">
                                 <i class="fa-duotone fa-pen-to-square"></i>
                             </a>
-                            <button class="btn btn-sm btn-outline-danger" @onclick="() => DeleteWorkflow(wf)" title="Delete">
+                            <button class="btn btn-sm btn-outline-danger" @onclick="() => ConfirmDelete(wf)" title="Delete">
                                 <i class="fa-duotone fa-trash"></i>
                             </button>
                         </div>
@@ -78,16 +94,42 @@
             }
         </div>
     }
+
+    @if (deleteTarget != null)
+    {
+        <div class="modal d-block" tabindex="-1" style="background: rgba(0,0,0,0.4);" @onclick="() => deleteTarget = null">
+            <div class="modal-dialog modal-dialog-centered modal-sm" @onclick:stopPropagation="true">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title">Delete workflow</h5>
+                        <button type="button" class="btn-close" @onclick="() => deleteTarget = null"></button>
+                    </div>
+                    <div class="modal-body">
+                        Are you sure you want to delete <strong>@deleteTarget.Name</strong>? This cannot be undone.
+                    </div>
+                    <div class="modal-footer">
+                        <button class="btn btn-sm btn-outline-secondary" @onclick="() => deleteTarget = null">Cancel</button>
+                        <button class="btn btn-sm btn-danger" @onclick="DeleteConfirmed">Delete</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    }
 </RepositoryLayout>
 
 @code {
     [Parameter] public string Owner { get; set; } = "";
     [Parameter] public string RepoSlug { get; set; } = "";
     [CascadingParameter(Name = "AccountId")] string AccountId { get; set; } = "";
+    [CascadingParameter(Name = "UserId")] string UserId { get; set; } = "";
+    [CascadingParameter(Name = "UserName")] string UserName { get; set; } = "";
 
     private List<GitWorkflow> workflows = [];
     private GitRepository? repo;
     private bool loading = true;
+    private string? runningWorkflowId;
+    private string? runMessage;
+    private GitWorkflow? deleteTarget;
 
     protected override async Task OnParametersSetAsync()
     {
@@ -111,10 +153,33 @@
         await WorkflowService.UpdateAsync(wf);
     }
 
-    private async Task DeleteWorkflow(GitWorkflow wf)
+    private async Task RunNow(GitWorkflow wf)
     {
-        await WorkflowService.DeleteAsync(wf.id, wf.AccountId);
-        workflows.Remove(wf);
+        if (repo == null) return;
+        runningWorkflowId = wf.id;
+        try
+        {
+            var execution = await WorkflowService.RunNowAsync(wf, repo, UserId, UserName);
+            Nav.NavigateTo($"/{Owner}/{RepoSlug}/workflows/{wf.id}/history");
+        }
+        catch (Exception ex)
+        {
+            runMessage = ex.Message;
+        }
+        finally
+        {
+            runningWorkflowId = null;
+        }
+    }
+
+    private void ConfirmDelete(GitWorkflow wf) => deleteTarget = wf;
+
+    private async Task DeleteConfirmed()
+    {
+        if (deleteTarget == null) return;
+        await WorkflowService.DeleteAsync(deleteTarget.id, deleteTarget.AccountId);
+        workflows.Remove(deleteTarget);
+        deleteTarget = null;
     }
 
     private static string FormatTrigger(GitTriggerType trigger) => trigger switch

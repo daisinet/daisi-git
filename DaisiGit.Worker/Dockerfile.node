@@ -1,5 +1,4 @@
-# Minimal runtime — base tools only (git, curl, wget, jq, unzip)
-# This is the default and smallest image.
+# Node.js runtime — includes Node.js 22 LTS with npm.
 
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
@@ -8,7 +7,9 @@ RUN dotnet publish DaisiGit.Worker -c Release -o /app
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    git curl wget jq unzip \
+    git curl wget jq unzip ca-certificates gnupg \
+    && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=build /app .

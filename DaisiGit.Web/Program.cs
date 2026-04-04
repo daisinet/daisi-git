@@ -71,6 +71,8 @@ builder.Services.AddScoped(sp => new SecretService(
     builder.Configuration["Daisi:SecretKey"] ?? "default-secret-key"));
 builder.Services.AddSingleton<AvatarService>();
 
+builder.Services.AddSingleton<EmailService>();
+
 // Workflow services
 builder.Services.AddScoped<GitEventService>();
 builder.Services.AddScoped<WorkflowTriggerService>();

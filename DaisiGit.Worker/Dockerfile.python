@@ -1,5 +1,4 @@
-# Minimal runtime — base tools only (git, curl, wget, jq, unzip)
-# This is the default and smallest image.
+# Python runtime — includes Python 3 with pip.
 
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
@@ -8,7 +7,7 @@ RUN dotnet publish DaisiGit.Worker -c Release -o /app
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    git curl wget jq unzip \
+    git curl wget jq unzip python3 python3-pip python3-venv \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=build /app .

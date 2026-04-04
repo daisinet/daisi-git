@@ -16,31 +16,206 @@ public static class WorkflowYamlParser
         .IgnoreUnmatchedProperties()
         .Build();
 
+    private static readonly ISerializer YamlSerializer = new SerializerBuilder()
+        .WithNamingConvention(CamelCaseNamingConvention.Instance)
+        .ConfigureDefaultValuesHandling(DefaultValuesHandling.OmitNull | DefaultValuesHandling.OmitDefaults)
+        .Build();
+
     /// <summary>
     /// Parses a YAML workflow definition. Returns null if invalid.
     /// </summary>
     public static ParsedFileWorkflow? Parse(string yamlContent)
     {
+        return TryParse(yamlContent, out _, out var result) ? result : null;
+    }
+
+    /// <summary>
+    /// Tries to parse a YAML workflow definition. Returns false with an error message on failure.
+    /// </summary>
+    public static bool TryParse(string yamlContent, out string? error, out ParsedFileWorkflow? result)
+    {
+        error = null;
+        result = null;
+
+        if (string.IsNullOrWhiteSpace(yamlContent))
+        {
+            error = "YAML content is empty.";
+            return false;
+        }
+
         try
         {
             var raw = Deserializer.Deserialize<RawYamlWorkflow>(yamlContent);
-            if (raw == null) return null;
+            if (raw == null)
+            {
+                error = "Could not parse YAML document.";
+                return false;
+            }
 
             var triggers = ParseTriggers(raw.On);
             var steps = ParseJobs(raw.Jobs);
 
-            return new ParsedFileWorkflow
+            result = new ParsedFileWorkflow
             {
                 Name = raw.Name ?? "Unnamed workflow",
                 Triggers = triggers,
                 Steps = steps,
                 Env = raw.Env
             };
+            return true;
         }
-        catch
+        catch (YamlDotNet.Core.YamlException ex)
         {
-            return null;
+            error = $"YAML syntax error at line {ex.Start.Line}: {ex.InnerException?.Message ?? ex.Message}";
+            return false;
         }
+        catch (Exception ex)
+        {
+            error = $"Parse error: {ex.Message}";
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Serializes a visual workflow definition to YAML format.
+    /// </summary>
+    public static string ToYaml(GitWorkflow workflow)
+    {
+        var doc = new Dictionary<string, object?>();
+        doc["name"] = workflow.Name;
+
+        // on: triggers
+        var onSection = new Dictionary<string, object?>();
+        var triggerKey = MapTriggerToEventName(workflow.TriggerType);
+        if (workflow.TriggerFilters is { Count: > 0 } && workflow.TriggerFilters.TryGetValue("branch", out var branches))
+        {
+            var branchList = branches.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries).ToList();
+            onSection[triggerKey] = new Dictionary<string, object> { ["branches"] = branchList };
+        }
+        else
+        {
+            onSection[triggerKey] = null;
+        }
+        doc["on"] = onSection;
+
+        if (workflow.Env is { Count: > 0 })
+            doc["env"] = workflow.Env;
+
+        // jobs
+        var steps = new List<Dictionary<string, object?>>();
+        foreach (var step in workflow.Steps.OrderBy(s => s.Order))
+        {
+            var rawStep = new Dictionary<string, object?>();
+            if (!string.IsNullOrEmpty(step.Name))
+                rawStep["name"] = step.Name;
+
+            rawStep["uses"] = MapStepTypeToUses(step.StepType);
+
+            var with = BuildStepWith(step);
+            if (with.Count > 0)
+                rawStep["with"] = with;
+
+            steps.Add(rawStep);
+        }
+
+        doc["jobs"] = new Dictionary<string, object>
+        {
+            ["build"] = new Dictionary<string, object> { ["steps"] = steps }
+        };
+
+        return YamlSerializer.Serialize(doc);
+    }
+
+    private static string MapTriggerToEventName(GitTriggerType type) => type switch
+    {
+        GitTriggerType.PushToRef => "push",
+        GitTriggerType.BranchCreated => "create",
+        GitTriggerType.BranchDeleted => "delete",
+        GitTriggerType.TagCreated => "create",
+        GitTriggerType.TagDeleted => "delete",
+        GitTriggerType.PullRequestCreated => "pull_request",
+        GitTriggerType.PullRequestUpdated => "pull_request",
+        GitTriggerType.PullRequestClosed => "pull_request",
+        GitTriggerType.PullRequestMerged => "pull_request",
+        GitTriggerType.IssueCreated => "issues",
+        GitTriggerType.IssueClosed => "issues",
+        GitTriggerType.IssueReopened => "issues",
+        GitTriggerType.CommentCreated => "issue_comment",
+        GitTriggerType.ReviewSubmitted => "pull_request_review",
+        GitTriggerType.ReviewDismissed => "pull_request_review",
+        GitTriggerType.RepositoryForked => "fork",
+        _ => "push"
+    };
+
+    private static string MapStepTypeToUses(WorkflowStepType type) => type switch
+    {
+        WorkflowStepType.HttpRequest => "http-request",
+        WorkflowStepType.SetLabel => "set-label",
+        WorkflowStepType.RemoveLabel => "remove-label",
+        WorkflowStepType.CloseIssue => "close-issue",
+        WorkflowStepType.ClosePullRequest => "close-pr",
+        WorkflowStepType.AddComment => "add-comment",
+        WorkflowStepType.RequireReview => "require-review",
+        WorkflowStepType.Wait => "wait",
+        WorkflowStepType.DeployAzureWebApp => "deploy-azure-webapp",
+        WorkflowStepType.Checkout => "checkout",
+        WorkflowStepType.RunScript => "run",
+        WorkflowStepType.SendEmail => "send-email",
+        WorkflowStepType.Condition => "condition",
+        _ => type.ToString().ToLowerInvariant()
+    };
+
+    private static Dictionary<string, string> BuildStepWith(WorkflowStep step)
+    {
+        var with = new Dictionary<string, string>();
+        switch (step.StepType)
+        {
+            case WorkflowStepType.HttpRequest:
+                if (!string.IsNullOrEmpty(step.HttpUrl)) with["url"] = step.HttpUrl;
+                if (!string.IsNullOrEmpty(step.HttpMethod)) with["method"] = step.HttpMethod;
+                if (!string.IsNullOrEmpty(step.HttpBody)) with["body"] = step.HttpBody;
+                if (!string.IsNullOrEmpty(step.HttpContentType) && step.HttpContentType != "application/json")
+                    with["content-type"] = step.HttpContentType;
+                break;
+            case WorkflowStepType.SetLabel:
+            case WorkflowStepType.RemoveLabel:
+                if (!string.IsNullOrEmpty(step.LabelName)) with["label"] = step.LabelName;
+                break;
+            case WorkflowStepType.AddComment:
+                if (!string.IsNullOrEmpty(step.CommentBody)) with["body"] = step.CommentBody;
+                break;
+            case WorkflowStepType.RequireReview:
+                if (step.RequiredApprovals.HasValue) with["approvals"] = step.RequiredApprovals.Value.ToString();
+                break;
+            case WorkflowStepType.Wait:
+                if (step.WaitDays.HasValue) with["days"] = step.WaitDays.Value.ToString();
+                if (step.WaitHours.HasValue) with["hours"] = step.WaitHours.Value.ToString();
+                if (step.WaitMinutes.HasValue) with["minutes"] = step.WaitMinutes.Value.ToString();
+                break;
+            case WorkflowStepType.DeployAzureWebApp:
+                if (!string.IsNullOrEmpty(step.AzureAppName)) with["app-name"] = step.AzureAppName;
+                if (!string.IsNullOrEmpty(step.AzureWorkDir)) with["working-directory"] = step.AzureWorkDir;
+                if (!string.IsNullOrEmpty(step.AzureDeployPath)) with["path"] = step.AzureDeployPath;
+                if (!string.IsNullOrEmpty(step.AzureUsernameSecret)) with["username-secret"] = step.AzureUsernameSecret;
+                if (!string.IsNullOrEmpty(step.AzurePasswordSecret)) with["password-secret"] = step.AzurePasswordSecret;
+                break;
+            case WorkflowStepType.Checkout:
+                if (!string.IsNullOrEmpty(step.CheckoutRepo)) with["repo"] = step.CheckoutRepo;
+                if (!string.IsNullOrEmpty(step.CheckoutBranch)) with["branch"] = step.CheckoutBranch;
+                if (!string.IsNullOrEmpty(step.CheckoutPath)) with["path"] = step.CheckoutPath;
+                break;
+            case WorkflowStepType.RunScript:
+                if (!string.IsNullOrEmpty(step.ScriptCommand)) with["run"] = step.ScriptCommand;
+                if (!string.IsNullOrEmpty(step.ScriptWorkDir)) with["working-directory"] = step.ScriptWorkDir;
+                if (step.ScriptTimeoutSeconds.HasValue) with["timeout"] = step.ScriptTimeoutSeconds.Value.ToString();
+                break;
+            case WorkflowStepType.SendEmail:
+                if (!string.IsNullOrEmpty(step.EmailTo)) with["to"] = step.EmailTo;
+                if (!string.IsNullOrEmpty(step.EmailSubject)) with["subject"] = step.EmailSubject;
+                if (!string.IsNullOrEmpty(step.EmailBody)) with["body"] = step.EmailBody;
+                break;
+        }
+        return with;
     }
 
     /// <summary>
@@ -193,6 +368,22 @@ public static class WorkflowYamlParser
                 step.AzureUsernameSecret = with.GetValueOrDefault("username-secret");
                 step.AzurePasswordSecret = with.GetValueOrDefault("password-secret");
                 break;
+            case WorkflowStepType.Checkout:
+                step.CheckoutRepo = with.GetValueOrDefault("repo");
+                step.CheckoutBranch = with.GetValueOrDefault("branch");
+                step.CheckoutPath = with.GetValueOrDefault("path");
+                break;
+            case WorkflowStepType.RunScript:
+                step.ScriptCommand = with.GetValueOrDefault("run") ?? with.GetValueOrDefault("command");
+                step.ScriptWorkDir = with.GetValueOrDefault("working-directory");
+                if (int.TryParse(with.GetValueOrDefault("timeout"), out var secs))
+                    step.ScriptTimeoutSeconds = secs;
+                break;
+            case WorkflowStepType.SendEmail:
+                step.EmailTo = with.GetValueOrDefault("to");
+                step.EmailSubject = with.GetValueOrDefault("subject");
+                step.EmailBody = with.GetValueOrDefault("body");
+                break;
         }
 
         // Simple condition from `if:`
@@ -215,6 +406,9 @@ public static class WorkflowYamlParser
         "require-review" => WorkflowStepType.RequireReview,
         "wait" => WorkflowStepType.Wait,
         "deploy-azure-webapp" or "deploy-azure" or "azure-deploy" => WorkflowStepType.DeployAzureWebApp,
+        "checkout" or "clone" => WorkflowStepType.Checkout,
+        "run" or "script" or "run-script" or "shell" => WorkflowStepType.RunScript,
+        "send-email" or "email" => WorkflowStepType.SendEmail,
         _ => null
     };
 

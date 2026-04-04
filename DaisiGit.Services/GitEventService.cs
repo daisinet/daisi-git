@@ -7,7 +7,7 @@ namespace DaisiGit.Services;
 /// <summary>
 /// Central event dispatch hub. Persists events for audit, then triggers workflow evaluation.
 /// </summary>
-public class GitEventService(DaisiGitCosmo cosmo, WorkflowTriggerService triggerService)
+public class GitEventService(DaisiGitCosmo cosmo, WorkflowTriggerService triggerService, UserProfileService userProfileService)
 {
     /// <summary>
     /// Emits a git event: persists to Cosmos for audit, then fires workflow triggers.
@@ -16,8 +16,29 @@ public class GitEventService(DaisiGitCosmo cosmo, WorkflowTriggerService trigger
         string accountId, string repositoryId,
         GitTriggerType eventType,
         string actorId, string actorName,
-        Dictionary<string, string> payload)
+        Dictionary<string, string> payload,
+        string? actorEmail = null)
     {
+        // Inject actor fields into the workflow context
+        payload["actor.id"] = actorId;
+        payload["actor.name"] = actorName;
+
+        // Resolve actor email: explicit param > user profile > default
+        if (string.IsNullOrEmpty(actorEmail))
+        {
+            try
+            {
+                var profile = await userProfileService.GetProfileAsync(actorId, accountId);
+                actorEmail = profile?.Email;
+            }
+            catch { }
+        }
+        payload["actor.email"] = actorEmail ?? $"{actorName}@daisi.ai";
+
+        var nameParts = actorName.Split(' ', 2, StringSplitOptions.TrimEntries);
+        payload["actor.firstName"] = nameParts[0];
+        payload["actor.lastName"] = nameParts.Length > 1 ? nameParts[1] : "";
+
         // Persist the event
         var gitEvent = new GitEvent
         {

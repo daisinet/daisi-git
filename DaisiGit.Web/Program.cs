@@ -1,5 +1,6 @@
 using System.Text.Json.Serialization;
 using Azure.Storage.Blobs;
+using Azure.Storage.Queues;
 using DaisiGit.Data;
 using DaisiGit.Services;
 using DaisiGit.Web.Components;
@@ -70,11 +71,36 @@ builder.Services.AddScoped(sp => new SecretService(
     builder.Configuration["Daisi:SecretKey"] ?? "default-secret-key"));
 builder.Services.AddSingleton<AvatarService>();
 
+builder.Services.AddSingleton<EmailService>();
+
 // Workflow services
 builder.Services.AddScoped<GitEventService>();
 builder.Services.AddScoped<WorkflowTriggerService>();
 builder.Services.AddScoped<WorkflowEngine>();
 builder.Services.AddScoped<WorkflowService>();
+
+// Workflow dispatch (queue-based isolation)
+var workflowQueueConnectionString = builder.Configuration["WorkflowQueue:ConnectionString"];
+if (!string.IsNullOrEmpty(workflowQueueConnectionString))
+{
+    var queueClient = new QueueClient(
+        workflowQueueConnectionString,
+        "workflow-executions",
+        new QueueClientOptions { MessageEncoding = QueueMessageEncoding.Base64 });
+    builder.Services.AddSingleton(queueClient);
+    builder.Services.AddScoped<WorkflowDispatchService>(sp =>
+        new WorkflowDispatchService(
+            sp.GetRequiredService<QueueClient>(),
+            sp.GetRequiredService<ILogger<WorkflowDispatchService>>()));
+}
+else
+{
+    // No queue configured — dispatch service will fall back to in-process execution
+    builder.Services.AddScoped<WorkflowDispatchService>(sp =>
+        new WorkflowDispatchService(
+            null,
+            sp.GetRequiredService<ILogger<WorkflowDispatchService>>()));
+}
 builder.Services.AddHostedService<GitWorkflowBackgroundWorker>();
 
 builder.Services.AddScoped<DaisiUserService>();

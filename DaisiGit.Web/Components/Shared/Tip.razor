@@ -1,0 +1,7 @@
+<MudTooltip Text="@Text" Placement="MudBlazor.Placement.Top" Arrow="true">
+    <span class="wf-tip"><i class="fa-duotone fa-circle-info"></i></span>
+</MudTooltip>
+
+@code {
+    [Parameter, EditorRequired] public string Text { get; set; } = "";
+}

@@ -27,6 +27,10 @@ public class GitWorkflow
     /// </summary>
     public Dictionary<string, string>? TriggerFilters { get; set; }
 
+    /// <summary>Container runtime for workflow execution (Minimal, DotNet, Node, Python, Full).</summary>
+    [JsonConverter(typeof(JsonStringEnumConverter))]
+    public WorkflowRuntime Runtime { get; set; } = WorkflowRuntime.Minimal;
+
     /// <summary>Environment variables available to all steps as {{env.KEY}}.</summary>
     public Dictionary<string, string>? Env { get; set; }
 

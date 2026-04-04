@@ -3,6 +3,7 @@
 @inject WorkflowService WorkflowService
 @inject RepositoryService RepoService
 @inject SecretService SecretService
+@inject BrowseService BrowseService
 @inject NavigationManager Nav
 
 <PageTitle>@(isNew ? "New Workflow" : "Edit Workflow") - @Owner/@RepoSlug - Daisi Git</PageTitle>
@@ -18,6 +19,13 @@
         <div class="d-flex justify-content-between align-items-center mb-3">
             <h5 class="mb-0">@(isNew ? "New Workflow" : "Edit Workflow")</h5>
             <div class="d-flex gap-2">
+                @if (!isNew)
+                {
+                    <button class="btn btn-sm btn-outline-success" @onclick="RunNow" disabled="@runningNow">
+                        @if (runningNow) { <span class="spinner-border spinner-border-sm me-1"></span> }
+                        <i class="fa-duotone fa-play me-1"></i> Run Now
+                    </button>
+                }
                 <a href="/@Owner/@RepoSlug/workflows" class="btn btn-sm btn-outline-secondary">Cancel</a>
                 <button class="btn btn-sm btn-primary" @onclick="Save" disabled="@saving">
                     @if (saving) { <span class="spinner-border spinner-border-sm me-1"></span> }
@@ -69,74 +77,147 @@
                 {
                     <div class="row g-3 mt-1">
                         <div class="col-md-6">
-                            <label class="form-label">Branch filter <span class="text-muted">(optional, comma-separated)</span></label>
-                            <input type="text" class="form-control" @bind="branchFilter" placeholder="main, dev" />
+                            <label class="form-label">Branch filter <span class="text-muted">(optional)</span> <Tip Text="Only trigger when pushed to these branches. Select one or more, or leave empty to trigger on all branches." /></label>
+                            <MudAutocomplete T="string" @bind-Value="branchFilterInput"
+                                             SearchFunc="SearchCurrentRepoBranches"
+                                             Placeholder="Type to search branches..."
+                                             Variant="MudBlazor.Variant.Outlined" Margin="MudBlazor.Margin.Dense"
+                                             CoerceValue="true" />
+                            @if (branchFilterList.Count > 0)
+                            {
+                                <div class="d-flex flex-wrap gap-1 mt-2">
+                                    @foreach (var b in branchFilterList)
+                                    {
+                                        <span class="badge bg-primary d-flex align-items-center gap-1">
+                                            @b
+                                            <button type="button" class="btn-close btn-close-white" style="font-size: 0.5rem;"
+                                                    @onclick="() => RemoveBranchFilter(b)"></button>
+                                        </span>
+                                    }
+                                </div>
+                            }
                         </div>
                     </div>
                 }
 
-                <div class="mt-2">
-                    <label class="form-label">Description <span class="text-muted">(optional)</span></label>
-                    <input type="text" class="form-control" @bind="workflow.Description" />
+                <div class="row g-3 mt-1">
+                    <div class="col-md-6">
+                        <label class="form-label">Description <span class="text-muted">(optional)</span></label>
+                        <input type="text" class="form-control" @bind="workflow.Description" />
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label">Runtime <Tip Text="Container environment for script execution. Minimal has basic tools only. Select a language runtime or Full for all runtimes. You can also install additional tools via RunScript on any image." /></label>
+                        <select class="form-select" @bind="runtimeStr">
+                            <option value="Minimal">Minimal (git, curl, jq)</option>
+                            <option value="DotNet">.NET 10 SDK</option>
+                            <option value="Node">Node.js 22 LTS</option>
+                            <option value="Python">Python 3</option>
+                            <option value="Full">Full (all runtimes)</option>
+                        </select>
+                    </div>
                 </div>
             </div>
         </div>
 
-        <!-- Visual workflow designer -->
-        <div class="card">
-            <div class="card-body">
-                <div class="wf-flow">
-                    <!-- Trigger node -->
-                    <div class="wf-node wf-node--trigger">
-                        <i class="fa-duotone fa-bolt me-1"></i> @FormatTriggerShort(workflow.TriggerType)
-                    </div>
-                    <div class="wf-connector"></div>
-
-                    <!-- Insert before first step -->
-                    <div class="wf-insert">
-                        <button class="btn btn-sm btn-outline-secondary wf-insert-btn" @onclick="() => InsertStep(0)">
-                            <i class="fa-solid fa-plus"></i>
-                        </button>
-                    </div>
-
-                    @for (var i = 0; i < workflow.Steps.Count; i++)
+        @if (yamlMode)
+        {
+            <!-- YAML editor -->
+            <div class="card">
+                <div class="card-body" style="position: relative;">
+                    <button class="btn btn-sm btn-outline-primary wf-mode-toggle"
+                            @onclick="ToggleYamlMode">
+                        <i class="fa-duotone fa-drafting-compass me-1"></i> Visual
+                    </button>
+                    @if (!string.IsNullOrEmpty(yamlError))
                     {
-                        var idx = i;
-                        var step = workflow.Steps[i];
-                        <div class="wf-connector"></div>
-                        <div class="wf-node wf-node--@step.StepType.ToString().ToLower() @(selectedStepIndex == idx ? "wf-node--selected" : "")"
-                             @onclick="() => SelectStep(idx)">
-                            <div class="wf-node-icon">@StepIcon(step.StepType)</div>
-                            <div class="wf-node-label">
-                                @if (!string.IsNullOrEmpty(step.Name))
-                                {
-                                    @step.Name
-                                }
-                                else
-                                {
-                                    @FormatStepType(step.StepType)
-                                }
-                            </div>
-                            <button class="wf-node-delete btn btn-sm" @onclick="() => RemoveStep(idx)" @onclick:stopPropagation="true">
-                                <i class="fa-solid fa-xmark"></i>
-                            </button>
+                        <div class="alert alert-danger py-2 mb-2">@yamlError</div>
+                    }
+                    <textarea class="form-control font-monospace" rows="24" @bind="yamlContent"
+                              spellcheck="false" style="tab-size: 2; resize: vertical;"></textarea>
+                </div>
+            </div>
+        }
+        else
+        {
+            <!-- Visual workflow designer -->
+            <div class="card">
+                <div class="card-body" style="position: relative;">
+                    <button class="btn btn-sm btn-outline-secondary wf-mode-toggle"
+                            @onclick="ToggleYamlMode">
+                        <i class="fa-duotone fa-code me-1"></i> Advanced
+                    </button>
+                    <div class="wf-flow">
+                        <!-- Trigger node -->
+                        <div class="wf-node wf-node--trigger">
+                            <i class="fa-duotone fa-bolt me-1"></i> @FormatTriggerShort(workflow.TriggerType)
                         </div>
+                        <div class="wf-connector"></div>
 
+                        <!-- Insert before first step -->
                         <div class="wf-insert">
-                            <button class="btn btn-sm btn-outline-secondary wf-insert-btn" @onclick="() => InsertStep(idx + 1)">
+                            <button class="btn btn-sm btn-outline-secondary wf-insert-btn" @onclick="() => InsertStep(0)">
                                 <i class="fa-solid fa-plus"></i>
                             </button>
                         </div>
-                    }
 
-                    <div class="wf-connector"></div>
-                    <!-- End node -->
-                    <div class="wf-node wf-node--end">
-                        <i class="fa-duotone fa-flag-checkered me-1"></i> End
+                        @for (var i = 0; i < workflow.Steps.Count; i++)
+                        {
+                            var idx = i;
+                            var step = workflow.Steps[i];
+                            <div class="wf-connector"></div>
+                            <div class="wf-node wf-node--@step.StepType.ToString().ToLower() @(selectedStepIndex == idx ? "wf-node--selected" : "")"
+                                 @onclick="() => SelectStep(idx)">
+                                <div class="wf-node-icon">@StepIcon(step.StepType)</div>
+                                <div class="wf-node-label">
+                                    @if (!string.IsNullOrEmpty(step.Name))
+                                    {
+                                        @step.Name
+                                    }
+                                    else
+                                    {
+                                        @FormatStepType(step.StepType)
+                                    }
+                                </div>
+                                <button class="wf-node-delete btn btn-sm" @onclick="() => RemoveStep(idx)" @onclick:stopPropagation="true">
+                                    <i class="fa-solid fa-xmark"></i>
+                                </button>
+                                <button class="wf-node-output btn btn-sm" @onclick="() => ToggleOutputPopover(idx)" @onclick:stopPropagation="true"
+                                        title="Output fields">
+                                    <i class="fa-duotone fa-arrow-right-from-bracket"></i>
+                                </button>
+                                @if (outputPopoverIndex == idx)
+                                {
+                                    <div class="wf-output-popover" @onclick:stopPropagation="true">
+                                        <div class="wf-output-popover-header">
+                                            <span class="fw-semibold small">Output fields</span>
+                                            <button class="btn-close" style="font-size: 0.5rem;" @onclick="() => outputPopoverIndex = -1"></button>
+                                        </div>
+                                        <div class="wf-output-popover-body">
+                                            @foreach (var field in GetOutputFields(step, idx))
+                                            {
+                                                <code class="wf-output-field">@field</code>
+                                            }
+                                        </div>
+                                    </div>
+                                }
+                            </div>
+
+                            <div class="wf-insert">
+                                <button class="btn btn-sm btn-outline-secondary wf-insert-btn" @onclick="() => InsertStep(idx + 1)">
+                                    <i class="fa-solid fa-plus"></i>
+                                </button>
+                            </div>
+                        }
+
+                        <div class="wf-connector"></div>
+                        <!-- End node -->
+                        <div class="wf-node wf-node--end">
+                            <i class="fa-duotone fa-flag-checkered me-1"></i> End
+                        </div>
                     </div>
                 </div>
             </div>
-        </div>
+        }
 
         <!-- Add step dialog -->
         @if (showAddStepMenu)
@@ -148,29 +229,49 @@
                             <h5 class="modal-title"><i class="fa-duotone fa-plus-circle me-1"></i> Add a step</h5>
                             <button type="button" class="btn-close" @onclick="() => showAddStepMenu = false"></button>
                         </div>
-                        <div class="modal-body">
-                            <input type="text" class="form-control mb-3" placeholder="Search steps..."
+                        <div class="modal-body d-flex flex-column" style="max-height: 70vh; overflow: hidden;">
+                            <input type="text" class="form-control mb-3 flex-shrink-0" placeholder="Search steps..."
                                    @bind="stepSearchQuery" @bind:event="oninput" />
 
-                            @foreach (var group in StepCatalog.Where(g => g.Steps.Any(s => MatchesSearch(s))))
-                            {
-                                <h6 class="text-muted mt-2 mb-2">@group.GroupName</h6>
-                                <div class="row g-2 mb-3">
-                                    @foreach (var entry in group.Steps.Where(MatchesSearch))
-                                    {
-                                        <div class="col-md-6">
-                                            <button class="btn btn-outline-secondary w-100 text-start wf-step-pick"
-                                                    @onclick="() => AddStep(entry.Type, entry.Name)">
-                                                <i class="@entry.Icon me-2 wf-step-pick-icon" style="color: @entry.Color;"></i>
-                                                <div class="d-inline-block align-middle">
-                                                    <div class="fw-semibold">@entry.Name</div>
-                                                    <div class="text-muted small">@entry.Description</div>
-                                                </div>
-                                            </button>
-                                        </div>
-                                    }
-                                </div>
-                            }
+                            <!-- Group filter bar -->
+                            <div class="wf-group-bar mb-3 flex-shrink-0">
+                                <button class="wf-group-btn @(selectedGroup == null ? "wf-group-btn--active" : "")"
+                                        @onclick="() => selectedGroup = null">
+                                    <i class="fa-duotone fa-grid-2 wf-group-btn-icon"></i>
+                                    <span class="wf-group-btn-label">All</span>
+                                </button>
+                                @foreach (var group in AvailableGroups)
+                                {
+                                    <button class="wf-group-btn @(selectedGroup == group.GroupName ? "wf-group-btn--active" : "")"
+                                            @onclick="() => selectedGroup = group.GroupName">
+                                        <i class="@group.Icon wf-group-btn-icon" style="color: @group.Color;"></i>
+                                        <span class="wf-group-btn-label">@group.ShortName</span>
+                                    </button>
+                                }
+                            </div>
+
+                            <!-- Scrollable step list -->
+                            <div class="flex-grow-1" style="overflow-y: auto; overflow-x: hidden;">
+                                @foreach (var group in FilteredCatalog)
+                                {
+                                    <h6 class="text-muted mt-2 mb-2">@group.GroupName</h6>
+                                    <div class="row g-2 mb-3">
+                                        @foreach (var entry in group.Steps.Where(MatchesSearch))
+                                        {
+                                            <div class="col-md-6">
+                                                <button class="btn btn-outline-secondary w-100 text-start wf-step-pick d-flex align-items-center"
+                                                        @onclick="() => AddStep(entry.Type, entry.Name)">
+                                                    <i class="@entry.Icon me-2 wf-step-pick-icon flex-shrink-0" style="color: @entry.Color;"></i>
+                                                    <div class="min-width-0">
+                                                        <div class="fw-semibold">@entry.Name</div>
+                                                        <div class="text-muted small">@entry.Description</div>
+                                                    </div>
+                                                </button>
+                                            </div>
+                                        }
+                                    </div>
+                                }
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -208,7 +309,7 @@
 
         <div class="wf-aside-body">
             <div class="mb-3">
-                <label class="form-label">Step name @InfoTip("A display label shown on the workflow canvas. e.g. \"Notify Slack\", \"Deploy staging\"")</label>
+                <label class="form-label">Step name <Tip Text="A display label shown on the workflow canvas. e.g. &quot;Notify Slack&quot;, &quot;Deploy staging&quot;" /></label>
                 <input type="text" class="form-control" @bind="step.Name" placeholder="Optional label" />
             </div>
 
@@ -216,7 +317,7 @@
             {
                 case WorkflowStepType.HttpRequest:
                     <div class="mb-3">
-                        <label class="form-label">Method @InfoTip("HTTP verb. GET for read, POST/PUT/PATCH for sending data, DELETE for removal.")</label>
+                        <label class="form-label">Method</label>
                         <select class="form-select" @bind="step.HttpMethod">
                             <option>GET</option>
                             <option>POST</option>
@@ -226,32 +327,40 @@
                         </select>
                     </div>
                     <div class="mb-3">
-                        <label class="form-label">URL @InfoTip("Full URL including https://. Merge fields allowed: https://hooks.slack.com/{{secrets.SLACK_PATH}}")</label>
-                        <input type="text" class="form-control" @bind="step.HttpUrl" placeholder="https://hooks.example.com/webhook" />
+                        <label class="form-label">URL</label>
+                        <VarBtn InputId="wf-http-url" TriggerType="workflow.TriggerType" StepIndex="selectedStepIndex" Steps="workflow.Steps" Secrets="repoSecrets">
+                            <input id="wf-http-url" type="text" class="form-control" @bind="step.HttpUrl" placeholder="https://hooks.example.com/webhook" />
+                        </VarBtn>
                     </div>
                     @if (step.HttpMethod is "POST" or "PUT" or "PATCH")
                     {
                         <div class="mb-3">
-                            <label class="form-label">Body @InfoTip("JSON or text payload. Use merge fields like {{repo.name}}, {{push.branch}}, {{pr.title}}, {{actor.name}}, {{secrets.KEY}}")</label>
-                            <textarea class="form-control font-monospace" rows="4" @bind="step.HttpBody"
-                                      placeholder='{"repo": "{{repo.name}}", "branch": "{{push.branch}}"}'></textarea>
+                            <label class="form-label">Body</label>
+                            <VarBtn InputId="wf-http-body" TriggerType="workflow.TriggerType" StepIndex="selectedStepIndex" Steps="workflow.Steps" Secrets="repoSecrets">
+                                <textarea id="wf-http-body" class="form-control font-monospace" rows="4" @bind="step.HttpBody"
+                                          placeholder='{"repo": "{{repo.name}}", "branch": "{{push.branch}}"}'></textarea>
+                            </VarBtn>
                         </div>
                     }
                     break;
 
                 case WorkflowStepType.AddComment:
                     <div class="mb-3">
-                        <label class="form-label">Comment body @InfoTip("Markdown text posted on the triggering PR or issue. Use merge fields: {{push.branch}}, {{actor.name}}, {{repo.name}}")</label>
-                        <textarea class="form-control" rows="4" @bind="step.CommentBody"
-                                  placeholder="Build triggered for {{push.branch}}"></textarea>
+                        <label class="form-label">Comment body</label>
+                        <VarBtn InputId="wf-comment-body" TriggerType="workflow.TriggerType" StepIndex="selectedStepIndex" Steps="workflow.Steps" Secrets="repoSecrets">
+                            <textarea id="wf-comment-body" class="form-control" rows="4" @bind="step.CommentBody"
+                                      placeholder="Build triggered for {{push.branch}}"></textarea>
+                        </VarBtn>
                     </div>
                     break;
 
                 case WorkflowStepType.SetLabel:
                 case WorkflowStepType.RemoveLabel:
                     <div class="mb-3">
-                        <label class="form-label">Label name @InfoTip("Exact label text, case-sensitive. e.g. \"ready-to-merge\", \"bug\", \"needs-review\"")</label>
-                        <input type="text" class="form-control" @bind="step.LabelName" placeholder="ready-to-merge" />
+                        <label class="form-label">Label name</label>
+                        <VarBtn InputId="wf-label-name" TriggerType="workflow.TriggerType" StepIndex="selectedStepIndex" Steps="workflow.Steps" Secrets="repoSecrets">
+                            <input id="wf-label-name" type="text" class="form-control" @bind="step.LabelName" placeholder="ready-to-merge" />
+                        </VarBtn>
                     </div>
                     break;
 
@@ -265,37 +374,94 @@
 
                 case WorkflowStepType.RequireReview:
                     <div class="mb-3">
-                        <label class="form-label">Required approvals @InfoTip("Number of approved reviews needed (1-10). Workflow fails this step if the PR has fewer approvals.")</label>
+                        <label class="form-label">Required approvals <Tip Text="Number of approved reviews needed (1-10). Workflow fails this step if the PR has fewer approvals." /></label>
                         <input type="number" class="form-control" @bind="step.RequiredApprovals" min="1" max="10" />
                     </div>
                     break;
 
                 case WorkflowStepType.Wait:
                     <div class="mb-3">
-                        <label class="form-label">Days @InfoTip("Whole number of days to pause. The workflow resumes automatically after the total wait time elapses.")</label>
+                        <label class="form-label">Days <Tip Text="Whole number of days to pause. The workflow resumes automatically after the total wait time elapses." /></label>
                         <input type="number" class="form-control" @bind="step.WaitDays" min="0" />
                     </div>
                     <div class="mb-3">
-                        <label class="form-label">Hours @InfoTip("0-23. Combined with days and minutes for total wait duration.")</label>
+                        <label class="form-label">Hours <Tip Text="0-23. Combined with days and minutes for total wait duration." /></label>
                         <input type="number" class="form-control" @bind="step.WaitHours" min="0" max="23" />
                     </div>
                     <div class="mb-3">
-                        <label class="form-label">Minutes @InfoTip("0-59. Minimum total wait is 1 minute if all fields are zero.")</label>
+                        <label class="form-label">Minutes <Tip Text="0-59. Minimum total wait is 1 minute if all fields are zero." /></label>
                         <input type="number" class="form-control" @bind="step.WaitMinutes" min="0" max="59" />
+                    </div>
+                    break;
+
+                case WorkflowStepType.Checkout:
+                    <div class="mb-3">
+                        <label class="form-label">Repository <Tip Text="Select a DaisiGit repo, or type an external .git URL (https://github.com/org/repo.git). Leave empty for the repo that triggered this workflow." /></label>
+                        <MudAutocomplete T="string" Value="step.CheckoutRepo"
+                                         ValueChanged="@(v => { step.CheckoutRepo = v; OnCheckoutRepoChanged(step); })"
+                                         SearchFunc="SearchRepos"
+                                         Placeholder="owner/slug or https://...git URL"
+                                         Variant="MudBlazor.Variant.Outlined" Margin="MudBlazor.Margin.Dense"
+                                         Clearable="true" CoerceValue="true"
+                                         ResetValueOnEmptyText="true" />
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Branch <Tip Text="Branch name to check out. Leave empty to use the branch from the trigger event. e.g. &quot;main&quot;, &quot;dev&quot;, &quot;{{push.branch}}&quot;" /></label>
+                        @if (IsInternalRepo(step.CheckoutRepo))
+                        {
+                            <MudAutocomplete T="string" @bind-Value="step.CheckoutBranch"
+                                             SearchFunc="@((v, ct) => SearchBranches(v, step.CheckoutRepo, ct))"
+                                             Placeholder="Leave empty for trigger branch"
+                                             Variant="MudBlazor.Variant.Outlined" Margin="MudBlazor.Margin.Dense"
+                                             Clearable="true" CoerceValue="true"
+                                             ResetValueOnEmptyText="true" />
+                        }
+                        else
+                        {
+                            <input type="text" class="form-control" @bind="step.CheckoutBranch" placeholder="Leave empty for trigger branch" />
+                        }
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Path in workspace <Tip Text="Subdirectory within the workspace to place the files. Use this when checking out multiple repos. e.g. &quot;sdk&quot;, &quot;src/deps/my-lib&quot;. Leave empty for workspace root." /></label>
+                        <input type="text" class="form-control" @bind="step.CheckoutPath" placeholder="Leave empty for workspace root" />
+                    </div>
+                    break;
+
+                case WorkflowStepType.RunScript:
+                    <div class="mb-3">
+                        <label class="form-label">Command</label>
+                        <VarBtn InputId="wf-script-cmd" TriggerType="workflow.TriggerType" StepIndex="selectedStepIndex" Steps="workflow.Steps" Secrets="repoSecrets">
+                            <textarea id="wf-script-cmd" class="form-control font-monospace" rows="3" @bind="step.ScriptCommand"
+                                      placeholder="dotnet publish -c Release -o publish"></textarea>
+                        </VarBtn>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Working directory <Tip Text="Directory relative to the workspace root. e.g. &quot;src/web&quot; to run the command inside that folder. Leave empty for workspace root." /></label>
+                        <input type="text" class="form-control" @bind="step.ScriptWorkDir" placeholder="Leave empty for workspace root" />
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Timeout (seconds) <Tip Text="Max seconds before the process is killed. Default 300 (5 min), max 1800 (30 min). Long builds like dotnet publish may need 600+." /></label>
+                        <input type="number" class="form-control" @bind="step.ScriptTimeoutSeconds" min="10" max="1800" placeholder="300" />
                     </div>
                     break;
 
                 case WorkflowStepType.DeployAzureWebApp:
                     <div class="mb-3">
-                        <label class="form-label">Azure App Name @InfoTip("The App Service resource name from Azure Portal. e.g. \"my-app\" for my-app.azurewebsites.net. Merge fields allowed.")</label>
-                        <input type="text" class="form-control" @bind="step.AzureAppName" placeholder="my-web-app" />
+                        <label class="form-label">Azure App Name</label>
+                        <VarBtn InputId="wf-azure-app" TriggerType="workflow.TriggerType" StepIndex="selectedStepIndex" Steps="workflow.Steps" Secrets="repoSecrets">
+                            <input id="wf-azure-app" type="text" class="form-control" @bind="step.AzureAppName" placeholder="my-web-app" />
+                        </VarBtn>
                     </div>
                     <div class="mb-3">
-                        <label class="form-label">Deploy path @InfoTip("Optional subdirectory within the repo to deploy. e.g. \"src/web\" or \"publish\". Leave empty to deploy the entire repository.")</label>
-                        <input type="text" class="form-control" @bind="step.AzureDeployPath" placeholder="src/web" />
+                        <label class="form-label">Working directory <Tip Text="Base directory in the workspace. Use this when your build runs in a subdirectory. e.g. &quot;src/web&quot;. Deploy path is resolved relative to this. Leave empty for workspace root." /></label>
+                        <input type="text" class="form-control" @bind="step.AzureWorkDir" placeholder="Leave empty for workspace root" />
                     </div>
                     <div class="mb-3">
-                        <label class="form-label">Username secret @InfoTip("Select the secret containing the deployment username. This is the $ username from your Azure publish profile (Azure Portal > App Service > Deployment Center > Manage publish profile).")</label>
+                        <label class="form-label">Deploy path <Tip Text="Subdirectory to zip and deploy, relative to working directory. e.g. &quot;publish&quot; or &quot;dist&quot;. Leave empty to deploy the entire working directory." /></label>
+                        <input type="text" class="form-control" @bind="step.AzureDeployPath" placeholder="publish" />
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Username secret <Tip Text="Select the secret containing the deployment username. This is the $ username from your Azure publish profile (Azure Portal > App Service > Deployment Center > Manage publish profile)." /></label>
                         @if (repoSecrets.Count > 0)
                         {
                             <select class="form-select" @bind="step.AzureUsernameSecret">
@@ -312,7 +478,7 @@
                         }
                     </div>
                     <div class="mb-3">
-                        <label class="form-label">Password secret @InfoTip("Select the secret containing the deployment password from your Azure publish profile.")</label>
+                        <label class="form-label">Password secret <Tip Text="Select the secret containing the deployment password from your Azure publish profile." /></label>
                         @if (repoSecrets.Count > 0)
                         {
                             <select class="form-select" @bind="step.AzurePasswordSecret">
@@ -335,6 +501,32 @@
                             No secrets found. <a href="/@Owner/@RepoSlug/settings">Add secrets</a> for your Azure publish profile credentials first.
                         </div>
                     }
+                    break;
+
+                case WorkflowStepType.SendEmail:
+                    <div class="mb-3">
+                        <label class="form-label">To</label>
+                        <VarBtn InputId="wf-email-to" TriggerType="workflow.TriggerType" StepIndex="selectedStepIndex" Steps="workflow.Steps" Secrets="repoSecrets">
+                            <input id="wf-email-to" type="text" class="form-control" @bind="step.EmailTo" placeholder="user@example.com" />
+                        </VarBtn>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Subject</label>
+                        <VarBtn InputId="wf-email-subject" TriggerType="workflow.TriggerType" StepIndex="selectedStepIndex" Steps="workflow.Steps" Secrets="repoSecrets">
+                            <input id="wf-email-subject" type="text" class="form-control" @bind="step.EmailSubject" placeholder="Build completed for {{repo.name}}" />
+                        </VarBtn>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Body</label>
+                        <VarBtn InputId="wf-email-body" TriggerType="workflow.TriggerType" StepIndex="selectedStepIndex" Steps="workflow.Steps" Secrets="repoSecrets">
+                            <textarea id="wf-email-body" class="form-control" rows="5" @bind="step.EmailBody"
+                                      placeholder="Build for {{repo.name}} on branch {{push.branch}} completed successfully."></textarea>
+                        </VarBtn>
+                    </div>
+                    <div class="text-muted small">
+                        <i class="fa-duotone fa-envelope-circle-check me-1"></i>
+                        Emails are sent from Daisi Git (<code>noreply@git.daisi.ai</code>).
+                    </div>
                     break;
             }
         </div>
@@ -378,6 +570,9 @@
     .wf-node--requirereview { border-left: 4px solid #198754; }
     .wf-node--wait { border-left: 4px solid #6c757d; }
     .wf-node--deployazurewebapp { border-left: 4px solid #0078d4; }
+    .wf-node--checkout { border-left: 4px solid #0d6efd; }
+    .wf-node--runscript { border-left: 4px solid #212529; }
+    .wf-node--sendemail { border-left: 4px solid #20c997; }
     .wf-node-delete {
         position: absolute;
         top: -8px;
@@ -394,6 +589,33 @@
         justify-content: center;
     }
     .wf-node:hover .wf-node-delete { display: flex; }
+    .wf-node-delete:hover { background: var(--bs-danger) !important; color: white !important; border-color: var(--bs-danger) !important; opacity: 0.85; }
+    .wf-node-output {
+        position: absolute; bottom: -8px; right: -8px;
+        width: 22px; height: 22px; padding: 0; border-radius: 50%;
+        background: var(--bs-info); color: white; font-size: 0.6rem;
+        display: none; align-items: center; justify-content: center;
+    }
+    .wf-node:hover .wf-node-output { display: flex; }
+    .wf-node-output:hover { background: var(--bs-info) !important; color: white !important; border-color: var(--bs-info) !important; opacity: 0.85; }
+    .wf-output-popover {
+        position: absolute; top: calc(100% + 12px); right: -8px; z-index: 1060;
+        background: var(--bs-body-bg); border: 1px solid var(--bs-border-color);
+        border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+        min-width: 260px; max-width: 340px;
+    }
+    .wf-output-popover-header {
+        display: flex; justify-content: space-between; align-items: center;
+        padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--bs-border-color);
+    }
+    .wf-output-popover-body {
+        padding: 0.5rem 0.75rem; display: flex; flex-direction: column; gap: 0.25rem;
+    }
+    .wf-output-field {
+        display: block; padding: 0.2rem 0.4rem; border-radius: 4px;
+        background: var(--bs-tertiary-bg); font-size: 0.75rem;
+        word-break: break-all; cursor: default;
+    }
     .wf-insert { padding: 4px 0; }
     .wf-insert-btn {
         width: 24px;
@@ -407,9 +629,9 @@
     .wf-insert-btn:hover { opacity: 1; }
     .wf-node-icon { font-size: 1rem; }
     .wf-node-label { font-size: 0.85rem; font-weight: 500; }
-    .wf-step-pick { padding: 0.6rem 0.75rem; border-radius: 8px; transition: border-color 0.15s, background 0.15s; }
+    .wf-step-pick { padding: 0.6rem 0.75rem; border-radius: 8px; transition: border-color 0.15s, background 0.15s; justify-content: flex-start; }
     .wf-step-pick:hover { background: var(--bs-primary-bg-subtle); border-color: var(--bs-primary); }
-    .wf-step-pick-icon { font-size: 1.2rem; width: 1.5rem; text-align: center; }
+    .wf-step-pick-icon { font-size: 1.2rem; width: 1.5rem; text-align: center; flex-shrink: 0; }
 
     .wf-aside-backdrop {
         position: fixed; inset: 0; background: rgba(0,0,0,0.25); z-index: 1040;
@@ -430,21 +652,26 @@
     }
     .wf-aside-body { padding: 1.25rem; overflow-y: auto; flex: 1; }
 
-    .wf-tip {
-        position: relative; cursor: help; margin-left: 4px;
-        color: var(--bs-secondary); font-size: 0.8rem; vertical-align: middle;
-    }
+    .wf-mode-toggle { position: absolute; top: 0.5rem; right: 0.75rem; z-index: 10; background: var(--bs-body-bg); }
+
+    .wf-tip { cursor: help; margin-left: 4px; color: var(--bs-secondary); font-size: 0.8rem; vertical-align: middle; }
     .wf-tip:hover { color: var(--bs-primary); }
-    .wf-tip::after {
-        content: attr(data-tip);
-        position: absolute; bottom: calc(100% + 6px); left: 50%; transform: translateX(-50%);
-        background: var(--bs-dark); color: #fff; font-size: 0.75rem; font-weight: 400;
-        padding: 0.4rem 0.6rem; border-radius: 6px; line-height: 1.4;
-        width: max-content; max-width: 280px; white-space: normal;
-        pointer-events: none; opacity: 0; transition: opacity 0.15s;
-        z-index: 9999; box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+
+    .wf-group-bar {
+        display: flex; gap: 0.5rem; overflow-x: auto; padding-bottom: 4px;
+        scrollbar-width: thin;
     }
-    .wf-tip:hover::after { opacity: 1; }
+    .wf-group-btn {
+        display: flex; flex-direction: column; align-items: center; gap: 0.25rem;
+        padding: 0.5rem 0.75rem; border: 2px solid var(--bs-border-color); border-radius: 10px;
+        background: var(--bs-body-bg); cursor: pointer; flex-shrink: 0;
+        transition: border-color 0.15s, background 0.15s;
+        min-width: 72px;
+    }
+    .wf-group-btn:hover { border-color: var(--bs-primary); background: var(--bs-primary-bg-subtle); }
+    .wf-group-btn--active { border-color: var(--bs-primary); background: var(--bs-primary-bg-subtle); }
+    .wf-group-btn-icon { font-size: 1.25rem; }
+    .wf-group-btn-label { font-size: 0.7rem; font-weight: 600; white-space: nowrap; }
 </style>
 
 @code {
@@ -452,24 +679,54 @@
     [Parameter] public string RepoSlug { get; set; } = "";
     [Parameter] public string? WorkflowId { get; set; }
     [CascadingParameter(Name = "AccountId")] string AccountId { get; set; } = "";
+    [CascadingParameter(Name = "UserId")] string UserId { get; set; } = "";
+    [CascadingParameter(Name = "UserName")] string UserName { get; set; } = "";
 
     private GitWorkflow workflow = new();
     private GitRepository? repo;
     private bool isNew => string.IsNullOrEmpty(WorkflowId);
     private bool loading = true;
     private bool saving;
+    private bool runningNow;
+    private bool yamlMode;
+    private string yamlContent = "";
+    private string? yamlError;
+    private int outputPopoverIndex = -1;
     private string? errorMessage;
     private int selectedStepIndex = -1;
     private bool showAddStepMenu;
     private int insertAtIndex;
-    private string branchFilter = "";
+    private List<string> branchFilterList = [];
+    private string? _branchFilterInput;
+    private string? branchFilterInput
+    {
+        get => _branchFilterInput;
+        set
+        {
+            _branchFilterInput = value;
+            if (!string.IsNullOrWhiteSpace(value) && !branchFilterList.Contains(value))
+            {
+                branchFilterList.Add(value);
+                _branchFilterInput = null;
+            }
+        }
+    }
+    private List<string> currentRepoBranches = [];
     private List<string> repoSecrets = [];
+    private List<GitRepository> accountRepos = [];
+    private Dictionary<string, List<string>> branchCache = new();
     private string stepSearchQuery = "";
 
     private string triggerTypeStr
     {
         get => workflow.TriggerType.ToString();
         set { if (Enum.TryParse<GitTriggerType>(value, out var t)) workflow.TriggerType = t; }
+    }
+
+    private string runtimeStr
+    {
+        get => workflow.Runtime.ToString();
+        set { if (Enum.TryParse<WorkflowRuntime>(value, out var r)) workflow.Runtime = r; }
     }
 
     private bool IsPushTrigger => workflow.TriggerType is GitTriggerType.PushToRef
@@ -483,14 +740,24 @@
         {
             repo = await RepoService.GetRepositoryBySlugAsync(Owner, RepoSlug);
             if (repo != null)
+            {
                 try { repoSecrets = await SecretService.ListSecretNamesAsync(repo.id); } catch { }
+                try { accountRepos = await RepoService.GetRepositoriesAsync(repo.AccountId); } catch { }
+                try
+                {
+                    var branches = await BrowseService.GetBranchesAsync(repo.id, repo.DefaultBranch);
+                    currentRepoBranches = branches.Select(b => b.Name).ToList();
+                }
+                catch { }
+            }
             if (!isNew && repo != null)
             {
                 var wf = await WorkflowService.GetAsync(WorkflowId!, repo.AccountId);
                 if (wf != null)
                 {
                     workflow = wf;
-                    branchFilter = wf.TriggerFilters?.GetValueOrDefault("branch", "") ?? "";
+                    var bf = wf.TriggerFilters?.GetValueOrDefault("branch", "") ?? "";
+                    branchFilterList = bf.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries).ToList();
                 }
             }
             else
@@ -517,6 +784,7 @@
         insertAtIndex = index;
         showAddStepMenu = true;
         stepSearchQuery = "";
+        selectedGroup = null;
         selectedStepIndex = -1;
     }
 
@@ -562,10 +830,22 @@
         saving = true;
         errorMessage = null;
 
+        // If in YAML mode, parse back to visual before saving
+        if (yamlMode)
+        {
+            if (!WorkflowYamlParser.TryParse(yamlContent, out var parseError, out var parsed))
+            {
+                errorMessage = parseError ?? "Invalid YAML.";
+                saving = false;
+                return;
+            }
+            workflow.Steps = parsed!.Steps;
+        }
+
         // Build trigger filters
         workflow.TriggerFilters = new();
-        if (!string.IsNullOrWhiteSpace(branchFilter))
-            workflow.TriggerFilters["branch"] = branchFilter.Trim();
+        if (branchFilterList.Count > 0)
+            workflow.TriggerFilters["branch"] = string.Join(", ", branchFilterList);
 
         try
         {
@@ -592,6 +872,53 @@
         }
     }
 
+    private void ToggleYamlMode()
+    {
+        yamlError = null;
+        if (!yamlMode)
+        {
+            // Visual -> YAML: serialize current workflow to YAML
+            yamlContent = WorkflowYamlParser.ToYaml(workflow);
+            yamlMode = true;
+            selectedStepIndex = -1;
+        }
+        else
+        {
+            // YAML -> Visual: parse YAML back into workflow steps
+            if (!WorkflowYamlParser.TryParse(yamlContent, out var parseError, out var parsed))
+            {
+                yamlError = parseError ?? "Invalid YAML.";
+                return;
+            }
+            workflow.Steps = parsed!.Steps;
+            if (!string.IsNullOrEmpty(parsed.Name))
+                workflow.Name = parsed.Name;
+            if (parsed.Env is { Count: > 0 })
+                workflow.Env = parsed.Env;
+            yamlMode = false;
+        }
+    }
+
+    private async Task RunNow()
+    {
+        if (repo == null || isNew) return;
+        runningNow = true;
+        errorMessage = null;
+        try
+        {
+            await WorkflowService.RunNowAsync(workflow, repo, UserId, UserName);
+            Nav.NavigateTo($"/{Owner}/{RepoSlug}/workflows/{workflow.id}/history");
+        }
+        catch (Exception ex)
+        {
+            errorMessage = ex.Message;
+        }
+        finally
+        {
+            runningNow = false;
+        }
+    }
+
     private static string StepIcon(WorkflowStepType type) => type switch
     {
         WorkflowStepType.HttpRequest => "🌐",
@@ -603,6 +930,9 @@
         WorkflowStepType.RequireReview => "✔",
         WorkflowStepType.Wait => "⏱",
         WorkflowStepType.DeployAzureWebApp => "☁",
+        WorkflowStepType.Checkout => "📂",
+        WorkflowStepType.RunScript => "▶",
+        WorkflowStepType.SendEmail => "✉",
         WorkflowStepType.Condition => "⑂",
         _ => "•"
     };
@@ -618,6 +948,9 @@
         WorkflowStepType.RequireReview => "Require Review",
         WorkflowStepType.Wait => "Wait",
         WorkflowStepType.DeployAzureWebApp => "Deploy to Azure",
+        WorkflowStepType.Checkout => "Checkout",
+        WorkflowStepType.RunScript => "Run Script",
+        WorkflowStepType.SendEmail => "Send Email",
         WorkflowStepType.Condition => "Condition",
         _ => type.ToString()
     };
@@ -636,13 +969,150 @@
         _ => t.ToString()
     };
 
-    private static MarkupString InfoTip(string text) =>
-        new($"<span class=\"wf-tip\" data-tip=\"{System.Net.WebUtility.HtmlEncode(text)}\"><i class=\"fa-duotone fa-circle-info\"></i></span>");
+    // ── Output popover ──
+
+    private void ToggleOutputPopover(int idx) =>
+        outputPopoverIndex = outputPopoverIndex == idx ? -1 : idx;
+
+    private List<string> GetOutputFields(WorkflowStep step, int idx)
+    {
+        var prefix = !string.IsNullOrEmpty(step.Name) ? $"steps.{step.Name}" : $"steps.{idx}";
+        var fields = new List<string> { $"{{{{{prefix}.success}}}}" };
+
+        switch (step.StepType)
+        {
+            case WorkflowStepType.HttpRequest:
+                fields.Add($"{{{{{prefix}.status}}}}");
+                fields.Add($"{{{{{prefix}.response}}}}");
+                break;
+            case WorkflowStepType.RunScript:
+                fields.Add($"{{{{{prefix}.exitCode}}}}");
+                fields.Add($"{{{{{prefix}.output}}}}");
+                break;
+            case WorkflowStepType.DeployAzureWebApp:
+                fields.Add($"{{{{{prefix}.deployUrl}}}}");
+                break;
+            case WorkflowStepType.AddComment:
+            case WorkflowStepType.SetLabel:
+            case WorkflowStepType.RemoveLabel:
+            case WorkflowStepType.SendEmail:
+                fields.Add($"{{{{{prefix}.body}}}}");
+                break;
+            case WorkflowStepType.Checkout:
+                fields.Add($"{{{{{prefix}.body}}}}");
+                break;
+        }
+
+        fields.Add($"{{{{{prefix}.error}}}}");
+        return fields;
+    }
+
+    // ── Branch filter autocomplete ──
+
+    private Task<IEnumerable<string>> SearchCurrentRepoBranches(string? value, CancellationToken ct)
+    {
+        var available = currentRepoBranches.Where(b => !branchFilterList.Contains(b));
+        if (string.IsNullOrWhiteSpace(value))
+            return Task.FromResult(available);
+        return Task.FromResult(available.Where(b => b.Contains(value, StringComparison.OrdinalIgnoreCase)));
+    }
+
+    private void RemoveBranchFilter(string branch)
+    {
+        branchFilterList.Remove(branch);
+    }
+
+    // ── Checkout autocomplete helpers ──
+
+    private Task<IEnumerable<string>> SearchRepos(string? value, CancellationToken ct)
+    {
+        var slugs = accountRepos.Select(r => $"{r.OwnerName}/{r.Slug}");
+        if (string.IsNullOrWhiteSpace(value))
+            return Task.FromResult(slugs);
+        return Task.FromResult(slugs.Where(s => s.Contains(value, StringComparison.OrdinalIgnoreCase)));
+    }
+
+    private async Task<IEnumerable<string>> SearchBranches(string? value, string? repoSlug, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(repoSlug))
+            return [];
+
+        if (!branchCache.TryGetValue(repoSlug, out var branches))
+        {
+            branches = await LoadBranchesAsync(repoSlug);
+            branchCache[repoSlug] = branches;
+        }
+
+        if (string.IsNullOrWhiteSpace(value))
+            return branches;
+        return branches.Where(b => b.Contains(value, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private async Task<List<string>> LoadBranchesAsync(string repoSlug)
+    {
+        try
+        {
+            var parts = repoSlug.Split('/', 2);
+            if (parts.Length != 2) return [];
+            var target = await RepoService.GetRepositoryBySlugAsync(parts[0], parts[1]);
+            if (target == null) return [];
+            var branchInfos = await BrowseService.GetBranchesAsync(target.id, target.DefaultBranch);
+            return branchInfos.Select(b => b.Name).ToList();
+        }
+        catch { return []; }
+    }
+
+    private static bool IsInternalRepo(string? value) =>
+        !string.IsNullOrWhiteSpace(value) &&
+        !value.StartsWith("https://", StringComparison.OrdinalIgnoreCase) &&
+        !value.StartsWith("http://", StringComparison.OrdinalIgnoreCase) &&
+        !value.StartsWith("git://", StringComparison.OrdinalIgnoreCase);
+
+    private void OnCheckoutRepoChanged(WorkflowStep step)
+    {
+        // Clear branch cache + selection when repo changes
+        step.CheckoutBranch = null;
+    }
 
     // ── Step catalog for the Add Step dialog ──
 
-    private record StepEntry(WorkflowStepType Type, string Name, string Description, string Icon, string Color);
-    private record StepGroup(string GroupName, StepEntry[] Steps);
+    // Context flags for step availability based on trigger type
+    [Flags] enum StepContext { Any = 0, PR = 1, Issue = 2, PROrIssue = PR | Issue }
+
+    private record StepEntry(WorkflowStepType Type, string Name, string Description, string Icon, string Color, StepContext Requires = StepContext.Any);
+    private record StepGroup(string GroupName, string ShortName, string Icon, string Color, StepEntry[] Steps);
+
+    private string? selectedGroup;
+
+    private StepContext CurrentTriggerContext => workflow.TriggerType switch
+    {
+        GitTriggerType.PullRequestCreated or GitTriggerType.PullRequestUpdated
+            or GitTriggerType.PullRequestClosed or GitTriggerType.PullRequestMerged
+            or GitTriggerType.ReviewSubmitted or GitTriggerType.ReviewDismissed
+            => StepContext.PR | StepContext.Issue, // PR context includes issue-like operations (comments, labels)
+        GitTriggerType.IssueCreated or GitTriggerType.IssueClosed or GitTriggerType.IssueReopened
+            => StepContext.Issue,
+        GitTriggerType.CommentCreated
+            => StepContext.PR | StepContext.Issue, // comments can be on either
+        _ => StepContext.Any // push, branch, tag, fork — no PR/issue context
+    };
+
+    private bool IsStepAvailable(StepEntry entry)
+    {
+        if (entry.Requires == StepContext.Any) return true;
+        var ctx = CurrentTriggerContext;
+        if (ctx == StepContext.Any) return false; // trigger has no PR/issue context but step needs one
+        return (ctx & entry.Requires) != 0;
+    }
+
+    private IEnumerable<StepGroup> AvailableGroups =>
+        StepCatalog.Where(g => g.Steps.Any(IsStepAvailable));
+
+    private IEnumerable<StepGroup> FilteredCatalog =>
+        StepCatalog
+            .Where(g => selectedGroup == null || g.GroupName == selectedGroup)
+            .Select(g => g with { Steps = g.Steps.Where(s => IsStepAvailable(s) && MatchesSearch(s)).ToArray() })
+            .Where(g => g.Steps.Length > 0);
 
     private bool MatchesSearch(StepEntry entry)
     {
@@ -654,21 +1124,24 @@
 
     private static readonly StepGroup[] StepCatalog =
     [
-        new("Notifications", [
-            new(WorkflowStepType.AddComment, "Add Comment", "Post a comment on the PR or issue", "fa-duotone fa-comment", "#0d6efd"),
+        new("Communications", "Comms", "fa-duotone fa-paper-plane", "#20c997", [
+            new(WorkflowStepType.AddComment, "Add Comment", "Post a comment on the PR or issue", "fa-duotone fa-comment", "#0d6efd", StepContext.PROrIssue),
+            new(WorkflowStepType.SendEmail, "Send Email", "Send an email notification via SMTP", "fa-duotone fa-envelope", "#20c997"),
             new(WorkflowStepType.HttpRequest, "HTTP Request", "Call a webhook or external API", "fa-duotone fa-globe", "#fd7e14"),
         ]),
-        new("Issues & Pull Requests", [
-            new(WorkflowStepType.SetLabel, "Set Label", "Add a label to the issue or PR", "fa-duotone fa-tag", "#6f42c1"),
-            new(WorkflowStepType.RemoveLabel, "Remove Label", "Remove a label from the issue or PR", "fa-duotone fa-tag-slash", "#6f42c1"),
-            new(WorkflowStepType.CloseIssue, "Close Issue", "Close the issue that triggered this workflow", "fa-duotone fa-circle-xmark", "#dc3545"),
-            new(WorkflowStepType.ClosePullRequest, "Close Pull Request", "Close the PR that triggered this workflow", "fa-duotone fa-code-pull-request-closed", "#dc3545"),
-            new(WorkflowStepType.RequireReview, "Require Review", "Check that the PR has enough approvals", "fa-duotone fa-check-double", "#198754"),
+        new("Issues & Pull Requests", "Issues & PRs", "fa-duotone fa-code-pull-request", "#6f42c1", [
+            new(WorkflowStepType.SetLabel, "Set Label", "Add a label to the issue or PR", "fa-duotone fa-tag", "#6f42c1", StepContext.PROrIssue),
+            new(WorkflowStepType.RemoveLabel, "Remove Label", "Remove a label from the issue or PR", "fa-duotone fa-xmark", "#6f42c1", StepContext.PROrIssue),
+            new(WorkflowStepType.CloseIssue, "Close Issue", "Close the issue that triggered this workflow", "fa-duotone fa-circle-xmark", "#dc3545", StepContext.Issue),
+            new(WorkflowStepType.ClosePullRequest, "Close Pull Request", "Close the PR that triggered this workflow", "fa-duotone fa-code-pull-request-closed", "#dc3545", StepContext.PR),
+            new(WorkflowStepType.RequireReview, "Require Review", "Check that the PR has enough approvals", "fa-duotone fa-check-double", "#198754", StepContext.PR),
         ]),
-        new("Deployment", [
-            new(WorkflowStepType.DeployAzureWebApp, "Deploy to Azure Web App", "Zip-deploy repo content to Azure App Service", "fa-duotone fa-cloud-arrow-up", "#0078d4"),
+        new("Build & Deploy", "Build", "fa-duotone fa-rocket", "#0078d4", [
+            new(WorkflowStepType.Checkout, "Checkout", "Pull a repo into the build workspace", "fa-duotone fa-folder-arrow-down", "#0d6efd"),
+            new(WorkflowStepType.RunScript, "Run Script", "Execute a shell command in the workspace", "fa-duotone fa-terminal", "#212529"),
+            new(WorkflowStepType.DeployAzureWebApp, "Deploy to Azure Web App", "Zip-deploy workspace or repo to Azure App Service", "fa-duotone fa-cloud-arrow-up", "#0078d4"),
         ]),
-        new("Flow Control", [
+        new("Flow Control", "Flow", "fa-duotone fa-route", "#6c757d", [
             new(WorkflowStepType.Wait, "Wait", "Pause the workflow for a set duration", "fa-duotone fa-clock", "#6c757d"),
         ]),
     ];

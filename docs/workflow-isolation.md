@@ -132,11 +132,29 @@ The `GitWorkflowBackgroundWorker` acts as a watchdog for stuck executions. If an
 
 This handles cases where the worker container crashes, exceeds its timeout, or fails to write results back to Cosmos DB.
 
-## Container Image
+## Runtime Environments
 
-The worker Docker image (`DaisiGit.Worker/Dockerfile`) includes:
+Each workflow has a **Runtime** setting that selects which container image to use. This determines what language runtimes and tools are pre-installed for `RunScript` steps.
 
-- .NET 10 runtime
-- Common build tools: `git`, `curl`, `wget`, `jq`, `unzip`
+| Runtime | Image | Includes | Use case |
+|---------|-------|----------|----------|
+| **Minimal** | `Dockerfile` | git, curl, wget, jq, unzip | Shell scripts, HTTP calls, simple automation |
+| **.NET** | `Dockerfile.dotnet` | .NET 10 SDK + base tools | `dotnet build`, `dotnet publish`, NuGet |
+| **Node** | `Dockerfile.node` | Node.js 22 LTS + npm + base tools | `npm install`, `npm run build`, JS/TS projects |
+| **Python** | `Dockerfile.python` | Python 3 + pip + venv + base tools | `pip install`, Python scripts |
+| **Full** | `Dockerfile.full` | .NET SDK + Node.js + Python + base tools | Multi-language projects, polyglot builds |
 
-Additional tools (Node.js, Python, etc.) can be added to the Dockerfile as needed for `RunScript` steps.
+All images are stored in ACR with the naming convention `daisigit-worker-{runtime}:latest`. The dispatch message includes the runtime so the Container Apps Job can select the correct image.
+
+### Custom tool installation
+
+You can install additional tools on any base image using a `RunScript` step. For example, on the Minimal image:
+
+```bash
+# Install Go
+curl -fsSL https://go.dev/dl/go1.23.0.linux-amd64.tar.gz | tar -C /usr/local -xzf -
+export PATH=$PATH:/usr/local/go/bin
+go build -o myapp .
+```
+
+This gives maximum flexibility — pick the closest base image and add what you need.

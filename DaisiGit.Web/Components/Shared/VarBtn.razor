@@ -1,0 +1,164 @@
+@* Input-group addon button that shows a variable popover and inserts the selected variable into the connected input. *@
+@inject IJSRuntime JS
+
+<div class="input-group">
+    @ChildContent
+    <button type="button" class="btn btn-outline-secondary wf-var-btn" @onclick="Toggle" @onclick:stopPropagation="true"
+            title="Insert variable">
+        <i class="fa-duotone fa-brackets-curly"></i>
+    </button>
+</div>
+
+@if (open)
+{
+    <div class="wf-var-popover" @onclick:stopPropagation="true">
+        <div class="wf-var-header">
+            <span class="fw-semibold small">Insert variable</span>
+            <button class="btn-close" style="font-size: 0.5rem;" @onclick="() => open = false"></button>
+        </div>
+        <div class="wf-var-body">
+            @foreach (var group in Groups)
+            {
+                <div class="wf-var-group-label">@group.Label</div>
+                @foreach (var v in group.Vars)
+                {
+                    <code class="wf-var-item" @onclick="() => InsertVariable(v)">@v</code>
+                }
+            }
+        </div>
+    </div>
+}
+
+<style>
+    .wf-var-btn { flex-shrink: 0; font-size: 0.8rem; }
+    .wf-var-popover {
+        position: relative; z-index: 1070;
+        background: var(--bs-body-bg); border: 1px solid var(--bs-border-color);
+        border-radius: 0 0 8px 8px; box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+        max-height: 280px; display: flex; flex-direction: column;
+        margin-top: -1px;
+    }
+    .wf-var-header {
+        display: flex; justify-content: space-between; align-items: center;
+        padding: 0.4rem 0.6rem; border-bottom: 1px solid var(--bs-border-color); flex-shrink: 0;
+    }
+    .wf-var-body { padding: 0.4rem 0.6rem; overflow-y: auto; flex: 1; }
+    .wf-var-group-label { font-size: 0.65rem; font-weight: 700; text-transform: uppercase; color: var(--bs-secondary); margin-top: 0.4rem; margin-bottom: 0.2rem; }
+    .wf-var-group-label:first-child { margin-top: 0; }
+    .wf-var-item {
+        display: block; padding: 0.2rem 0.4rem; border-radius: 4px;
+        background: var(--bs-tertiary-bg); font-size: 0.72rem; margin-bottom: 0.2rem;
+        cursor: pointer; word-break: break-all; transition: background 0.1s;
+    }
+    .wf-var-item:hover { background: var(--bs-primary-bg-subtle); }
+</style>
+
+@code {
+    /// <summary>The input/textarea rendered inside the input-group.</summary>
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+
+    /// <summary>The HTML id of the input element to insert into.</summary>
+    [Parameter, EditorRequired] public string InputId { get; set; } = "";
+
+    /// <summary>The trigger type, used to determine which context variables are available.</summary>
+    [Parameter] public GitTriggerType TriggerType { get; set; }
+
+    /// <summary>The index of the current step.</summary>
+    [Parameter] public int StepIndex { get; set; }
+
+    /// <summary>All workflow steps.</summary>
+    [Parameter] public List<WorkflowStep> Steps { get; set; } = [];
+
+    /// <summary>Available secret names for this repo.</summary>
+    [Parameter] public List<string> Secrets { get; set; } = [];
+
+    private bool open;
+    private void Toggle() => open = !open;
+
+    private async Task InsertVariable(string variable)
+    {
+        await JS.InvokeVoidAsync("wfInsertVar", InputId, variable);
+        open = false;
+    }
+
+    private record VarGroup(string Label, List<string> Vars);
+
+    private List<VarGroup> Groups
+    {
+        get
+        {
+            var groups = new List<VarGroup>();
+
+            var trigger = new List<string>
+            {
+                "{{repo.name}}", "{{repo.slug}}", "{{repo.owner}}", "{{repo.defaultBranch}}",
+                "{{actor.id}}", "{{actor.name}}", "{{actor.firstName}}", "{{actor.lastName}}", "{{actor.email}}"
+            };
+
+            switch (TriggerType)
+            {
+                case GitTriggerType.PushToRef:
+                case GitTriggerType.BranchCreated:
+                case GitTriggerType.BranchDeleted:
+                case GitTriggerType.TagCreated:
+                case GitTriggerType.TagDeleted:
+                    trigger.AddRange(["{{push.branch}}", "{{push.commit}}", "{{push.ref}}"]);
+                    break;
+                case GitTriggerType.PullRequestCreated:
+                case GitTriggerType.PullRequestUpdated:
+                case GitTriggerType.PullRequestClosed:
+                case GitTriggerType.PullRequestMerged:
+                    trigger.AddRange(["{{pr.number}}", "{{pr.title}}", "{{pr.sourceBranch}}", "{{pr.targetBranch}}"]);
+                    break;
+                case GitTriggerType.IssueCreated:
+                case GitTriggerType.IssueClosed:
+                case GitTriggerType.IssueReopened:
+                    trigger.AddRange(["{{issue.number}}", "{{issue.title}}"]);
+                    break;
+                case GitTriggerType.CommentCreated:
+                    trigger.AddRange(["{{pr.number}}", "{{issue.number}}", "{{comment.body}}"]);
+                    break;
+                case GitTriggerType.ReviewSubmitted:
+                case GitTriggerType.ReviewDismissed:
+                    trigger.AddRange(["{{pr.number}}", "{{review.state}}"]);
+                    break;
+            }
+
+            groups.Add(new("Trigger", trigger));
+
+            if (Secrets.Count > 0)
+                groups.Add(new("Secrets", Secrets.Select(s => $"{{{{secrets.{s}}}}}").ToList()));
+
+            if (StepIndex > 0)
+            {
+                var stepVars = new List<string>();
+                for (var i = 0; i < StepIndex && i < Steps.Count; i++)
+                {
+                    var s = Steps[i];
+                    var prefix = !string.IsNullOrEmpty(s.Name) ? s.Name : i.ToString();
+                    stepVars.Add($"{{{{steps.{prefix}.success}}}}");
+                    switch (s.StepType)
+                    {
+                        case WorkflowStepType.HttpRequest:
+                            stepVars.Add($"{{{{steps.{prefix}.status}}}}");
+                            stepVars.Add($"{{{{steps.{prefix}.response}}}}");
+                            break;
+                        case WorkflowStepType.RunScript:
+                            stepVars.Add($"{{{{steps.{prefix}.exitCode}}}}");
+                            stepVars.Add($"{{{{steps.{prefix}.output}}}}");
+                            break;
+                        case WorkflowStepType.DeployAzureWebApp:
+                            stepVars.Add($"{{{{steps.{prefix}.deployUrl}}}}");
+                            break;
+                        default:
+                            stepVars.Add($"{{{{steps.{prefix}.body}}}}");
+                            break;
+                    }
+                }
+                groups.Add(new("Previous Steps", stepVars));
+            }
+
+            return groups;
+        }
+    }
+}

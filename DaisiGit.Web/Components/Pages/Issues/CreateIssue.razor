@@ -17,7 +17,36 @@
 
             <div class="mb-3">
                 <label class="form-label fw-semibold">Description</label>
-                <textarea class="form-control" rows="6" @bind="description" placeholder="Describe the issue..."></textarea>
+                <ul class="nav nav-tabs nav-tabs-sm mb-0">
+                    <li class="nav-item">
+                        <button class="nav-link @(!previewMode ? "active" : "")" @onclick="() => previewMode = false">
+                            <i class="fa-duotone fa-pen me-1"></i> Write
+                        </button>
+                    </li>
+                    <li class="nav-item">
+                        <button class="nav-link @(previewMode ? "active" : "")" @onclick="() => previewMode = true">
+                            <i class="fa-duotone fa-eye me-1"></i> Preview
+                        </button>
+                    </li>
+                </ul>
+                @if (previewMode)
+                {
+                    <div class="border border-top-0 rounded-bottom p-3" style="min-height: 160px;">
+                        @if (string.IsNullOrWhiteSpace(description))
+                        {
+                            <span class="text-muted">Nothing to preview</span>
+                        }
+                        else
+                        {
+                            <MarkdownView Content="@description" Owner="@Owner" RepoSlug="@RepoSlug" />
+                        }
+                    </div>
+                }
+                else
+                {
+                    <textarea class="form-control border-top-0 rounded-top-0" rows="8" @bind="description"
+                              placeholder="Describe the issue... (Markdown supported)"></textarea>
+                }
             </div>
 
             @if (!string.IsNullOrEmpty(error))
@@ -46,6 +75,7 @@
     private string? description;
     private string? error;
     private bool submitting;
+    private bool previewMode;
 
     private async Task Submit()
     {

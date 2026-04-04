@@ -10,6 +10,19 @@ permissions:
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - runtime: minimal
+            dockerfile: Dockerfile
+          - runtime: dotnet
+            dockerfile: Dockerfile.dotnet
+          - runtime: node
+            dockerfile: Dockerfile.node
+          - runtime: python
+            dockerfile: Dockerfile.python
+          - runtime: full
+            dockerfile: Dockerfile.full
 
     steps:
       - name: Checkout daisi-git
@@ -34,16 +47,13 @@ jobs:
       - name: Log in to ACR
         run: az acr login --name ${{ secrets.ACR_NAME }}
 
-      - name: Build and push worker image
+      - name: Build and push ${{ matrix.runtime }} image
         run: |
           cd daisi-git
-          docker build -f DaisiGit.Worker/Dockerfile -t ${{ secrets.ACR_NAME }}.azurecr.io/daisigit-worker:${{ github.sha }} -t ${{ secrets.ACR_NAME }}.azurecr.io/daisigit-worker:latest .
-          docker push ${{ secrets.ACR_NAME }}.azurecr.io/daisigit-worker:${{ github.sha }}
-          docker push ${{ secrets.ACR_NAME }}.azurecr.io/daisigit-worker:latest
-
-      - name: Update Container Apps Job image
-        run: |
-          az containerapp job update \
-            --name ${{ secrets.WORKER_JOB_NAME }} \
-            --resource-group ${{ secrets.AZURE_RESOURCE_GROUP }} \
-            --image ${{ secrets.ACR_NAME }}.azurecr.io/daisigit-worker:${{ github.sha }}
+          docker build \
+            -f DaisiGit.Worker/${{ matrix.dockerfile }} \
+            -t ${{ secrets.ACR_NAME }}.azurecr.io/daisigit-worker-${{ matrix.runtime }}:${{ github.sha }} \
+            -t ${{ secrets.ACR_NAME }}.azurecr.io/daisigit-worker-${{ matrix.runtime }}:latest \
+            .
+          docker push ${{ secrets.ACR_NAME }}.azurecr.io/daisigit-worker-${{ matrix.runtime }}:${{ github.sha }}
+          docker push ${{ secrets.ACR_NAME }}.azurecr.io/daisigit-worker-${{ matrix.runtime }}:latest

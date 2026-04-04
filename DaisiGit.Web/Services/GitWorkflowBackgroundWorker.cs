@@ -52,8 +52,16 @@ public class GitWorkflowBackgroundWorker(
             {
                 if (dispatch.IsEnabled)
                 {
-                    // Dispatch to isolated worker via queue
-                    await dispatch.DispatchAsync(execution.id, execution.AccountId);
+                    // Look up workflow runtime for image selection
+                    var runtime = "minimal";
+                    if (execution.WorkflowId != null)
+                    {
+                        var wf = await cosmo.GetWorkflowAsync(execution.WorkflowId, execution.AccountId);
+                        if (wf != null)
+                            runtime = wf.Runtime.ToString().ToLowerInvariant();
+                    }
+
+                    await dispatch.DispatchAsync(execution.id, execution.AccountId, runtime);
                     execution.Status = "Dispatched";
                     await cosmo.UpdateWorkflowExecutionAsync(execution);
                 }

@@ -32,7 +32,7 @@
                 @if (!string.IsNullOrEmpty(issue.Description))
                 {
                     <hr />
-                    <p class="mb-0" style="white-space: pre-wrap;">@issue.Description</p>
+                    <MarkdownView Content="@issue.Description" Owner="@Owner" RepoSlug="@RepoSlug" />
                 }
             </div>
         </div>
@@ -72,7 +72,7 @@
                         <strong class="small">@comment.AuthorName</strong>
                         <span class="text-muted small">@FormatRelativeDate(comment.CreatedUtc)</span>
                     </div>
-                    <p class="mb-0" style="white-space: pre-wrap;">@comment.Body</p>
+                    <MarkdownView Content="@comment.Body" Owner="@Owner" RepoSlug="@RepoSlug" />
                 </div>
             </div>
         }
@@ -80,7 +80,36 @@
         <!-- Add comment -->
         <div class="card mt-3">
             <div class="card-body">
-                <textarea class="form-control mb-2" rows="3" @bind="newComment" placeholder="Leave a comment..."></textarea>
+                <ul class="nav nav-tabs nav-tabs-sm mb-0">
+                    <li class="nav-item">
+                        <button class="nav-link @(!commentPreview ? "active" : "")" @onclick="() => commentPreview = false">
+                            <i class="fa-duotone fa-pen me-1"></i> Write
+                        </button>
+                    </li>
+                    <li class="nav-item">
+                        <button class="nav-link @(commentPreview ? "active" : "")" @onclick="() => commentPreview = true">
+                            <i class="fa-duotone fa-eye me-1"></i> Preview
+                        </button>
+                    </li>
+                </ul>
+                @if (commentPreview)
+                {
+                    <div class="border border-top-0 rounded-bottom p-3 mb-2" style="min-height: 80px;">
+                        @if (string.IsNullOrWhiteSpace(newComment))
+                        {
+                            <span class="text-muted">Nothing to preview</span>
+                        }
+                        else
+                        {
+                            <MarkdownView Content="@newComment" Owner="@Owner" RepoSlug="@RepoSlug" />
+                        }
+                    </div>
+                }
+                else
+                {
+                    <textarea class="form-control border-top-0 rounded-top-0 mb-2" rows="3" @bind="newComment"
+                              placeholder="Leave a comment... (Markdown supported)"></textarea>
+                }
                 <button class="btn btn-sm btn-primary" @onclick="AddComment" disabled="@(string.IsNullOrWhiteSpace(newComment))">
                     Comment
                 </button>
@@ -107,6 +136,7 @@
     private List<Comment> comments = [];
     private bool loading = true;
     private string newComment = "";
+    private bool commentPreview;
 
     protected override async Task OnParametersSetAsync()
     {

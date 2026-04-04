@@ -16,5 +16,6 @@ public enum WorkflowStepType
     Wait,
     DeployAzureWebApp,
     Checkout,
-    RunScript
+    RunScript,
+    SendEmail
 }

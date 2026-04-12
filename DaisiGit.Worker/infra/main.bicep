@@ -90,26 +90,30 @@ resource workerJob 'Microsoft.App/jobs@2024-03-01' = {
         scale: {
           minExecutions: 0
           maxExecutions: 10
-        }
-        rules: [
-          {
-            name: 'queue-trigger'
-            type: 'azure-queue'
-            metadata: {
-              queueName: 'workflow-executions'
-              queueLength: '1'
-              accountName: storageAccount.name
-            }
-            auth: [
-              {
-                secretRef: 'storage-connection'
-                triggerParameter: 'connection'
+          rules: [
+            {
+              name: 'queue-trigger'
+              type: 'azure-queue'
+              metadata: {
+                queueName: 'workflow-executions'
+                queueLength: '1'
+                accountName: storageAccount.name
               }
-            ]
-          }
-        ]
+              auth: [
+                {
+                  secretRef: 'storage-connection'
+                  triggerParameter: 'connection'
+                }
+              ]
+            }
+          ]
+        }
       }
       secrets: [
+        {
+          name: 'acr-password'
+          value: acr.listCredentials().passwords[0].value
+        }
         {
           name: 'storage-connection'
           value: 'DefaultEndpointsProtocol=https;AccountName=${storageAccount.name};AccountKey=${storageAccount.listKeys().keys[0].value}'

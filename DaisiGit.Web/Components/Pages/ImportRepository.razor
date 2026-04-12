@@ -15,10 +15,32 @@
             <div class="card-body">
                 <div class="mb-3">
                     <label class="form-label fw-semibold">Source URL</label>
-                    <input type="url" class="form-control" @bind="sourceUrl"
+                    <input type="url" class="form-control" @bind="sourceUrl" @bind:after="OnUrlChanged"
                            placeholder="https://github.com/owner/repo.git" />
                     <div class="form-text">The public clone URL of the repository to import.</div>
                 </div>
+
+                @if (existingRepos.Count > 0)
+                {
+                    <div class="alert alert-warning">
+                        <i class="fa-duotone fa-circle-info me-1"></i>
+                        <strong>Previously imported.</strong> This URL was already imported as:
+                        <ul class="mb-2 mt-1">
+                            @foreach (var r in existingRepos)
+                            {
+                                <li><a href="/@r.OwnerName/@r.Slug">@r.OwnerName/@r.Name</a></li>
+                            }
+                        </ul>
+                        <button class="btn btn-sm btn-warning me-2" @onclick="DoReimport" disabled="@importing">
+                            @if (importing)
+                            {
+                                <span class="spinner-border spinner-border-sm me-1"></span>
+                            }
+                            <i class="fa-duotone fa-arrows-rotate me-1"></i> Pull latest changes
+                        </button>
+                        <span class="text-muted">or continue below to import as a new repository.</span>
+                    </div>
+                }
 
                 <div class="mb-3">
                     <label class="form-label">Owner</label>
@@ -87,6 +109,8 @@
     private string? progressMessage;
     private bool importing;
     private bool loaded;
+    private List<GitRepository> existingRepos = [];
+    private string lastCheckedUrl = "";
 
     protected override async Task OnParametersSetAsync()
     {
@@ -100,6 +124,56 @@
             selectedOwner = userHandle ?? (orgs.Count > 0 ? orgs[0].Slug : "");
         }
         catch { }
+    }
+
+    private async Task OnUrlChanged()
+    {
+        var trimmed = sourceUrl?.Trim() ?? "";
+        if (string.IsNullOrWhiteSpace(trimmed) || trimmed == lastCheckedUrl)
+        {
+            if (string.IsNullOrWhiteSpace(trimmed))
+                existingRepos = [];
+            return;
+        }
+
+        lastCheckedUrl = trimmed;
+        try
+        {
+            existingRepos = await ImportService.FindExistingImportsAsync(AccountId, trimmed);
+        }
+        catch
+        {
+            existingRepos = [];
+        }
+    }
+
+    private async Task DoReimport()
+    {
+        if (existingRepos.Count == 0) return;
+
+        importing = true;
+        error = null;
+        progressMessage = null;
+
+        try
+        {
+            // Re-import the first (most recent) match
+            var target = existingRepos[0];
+            var repo = await ImportService.ReimportAsync(
+                target,
+                msg => { progressMessage = msg; InvokeAsync(StateHasChanged); });
+
+            Nav.NavigateTo($"/{repo.OwnerName}/{repo.Slug}");
+        }
+        catch (Exception ex)
+        {
+            error = $"Re-import failed: {ex.Message}";
+            progressMessage = null;
+        }
+        finally
+        {
+            importing = false;
+        }
     }
 
     private async Task DoImport()

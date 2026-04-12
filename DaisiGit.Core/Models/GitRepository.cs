@@ -27,6 +27,11 @@ public class GitRepository
     [JsonConverter(typeof(JsonStringEnumConverter))]
     public StorageProvider? StorageProvider { get; set; }
     public bool IsEmpty { get; set; } = true;
+    /// <summary>
+    /// The external URL this repository was originally imported from, if any.
+    /// Used to detect re-imports and offer to pull latest changes.
+    /// </summary>
+    public string? ImportedFromUrl { get; set; }
     public string? ForkedFromId { get; set; }
     public string? ForkedFromOwnerName { get; set; }
     public string? ForkedFromSlug { get; set; }

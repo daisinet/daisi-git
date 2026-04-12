@@ -15,7 +15,8 @@ public class ImportService(
     RepositoryService repoService,
     GitObjectStore objectStore,
     GitRefService refService,
-    BrowseService browseService)
+    BrowseService browseService,
+    DaisiGitCosmo cosmo)
 {
     /// <summary>
     /// Imports a public git repo from a URL. Creates the DaisiGit repo and populates it.
@@ -39,6 +40,10 @@ public class ImportService(
         // Create the DaisiGit repo
         var repo = await repoService.CreateRepositoryAsync(
             accountId, ownerId, ownerName, repoName, description, visibility, storageProvider);
+
+        // Store the normalized import source URL for re-import detection
+        repo.ImportedFromUrl = NormalizeImportUrl(sourceUrl);
+        repo = await repoService.UpdateRepositoryAsync(repo);
 
         // Clone to temp directory
         var tempDir = Path.Combine(Path.GetTempPath(), $"daisigit-import-{Guid.NewGuid():N}");
@@ -73,6 +78,68 @@ public class ImportService(
         }
 
         return repo;
+    }
+
+    /// <summary>
+    /// Finds repositories in the account that were previously imported from the given URL.
+    /// </summary>
+    public async Task<List<GitRepository>> FindExistingImportsAsync(string accountId, string sourceUrl)
+    {
+        var normalized = NormalizeImportUrl(sourceUrl);
+        return await cosmo.GetRepositoriesByImportUrlAsync(accountId, normalized);
+    }
+
+    /// <summary>
+    /// Re-imports (pulls latest changes) from the original source URL into an existing repository.
+    /// </summary>
+    public async Task<GitRepository> ReimportAsync(
+        GitRepository repo,
+        Action<string>? onProgress = null)
+    {
+        var sourceUrl = repo.ImportedFromUrl;
+        if (string.IsNullOrEmpty(sourceUrl))
+            throw new InvalidOperationException("This repository was not imported from an external URL.");
+
+        var tempDir = Path.Combine(Path.GetTempPath(), $"daisigit-reimport-{Guid.NewGuid():N}");
+        try
+        {
+            onProgress?.Invoke($"Cloning latest from {sourceUrl}...");
+
+            var cloneResult = await RunGitAsync($"clone --bare \"{sourceUrl}\" \"{tempDir}\"");
+            if (cloneResult.ExitCode != 0)
+                throw new InvalidOperationException($"Git clone failed: {cloneResult.Error}");
+
+            onProgress?.Invoke("Reading objects...");
+
+            await ImportObjectsAsync(tempDir, repo, onProgress);
+
+            onProgress?.Invoke("Updating refs...");
+
+            await ImportRefsAsync(tempDir, repo);
+
+            repo.IsEmpty = false;
+            repo = await repoService.UpdateRepositoryAsync(repo);
+
+            onProgress?.Invoke("Re-import complete.");
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+
+        return repo;
+    }
+
+    /// <summary>
+    /// Normalizes a git URL for consistent comparison.
+    /// Trims whitespace/trailing slashes, removes trailing .git suffix.
+    /// </summary>
+    private static string NormalizeImportUrl(string url)
+    {
+        var normalized = url.Trim().TrimEnd('/');
+        if (normalized.EndsWith(".git", StringComparison.OrdinalIgnoreCase))
+            normalized = normalized[..^4];
+        return normalized;
     }
 
     private async Task ImportObjectsAsync(string bareRepoPath, GitRepository repo, Action<string>? onProgress)

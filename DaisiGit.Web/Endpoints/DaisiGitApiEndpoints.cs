@@ -21,6 +21,8 @@ public static class DaisiGitApiEndpoints
         // Repositories (create/delete require auth; get/list allow anonymous for public repos)
         api.MapPost("/repos", CreateRepository);
         api.MapPost("/repos/import", ImportRepository);
+        api.MapGet("/repos/import/check", CheckExistingImport);
+        api.MapPost("/repos/{owner}/{slug}/reimport", ReimportRepository);
         api.MapGet("/repos", ListRepositories);
         api.MapDelete("/repos/{owner}/{slug}", DeleteRepository);
 
@@ -285,6 +287,47 @@ public static class DaisiGitApiEndpoints
         catch (Exception ex)
         {
             return Results.BadRequest($"Import failed: {ex.Message}");
+        }
+    }
+
+    private static async Task<IResult> CheckExistingImport(
+        HttpContext ctx, string url,
+        ImportService importService)
+    {
+        if (string.IsNullOrWhiteSpace(url))
+            return Results.BadRequest("URL is required.");
+
+        var accountId = GetAccountId(ctx);
+        var existing = await importService.FindExistingImportsAsync(accountId, url);
+        if (existing.Count == 0)
+            return Results.Ok(new { found = false, repositories = Array.Empty<object>() });
+
+        return Results.Ok(new
+        {
+            found = true,
+            repositories = existing.Select(RepoDto).ToArray()
+        });
+    }
+
+    private static async Task<IResult> ReimportRepository(
+        HttpContext ctx, string owner, string slug,
+        RepositoryService repoService, PermissionService permissionService,
+        ImportService importService)
+    {
+        var (repo, error) = await RequireWrite(ctx, owner, slug, repoService, permissionService);
+        if (error != null) return error;
+
+        if (string.IsNullOrEmpty(repo!.ImportedFromUrl))
+            return Results.BadRequest("This repository was not imported from an external URL.");
+
+        try
+        {
+            var updated = await importService.ReimportAsync(repo);
+            return Results.Ok(RepoDto(updated));
+        }
+        catch (Exception ex)
+        {
+            return Results.BadRequest($"Re-import failed: {ex.Message}");
         }
     }
 
@@ -1135,6 +1178,7 @@ public static class DaisiGitApiEndpoints
         r.ForkedFromId,
         r.ForkedFromOwnerName,
         r.ForkedFromSlug,
+        r.ImportedFromUrl,
         r.CreatedUtc
     };
 

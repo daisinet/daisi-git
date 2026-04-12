@@ -20,5 +20,6 @@ public enum GitTriggerType
     CommentCreated,
     ReviewSubmitted,
     ReviewDismissed,
-    RepositoryForked
+    RepositoryForked,
+    Scheduled
 }

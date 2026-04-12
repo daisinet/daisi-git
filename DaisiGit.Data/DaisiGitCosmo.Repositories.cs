@@ -121,6 +121,28 @@ public partial class DaisiGitCosmo
         return results;
     }
 
+    /// <summary>
+    /// Finds repositories that were imported from the given URL within an account.
+    /// </summary>
+    public virtual async Task<List<GitRepository>> GetRepositoriesByImportUrlAsync(string accountId, string importUrl)
+    {
+        var container = await GetContainerAsync(RepositoriesContainerName);
+        var query = new QueryDefinition(
+            "SELECT * FROM c WHERE c.AccountId = @accountId AND c.ImportedFromUrl = @url AND c.Type = 'GitRepository'")
+            .WithParameter("@accountId", accountId)
+            .WithParameter("@url", importUrl);
+
+        var results = new List<GitRepository>();
+        using var iterator = container.GetItemQueryIterator<GitRepository>(query,
+            requestOptions: new QueryRequestOptions { PartitionKey = GetRepositoryPartitionKey(accountId) });
+        while (iterator.HasMoreResults)
+        {
+            var response = await iterator.ReadNextAsync();
+            results.AddRange(response);
+        }
+        return results;
+    }
+
     public virtual async Task<GitRepository?> GetExistingForkAsync(string forkedFromId, string ownerId)
     {
         var container = await GetContainerAsync(RepositoriesContainerName);

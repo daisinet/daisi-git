@@ -17,5 +17,6 @@ public enum WorkflowStepType
     DeployAzureWebApp,
     Checkout,
     RunScript,
-    SendEmail
+    SendEmail,
+    ImportFromUrl
 }

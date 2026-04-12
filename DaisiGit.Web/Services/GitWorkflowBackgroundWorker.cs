@@ -1,3 +1,5 @@
+using DaisiGit.Core.Enums;
+using DaisiGit.Core.Models;
 using DaisiGit.Data;
 using DaisiGit.Services;
 
@@ -25,6 +27,7 @@ public class GitWorkflowBackgroundWorker(
         {
             try
             {
+                await FireDueScheduledWorkflowsAsync();
                 await ProcessPendingExecutionsAsync();
                 await FailStuckDispatchesAsync();
             }
@@ -35,6 +38,62 @@ public class GitWorkflowBackgroundWorker(
 
             try { await Task.Delay(TimeSpan.FromSeconds(30), stoppingToken); }
             catch (OperationCanceledException) { return; }
+        }
+    }
+
+    /// <summary>
+    /// Finds Scheduled workflows that are due, creates execution records, and advances NextScheduledRunUtc.
+    /// </summary>
+    private async Task FireDueScheduledWorkflowsAsync()
+    {
+        using var scope = serviceProvider.CreateScope();
+        var cosmo = scope.ServiceProvider.GetRequiredService<DaisiGitCosmo>();
+
+        var dueWorkflows = await cosmo.GetDueScheduledWorkflowsAsync();
+
+        foreach (var wf in dueWorkflows)
+        {
+            try
+            {
+                var schedule = wf.TriggerFilters?.GetValueOrDefault("schedule");
+
+                // Create a minimal execution context
+                var context = new Dictionary<string, string>
+                {
+                    ["trigger"] = "scheduled",
+                    ["schedule"] = schedule ?? "",
+                    ["scheduled_at"] = (wf.NextScheduledRunUtc ?? DateTime.UtcNow).ToString("o")
+                };
+
+                if (!string.IsNullOrEmpty(wf.RepositoryId))
+                    context["repo.id"] = wf.RepositoryId;
+
+                await cosmo.CreateWorkflowExecutionAsync(new WorkflowExecution
+                {
+                    AccountId = wf.AccountId,
+                    RepositoryId = wf.RepositoryId ?? "",
+                    WorkflowId = wf.id,
+                    WorkflowName = wf.Name,
+                    Source = "Visual",
+                    TriggerType = GitTriggerType.Scheduled,
+                    Context = context,
+                    CurrentStepIndex = 0,
+                    TotalSteps = WorkflowTriggerService.CountSteps(wf.Steps),
+                    NextRunAt = DateTime.UtcNow,
+                    Status = "Running"
+                });
+
+                // Advance to next scheduled run
+                wf.NextScheduledRunUtc = CronScheduleService.GetNextRunUtc(schedule);
+                await cosmo.UpdateWorkflowAsync(wf);
+
+                logger.LogInformation("Fired scheduled workflow {WorkflowId} ({Name}), next run at {NextRun}",
+                    wf.id, wf.Name, wf.NextScheduledRunUtc);
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Failed to fire scheduled workflow {WorkflowId}", wf.id);
+            }
         }
     }
 

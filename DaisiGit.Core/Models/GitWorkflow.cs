@@ -37,6 +37,13 @@ public class GitWorkflow
     public List<WorkflowStep> Steps { get; set; } = [];
     public bool IsEnabled { get; set; } = true;
     public string Status { get; set; } = "Active";
+
+    /// <summary>
+    /// For Scheduled triggers: when to next fire the workflow.
+    /// Set when the workflow is created/updated/fires. Null for non-scheduled triggers.
+    /// </summary>
+    public DateTime? NextScheduledRunUtc { get; set; }
+
     public DateTime CreatedUtc { get; set; } = DateTime.UtcNow;
     public DateTime? UpdatedUtc { get; set; }
 }

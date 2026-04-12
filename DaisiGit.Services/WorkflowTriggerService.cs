@@ -76,7 +76,7 @@ public class WorkflowTriggerService(DaisiGitCosmo cosmo)
         return true;
     }
 
-    internal static int CountSteps(List<WorkflowStep> steps)
+    public static int CountSteps(List<WorkflowStep> steps)
     {
         var count = 0;
         foreach (var step in steps)

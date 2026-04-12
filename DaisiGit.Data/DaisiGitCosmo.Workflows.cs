@@ -69,6 +69,29 @@ public partial class DaisiGitCosmo
     }
 
     /// <summary>
+    /// Gets all enabled Scheduled workflows that are due to run (NextScheduledRunUtc &lt;= now).
+    /// Cross-partition query since the background worker processes all accounts.
+    /// </summary>
+    public async Task<List<GitWorkflow>> GetDueScheduledWorkflowsAsync(int limit = 50)
+    {
+        var container = await GetContainerAsync(WorkflowsContainerName);
+        var now = DateTime.UtcNow;
+        var query = new QueryDefinition(
+            "SELECT TOP @limit * FROM c WHERE c.Type = 'GitWorkflow' AND c.Status = 'Active' AND c.IsEnabled = true AND c.TriggerType = 'Scheduled' AND c.NextScheduledRunUtc != null AND c.NextScheduledRunUtc <= @now")
+            .WithParameter("@limit", limit)
+            .WithParameter("@now", now);
+
+        var results = new List<GitWorkflow>();
+        using var iterator = container.GetItemQueryIterator<GitWorkflow>(query);
+        while (iterator.HasMoreResults)
+        {
+            var response = await iterator.ReadNextAsync();
+            results.AddRange(response);
+        }
+        return results;
+    }
+
+    /// <summary>
     /// Gets all enabled workflows matching a trigger type for an account.
     /// Includes both account-wide (RepositoryId=null) and repo-specific workflows.
     /// </summary>

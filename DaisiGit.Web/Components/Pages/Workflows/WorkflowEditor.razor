@@ -63,6 +63,7 @@
                             <option value="CommentCreated">Comment created</option>
                             <option value="ReviewSubmitted">Review submitted</option>
                             <option value="RepositoryForked">Repository forked</option>
+                            <option value="Scheduled">Scheduled (timer)</option>
                         </select>
                     </div>
                     <div class="col-md-2 d-flex align-items-end">
@@ -95,6 +96,44 @@
                                         </span>
                                     }
                                 </div>
+                            }
+                        </div>
+                    </div>
+                }
+
+                @if (IsScheduledTrigger)
+                {
+                    <div class="row g-3 mt-1">
+                        <div class="col-md-6">
+                            <label class="form-label">Schedule <Tip Text="Pick a preset or type a custom expression. Custom examples: 'every 5m', 'daily at 14:30', or a cron expression like '0 9 * * 1-5'." /></label>
+                            <div class="input-group">
+                                <input type="text" class="form-control" @bind="scheduleExpression" @bind:after="OnScheduleChanged"
+                                       placeholder="e.g. every 30m, daily at 09:00, */15 * * * *" />
+                                <button class="btn btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false">Presets</button>
+                                <ul class="dropdown-menu dropdown-menu-end">
+                                    <li><button class="dropdown-item" type="button" @onclick='() => SetSchedulePreset("every 1m")'>Every minute</button></li>
+                                    <li><button class="dropdown-item" type="button" @onclick='() => SetSchedulePreset("every 5m")'>Every 5 minutes</button></li>
+                                    <li><button class="dropdown-item" type="button" @onclick='() => SetSchedulePreset("every 15m")'>Every 15 minutes</button></li>
+                                    <li><button class="dropdown-item" type="button" @onclick='() => SetSchedulePreset("every 30m")'>Every 30 minutes</button></li>
+                                    <li><hr class="dropdown-divider" /></li>
+                                    <li><button class="dropdown-item" type="button" @onclick='() => SetSchedulePreset("hourly")'>Hourly</button></li>
+                                    <li><button class="dropdown-item" type="button" @onclick='() => SetSchedulePreset("every 6h")'>Every 6 hours</button></li>
+                                    <li><button class="dropdown-item" type="button" @onclick='() => SetSchedulePreset("every 12h")'>Every 12 hours</button></li>
+                                    <li><hr class="dropdown-divider" /></li>
+                                    <li><button class="dropdown-item" type="button" @onclick='() => SetSchedulePreset("daily at 08:00")'>Daily at 08:00 UTC</button></li>
+                                    <li><button class="dropdown-item" type="button" @onclick='() => SetSchedulePreset("daily at 00:00")'>Daily at midnight UTC</button></li>
+                                    <li><hr class="dropdown-divider" /></li>
+                                    <li><button class="dropdown-item" type="button" @onclick='() => SetSchedulePreset("0 9 * * 1-5")'>Weekdays at 09:00 UTC</button></li>
+                                    <li><button class="dropdown-item" type="button" @onclick='() => SetSchedulePreset("0 0 * * 0")'>Weekly (Sunday midnight)</button></li>
+                                </ul>
+                            </div>
+                            @if (!string.IsNullOrEmpty(scheduleError))
+                            {
+                                <div class="text-danger small mt-1">@scheduleError</div>
+                            }
+                            else if (!string.IsNullOrEmpty(scheduleExpression))
+                            {
+                                <div class="text-muted small mt-1">@CronScheduleService.Describe(scheduleExpression)</div>
                             }
                         </div>
                     </div>
@@ -427,6 +466,16 @@
                     </div>
                     break;
 
+                case WorkflowStepType.ImportFromUrl:
+                    <div class="mb-3">
+                        <label class="form-label">Git URL <Tip Text="The public git clone URL to import from. All objects and refs will be pulled into this repository. Supports merge fields like {{secrets.REPO_URL}}." /></label>
+                        <VarBtn InputId="wf-import-url" TriggerType="workflow.TriggerType" StepIndex="selectedStepIndex" Steps="workflow.Steps" Secrets="repoSecrets">
+                            <input id="wf-import-url" type="text" class="form-control" @bind="step.ImportUrl"
+                                   placeholder="https://github.com/owner/repo.git" />
+                        </VarBtn>
+                    </div>
+                    break;
+
                 case WorkflowStepType.RunScript:
                     <div class="mb-3">
                         <label class="form-label">Command</label>
@@ -733,6 +782,23 @@
         or GitTriggerType.BranchCreated or GitTriggerType.BranchDeleted
         or GitTriggerType.TagCreated or GitTriggerType.TagDeleted;
 
+    private bool IsScheduledTrigger => workflow.TriggerType == GitTriggerType.Scheduled;
+    private string scheduleExpression = "";
+    private string? scheduleError;
+
+    private void SetSchedulePreset(string preset)
+    {
+        scheduleExpression = preset;
+        OnScheduleChanged();
+    }
+
+    private void OnScheduleChanged()
+    {
+        scheduleError = CronScheduleService.Validate(scheduleExpression);
+        workflow.TriggerFilters ??= new();
+        workflow.TriggerFilters["schedule"] = scheduleExpression;
+    }
+
     protected override async Task OnParametersSetAsync()
     {
         loading = true;
@@ -758,6 +824,7 @@
                     workflow = wf;
                     var bf = wf.TriggerFilters?.GetValueOrDefault("branch", "") ?? "";
                     branchFilterList = bf.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries).ToList();
+                    scheduleExpression = wf.TriggerFilters?.GetValueOrDefault("schedule", "") ?? "";
                 }
             }
             else
@@ -933,6 +1000,7 @@
         WorkflowStepType.Checkout => "📂",
         WorkflowStepType.RunScript => "▶",
         WorkflowStepType.SendEmail => "✉",
+        WorkflowStepType.ImportFromUrl => "⬇",
         WorkflowStepType.Condition => "⑂",
         _ => "•"
     };
@@ -951,6 +1019,7 @@
         WorkflowStepType.Checkout => "Checkout",
         WorkflowStepType.RunScript => "Run Script",
         WorkflowStepType.SendEmail => "Send Email",
+        WorkflowStepType.ImportFromUrl => "Import from URL",
         WorkflowStepType.Condition => "Condition",
         _ => type.ToString()
     };
@@ -966,6 +1035,7 @@
         GitTriggerType.IssueClosed => "Issue Closed",
         GitTriggerType.CommentCreated => "Comment",
         GitTriggerType.ReviewSubmitted => "Review",
+        GitTriggerType.Scheduled => "Scheduled",
         _ => t.ToString()
     };
 
@@ -999,6 +1069,9 @@
                 fields.Add($"{{{{{prefix}.body}}}}");
                 break;
             case WorkflowStepType.Checkout:
+                fields.Add($"{{{{{prefix}.body}}}}");
+                break;
+            case WorkflowStepType.ImportFromUrl:
                 fields.Add($"{{{{{prefix}.body}}}}");
                 break;
         }
@@ -1140,6 +1213,7 @@
             new(WorkflowStepType.Checkout, "Checkout", "Pull a repo into the build workspace", "fa-duotone fa-folder-arrow-down", "#0d6efd"),
             new(WorkflowStepType.RunScript, "Run Script", "Execute a shell command in the workspace", "fa-duotone fa-terminal", "#212529"),
             new(WorkflowStepType.DeployAzureWebApp, "Deploy to Azure Web App", "Zip-deploy workspace or repo to Azure App Service", "fa-duotone fa-cloud-arrow-up", "#0078d4"),
+            new(WorkflowStepType.ImportFromUrl, "Import from Git URL", "Clone an external git repo and import all objects and refs", "fa-duotone fa-cloud-arrow-down", "#198754"),
         ]),
         new("Flow Control", "Flow", "fa-duotone fa-route", "#6c757d", [
             new(WorkflowStepType.Wait, "Wait", "Pause the workflow for a set duration", "fa-duotone fa-clock", "#6c757d"),

@@ -54,7 +54,15 @@
                             <div class="text-muted small mt-1">
                                 <span class="badge bg-secondary">@FormatTrigger(wf.TriggerType)</span>
                                 <span class="ms-2">@wf.Steps.Count step@(wf.Steps.Count != 1 ? "s" : "")</span>
-                                @if (wf.TriggerFilters is { Count: > 0 })
+                                @if (wf.TriggerType == GitTriggerType.Scheduled && wf.TriggerFilters?.ContainsKey("schedule") == true)
+                                {
+                                    <span class="ms-2 badge bg-outline-secondary border">@CronScheduleService.Describe(wf.TriggerFilters["schedule"])</span>
+                                    @if (wf.NextScheduledRunUtc != null)
+                                    {
+                                        <span class="ms-2 text-muted">Next: @wf.NextScheduledRunUtc.Value.ToString("g") UTC</span>
+                                    }
+                                }
+                                else if (wf.TriggerFilters is { Count: > 0 })
                                 {
                                     foreach (var (key, value) in wf.TriggerFilters)
                                     {
@@ -64,6 +72,10 @@
                             </div>
                         </div>
                         <div class="d-flex align-items-center gap-2">
+                            <div class="form-check form-switch mb-0">
+                                <input class="form-check-input" type="checkbox" checked="@wf.IsEnabled"
+                                       @onchange="() => ToggleEnabled(wf)" />
+                            </div>
                             <button class="btn btn-sm btn-outline-success" @onclick="() => RunNow(wf)" title="Run now"
                                     disabled="@(runningWorkflowId == wf.id)">
                                 @if (runningWorkflowId == wf.id)
@@ -75,10 +87,6 @@
                                     <i class="fa-duotone fa-play"></i>
                                 }
                             </button>
-                            <div class="form-check form-switch mb-0">
-                                <input class="form-check-input" type="checkbox" checked="@wf.IsEnabled"
-                                       @onchange="() => ToggleEnabled(wf)" />
-                            </div>
                             <a href="/@Owner/@RepoSlug/workflows/@wf.id/history" class="btn btn-sm btn-outline-secondary" title="History">
                                 <i class="fa-duotone fa-clock-rotate-left"></i>
                             </a>
@@ -199,6 +207,7 @@
         GitTriggerType.CommentCreated => "Comment",
         GitTriggerType.ReviewSubmitted => "Review",
         GitTriggerType.RepositoryForked => "Fork",
+        GitTriggerType.Scheduled => "Scheduled",
         _ => trigger.ToString()
     };
 }

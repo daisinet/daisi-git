@@ -1,3 +1,4 @@
+using DaisiGit.Core.Enums;
 using DaisiGit.Core.Models;
 using DaisiGit.Data;
 
@@ -9,13 +10,19 @@ namespace DaisiGit.Services;
 public class WorkflowService(DaisiGitCosmo cosmo)
 {
     public async Task<GitWorkflow> CreateAsync(GitWorkflow workflow)
-        => await cosmo.CreateWorkflowAsync(workflow);
+    {
+        ApplySchedule(workflow);
+        return await cosmo.CreateWorkflowAsync(workflow);
+    }
 
     public async Task<GitWorkflow?> GetAsync(string id, string accountId)
         => await cosmo.GetWorkflowAsync(id, accountId);
 
     public async Task<GitWorkflow> UpdateAsync(GitWorkflow workflow)
-        => await cosmo.UpdateWorkflowAsync(workflow);
+    {
+        ApplySchedule(workflow);
+        return await cosmo.UpdateWorkflowAsync(workflow);
+    }
 
     public async Task DeleteAsync(string id, string accountId)
         => await cosmo.DeleteWorkflowAsync(id, accountId);
@@ -72,5 +79,22 @@ public class WorkflowService(DaisiGitCosmo cosmo)
             NextRunAt = DateTime.UtcNow,
             Status = "Running"
         });
+    }
+
+    /// <summary>
+    /// For Scheduled workflows, computes NextScheduledRunUtc from the schedule filter.
+    /// Clears it for non-scheduled or disabled workflows.
+    /// </summary>
+    private static void ApplySchedule(GitWorkflow workflow)
+    {
+        if (workflow.TriggerType == GitTriggerType.Scheduled && workflow.IsEnabled)
+        {
+            var schedule = workflow.TriggerFilters?.GetValueOrDefault("schedule");
+            workflow.NextScheduledRunUtc = CronScheduleService.GetNextRunUtc(schedule);
+        }
+        else
+        {
+            workflow.NextScheduledRunUtc = null;
+        }
     }
 }

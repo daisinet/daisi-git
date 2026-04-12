@@ -60,6 +60,9 @@ public class WorkflowStep
     public string? EmailTo { get; set; }
     public string? EmailSubject { get; set; }
     public string? EmailBody { get; set; }
+
+    // ── ImportFromUrl ──
+    public string? ImportUrl { get; set; }
 }
 
 /// <summary>

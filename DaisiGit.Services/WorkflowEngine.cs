@@ -23,7 +23,8 @@ public class WorkflowEngine(
     GitObjectStore objectStore,
     BrowseService browseService,
     RepositoryService repoService,
-    EmailService emailService)
+    EmailService emailService,
+    ImportService importService)
 {
     /// <summary>
     /// Processes an execution, injecting secrets and env into the context.
@@ -102,6 +103,9 @@ public class WorkflowEngine(
                             break;
                         case WorkflowStepType.SendEmail:
                             await ExecuteSendEmail(step, stepResult, execution);
+                            break;
+                        case WorkflowStepType.ImportFromUrl:
+                            await ExecuteImportFromUrl(step, stepResult, execution);
                             break;
                         case WorkflowStepType.Condition:
                             stepResult.Success = true;
@@ -654,6 +658,52 @@ public class WorkflowEngine(
         {
             result.Success = false;
             result.Error = $"Failed to send email: {ex.Message}";
+        }
+    }
+
+    // ── Import From URL ──
+
+    private async Task ExecuteImportFromUrl(WorkflowStep step, WorkflowStepResult result,
+        WorkflowExecution execution)
+    {
+        var url = WorkflowMergeService.Render(step.ImportUrl ?? "", execution.Context);
+        if (string.IsNullOrWhiteSpace(url))
+        {
+            result.Success = false;
+            result.Error = "Import URL is required.";
+            return;
+        }
+
+        var repoId = execution.RepositoryId;
+        if (string.IsNullOrEmpty(repoId))
+        {
+            result.Success = false;
+            result.Error = "No repository associated with this workflow execution.";
+            return;
+        }
+
+        var repo = await repoService.GetRepositoryAsync(repoId, execution.AccountId);
+        if (repo == null)
+        {
+            result.Success = false;
+            result.Error = $"Repository {repoId} not found.";
+            return;
+        }
+
+        try
+        {
+            // Set/update the import source URL on the repo, then reimport
+            repo.ImportedFromUrl = url;
+            repo = await repoService.UpdateRepositoryAsync(repo);
+            await importService.ReimportAsync(repo, msg => result.RenderedBody = msg);
+
+            result.Success = true;
+            result.RenderedBody = $"Imported from {url}";
+        }
+        catch (Exception ex)
+        {
+            result.Success = false;
+            result.Error = $"Import failed: {ex.Message}";
         }
     }
 

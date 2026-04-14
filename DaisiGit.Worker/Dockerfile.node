@@ -2,8 +2,9 @@
 
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
-COPY . .
-RUN dotnet publish DaisiGit.Worker -c Release -o /app
+COPY daisi-git/ ./daisi-git/
+COPY daisi-sdk-dotnet/ ./daisi-sdk-dotnet/
+RUN dotnet publish daisi-git/DaisiGit.Worker -c Release -o /app
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0
 RUN apt-get update && apt-get install -y --no-install-recommends \

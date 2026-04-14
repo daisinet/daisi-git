@@ -49,9 +49,8 @@ jobs:
 
       - name: Build and push ${{ matrix.runtime }} image
         run: |
-          cd daisi-git
           docker build \
-            -f DaisiGit.Worker/${{ matrix.dockerfile }} \
+            -f daisi-git/DaisiGit.Worker/${{ matrix.dockerfile }} \
             -t ${{ secrets.ACR_NAME }}.azurecr.io/daisigit-worker-${{ matrix.runtime }}:${{ github.sha }} \
             -t ${{ secrets.ACR_NAME }}.azurecr.io/daisigit-worker-${{ matrix.runtime }}:latest \
             .

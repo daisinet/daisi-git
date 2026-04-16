@@ -79,6 +79,9 @@ builder.Services.AddScoped<WorkflowTriggerService>();
 builder.Services.AddScoped<WorkflowEngine>();
 builder.Services.AddScoped<WorkflowService>();
 
+// Daisinet catalog (singleton — caches model list across requests)
+builder.Services.AddSingleton<DaisinetModelCatalog>();
+
 // Workflow dispatch (queue-based isolation)
 var workflowQueueConnectionString = builder.Configuration["WorkflowQueue:ConnectionString"];
 if (!string.IsNullOrEmpty(workflowQueueConnectionString))
@@ -222,6 +225,7 @@ app.MapGitSmartProtocolEndpoints();
 // REST API endpoints
 app.MapDaisiGitApiEndpoints();
 app.MapWorkflowApiEndpoints();
+app.MapDaisinetApiEndpoints();
 
 // CLI install and download endpoints (public, no auth required)
 app.MapCliEndpoints();

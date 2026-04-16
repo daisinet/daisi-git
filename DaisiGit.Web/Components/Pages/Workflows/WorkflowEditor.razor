@@ -4,6 +4,7 @@
 @inject RepositoryService RepoService
 @inject SecretService SecretService
 @inject BrowseService BrowseService
+@inject DaisinetModelCatalog DaisinetCatalog
 @inject NavigationManager Nav
 
 <PageTitle>@(isNew ? "New Workflow" : "Edit Workflow") - @Owner/@RepoSlug - Daisi Git</PageTitle>
@@ -476,6 +477,116 @@
                     </div>
                     break;
 
+                case WorkflowStepType.RunMinion:
+                    <div class="alert alert-info small">
+                        <i class="fa-duotone fa-robot me-1"></i>
+                        Runs <code>daisi-minion</code> in the workspace, powered by daisinet. Requires runtime <code>dotnet</code> or <code>full</code>.
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Instructions source</label>
+                        <div class="btn-group w-100" role="group">
+                            <input type="radio" class="btn-check" id="minion-inline" name="minion-src"
+                                   checked="@(!minionUseFile)"
+                                   @onchange="@(() => { minionUseFile = false; step.MinionInstructionsFile = null; })" />
+                            <label class="btn btn-outline-secondary" for="minion-inline">Inline prompt</label>
+
+                            <input type="radio" class="btn-check" id="minion-file" name="minion-src"
+                                   checked="@minionUseFile"
+                                   @onchange="@(() => { minionUseFile = true; step.MinionInstructions = null; })" />
+                            <label class="btn btn-outline-secondary" for="minion-file">File in repo</label>
+                        </div>
+                    </div>
+                    @if (minionUseFile)
+                    {
+                        <div class="mb-3">
+                            <label class="form-label">Instructions file <Tip Text="Workspace-relative path to a file whose contents become the minion's goal. e.g. &quot;.minion/doc-task.md&quot;" /></label>
+                            <input type="text" class="form-control" @bind="step.MinionInstructionsFile"
+                                   placeholder=".minion/doc-task.md" />
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="mb-3">
+                            <label class="form-label">Instructions</label>
+                            <VarBtn InputId="wf-minion-instr" TriggerType="workflow.TriggerType" StepIndex="selectedStepIndex" Steps="workflow.Steps" Secrets="repoSecrets">
+                                <textarea id="wf-minion-instr" class="form-control" rows="4" @bind="step.MinionInstructions"
+                                          placeholder="Analyze the repo and print a summary."></textarea>
+                            </VarBtn>
+                        </div>
+                    }
+                    <div class="mb-3">
+                        <label class="form-label">Model <Tip Text="Daisinet model name. Leave empty to use the ORC's default text-generation model." /></label>
+                        @if (daisinetModelsError != null)
+                        {
+                            <input type="text" class="form-control" @bind="step.MinionModel" placeholder="Qwen 3.5" />
+                            <div class="form-text text-warning">@daisinetModelsError</div>
+                        }
+                        else if (daisinetModels == null)
+                        {
+                            <div class="form-text"><i class="fa-duotone fa-spinner fa-spin me-1"></i>Loading models from ORC…</div>
+                        }
+                        else
+                        {
+                            <select class="form-select" @bind="step.MinionModel">
+                                <option value="">-- ORC default text-gen model --</option>
+                                @foreach (var m in daisinetModels)
+                                {
+                                    <option value="@m.Name">@m.Name @(m.IsDefault ? "(default)" : "") @(m.HasReasoning ? "[reasoning]" : "")</option>
+                                }
+                            </select>
+                        }
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Working directory <Tip Text="Workspace-relative subdir the minion runs in. Leave empty for workspace root." /></label>
+                        <input type="text" class="form-control" @bind="step.MinionWorkingDirectory"
+                               placeholder="Leave empty for workspace root" />
+                    </div>
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Role <Tip Text="coder, cto, chat, team-lead, etc." /></label>
+                            <input type="text" class="form-control" @bind="step.MinionRole" placeholder="coder" />
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Max iterations <Tip Text="Goal-loop cap. Default 20." /></label>
+                            <input type="number" class="form-control" @bind="step.MinionMaxIterations" min="1" max="100" placeholder="20" />
+                        </div>
+                    </div>
+                    <div class="row">
+                        <div class="col-md-4 mb-3">
+                            <label class="form-label">Context size</label>
+                            <input type="number" class="form-control" @bind="step.MinionContextSize" min="512" placeholder="default" />
+                        </div>
+                        <div class="col-md-4 mb-3">
+                            <label class="form-label">Max tokens</label>
+                            <input type="number" class="form-control" @bind="step.MinionMaxTokens" min="64" placeholder="default" />
+                        </div>
+                        <div class="col-md-4 mb-3">
+                            <label class="form-label">Timeout (s) <Tip Text="Default 1500. Hard-capped at 1800 (30m container limit)." /></label>
+                            <input type="number" class="form-control" @bind="step.MinionTimeoutSeconds" min="30" max="1800" placeholder="1500" />
+                        </div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">ORC address <Tip Text="Override host:port. Leave empty to use the SDK default." /></label>
+                        <input type="text" class="form-control" @bind="step.MinionOrcAddress" placeholder="orc.daisinet.com:443" />
+                    </div>
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" id="wf-minion-json"
+                               checked="@(step.MinionJsonOutput == true)"
+                               @onchange="@((ChangeEventArgs e) => step.MinionJsonOutput = (bool?)e.Value)" />
+                        <label class="form-check-label" for="wf-minion-json">
+                            JSON event output <Tip Text="Emits structured JSON events on stderr. Useful for parsing minion progress in downstream steps." />
+                        </label>
+                    </div>
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" id="wf-minion-grammar"
+                               checked="@(step.MinionGrammar == true)"
+                               @onchange="@((ChangeEventArgs e) => step.MinionGrammar = (bool?)e.Value)" />
+                        <label class="form-check-label" for="wf-minion-grammar">
+                            GBNF grammar-constrained tool calls <Tip Text="Forces valid JSON tool calls. Slower, but eliminates malformed calls." />
+                        </label>
+                    </div>
+                    break;
+
                 case WorkflowStepType.RunScript:
                     <div class="mb-3">
                         <label class="form-label">Command</label>
@@ -766,6 +877,12 @@
     private Dictionary<string, List<string>> branchCache = new();
     private string stepSearchQuery = "";
 
+    // Run-minion editor state
+    private IReadOnlyList<DaisinetModelInfo>? daisinetModels;
+    private string? daisinetModelsError;
+    private bool minionUseFile;
+    private bool minionModelsRequested;
+
     private string triggerTypeStr
     {
         get => workflow.TriggerType.ToString();
@@ -844,6 +961,29 @@
     {
         selectedStepIndex = index;
         showAddStepMenu = false;
+
+        // Initialize run-minion file/inline toggle from the step's current state.
+        if (index >= 0 && index < workflow.Steps.Count
+            && workflow.Steps[index].StepType == WorkflowStepType.RunMinion)
+        {
+            minionUseFile = !string.IsNullOrEmpty(workflow.Steps[index].MinionInstructionsFile);
+            _ = EnsureDaisinetModelsLoadedAsync();
+        }
+    }
+
+    private async Task EnsureDaisinetModelsLoadedAsync()
+    {
+        if (minionModelsRequested) return;
+        minionModelsRequested = true;
+        try
+        {
+            daisinetModels = await DaisinetCatalog.GetTextGenModelsAsync(CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            daisinetModelsError = ex.Message;
+        }
+        StateHasChanged();
     }
 
     private void InsertStep(int index)
@@ -1001,6 +1141,7 @@
         WorkflowStepType.RunScript => "▶",
         WorkflowStepType.SendEmail => "✉",
         WorkflowStepType.ImportFromUrl => "⬇",
+        WorkflowStepType.RunMinion => "🤖",
         WorkflowStepType.Condition => "⑂",
         _ => "•"
     };
@@ -1020,6 +1161,7 @@
         WorkflowStepType.RunScript => "Run Script",
         WorkflowStepType.SendEmail => "Send Email",
         WorkflowStepType.ImportFromUrl => "Import from URL",
+        WorkflowStepType.RunMinion => "Run Minion",
         WorkflowStepType.Condition => "Condition",
         _ => type.ToString()
     };
@@ -1056,6 +1198,7 @@
                 fields.Add($"{{{{{prefix}.response}}}}");
                 break;
             case WorkflowStepType.RunScript:
+            case WorkflowStepType.RunMinion:
                 fields.Add($"{{{{{prefix}.exitCode}}}}");
                 fields.Add($"{{{{{prefix}.output}}}}");
                 break;
@@ -1214,6 +1357,9 @@
             new(WorkflowStepType.RunScript, "Run Script", "Execute a shell command in the workspace", "fa-duotone fa-terminal", "#212529"),
             new(WorkflowStepType.DeployAzureWebApp, "Deploy to Azure Web App", "Zip-deploy workspace or repo to Azure App Service", "fa-duotone fa-cloud-arrow-up", "#0078d4"),
             new(WorkflowStepType.ImportFromUrl, "Import from Git URL", "Clone an external git repo and import all objects and refs", "fa-duotone fa-cloud-arrow-down", "#198754"),
+        ]),
+        new("AI", "AI", "fa-duotone fa-robot", "#6610f2", [
+            new(WorkflowStepType.RunMinion, "Run Minion", "Run an autonomous AI agent in the workspace via daisinet", "fa-duotone fa-robot", "#6610f2"),
         ]),
         new("Flow Control", "Flow", "fa-duotone fa-route", "#6c757d", [
             new(WorkflowStepType.Wait, "Wait", "Pause the workflow for a set duration", "fa-duotone fa-clock", "#6c757d"),

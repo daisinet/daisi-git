@@ -18,5 +18,6 @@ public enum WorkflowStepType
     Checkout,
     RunScript,
     SendEmail,
-    ImportFromUrl
+    ImportFromUrl,
+    RunMinion
 }

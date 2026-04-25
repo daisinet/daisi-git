@@ -4,6 +4,7 @@
 @inject RepositoryService RepoService
 @inject TeamService TeamService
 @inject BrowseService BrowseService
+@inject OrgActivityService ActivityService
 @inject DaisiGit.Web.Services.DaisiUserService UserService
 
 <PageTitle>@(org?.Name ?? "Organization") - Daisi Git</PageTitle>
@@ -34,6 +35,11 @@
         <li class="nav-item">
             <a class="nav-link @(activeTab == "repos" ? "active" : "")" href="#" @onclick:preventDefault @onclick="SetTabRepos">
                 <i class="fa-duotone fa-code-branch me-1"></i> Repositories
+            </a>
+        </li>
+        <li class="nav-item">
+            <a class="nav-link @(activeTab == "activity" ? "active" : "")" href="#" @onclick:preventDefault @onclick="SetTabActivity">
+                <i class="fa-duotone fa-chart-simple me-1"></i> Activity
             </a>
         </li>
         @if (!isAnonymous)
@@ -99,6 +105,148 @@
         {
             <div class="text-center py-4 text-muted">
                 <p>No repositories in this organization yet.</p>
+            </div>
+        }
+    }
+    else if (activeTab == "activity")
+    {
+        <div class="d-flex flex-wrap gap-2 align-items-center mb-3">
+            <label class="text-muted small mb-0">Range</label>
+            <select class="form-select form-select-sm" style="width:auto;" @bind="activityDays" @bind:after="ReloadActivity">
+                <option value="7">7 days</option>
+                <option value="30">30 days</option>
+                <option value="90">90 days</option>
+                <option value="180">180 days</option>
+                <option value="365">1 year</option>
+            </select>
+
+            <label class="text-muted small mb-0 ms-2">Granularity</label>
+            <select class="form-select form-select-sm" style="width:auto;" @bind="activityGranularity" @bind:after="ReloadActivity">
+                <option value="day">Day</option>
+                <option value="week">Week</option>
+                <option value="month">Month</option>
+            </select>
+
+            @if (!isAnonymous)
+            {
+                <div class="form-check form-switch ms-2 mb-0">
+                    <input class="form-check-input" type="checkbox" id="includePriv" @bind="includePrivate" @bind:after="ReloadActivity" />
+                    <label class="form-check-label small text-muted" for="includePriv">Include private repos</label>
+                </div>
+            }
+
+            @if (loadingActivity)
+            {
+                <span class="spinner-border spinner-border-sm text-muted ms-2"></span>
+            }
+        </div>
+
+        @if (activity != null && activity.Buckets.Count > 0)
+        {
+            var maxCount = activity.Repos.SelectMany(r => r.Counts).DefaultIfEmpty(0).Max();
+            <div class="card">
+                <div class="card-body p-0" style="overflow-x:auto;">
+                    <table class="table table-sm mb-0" style="min-width:100%;">
+                        <thead>
+                            <tr class="text-muted small">
+                                <th style="position:sticky;left:0;background:var(--bs-body-bg);z-index:1;">Repository</th>
+                                @foreach (var b in activity.Buckets)
+                                {
+                                    <th class="text-center small fw-normal" style="font-size:0.7rem;white-space:nowrap;">@b.Label</th>
+                                }
+                                <th class="text-center small">Total</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var r in activity.Repos)
+                            {
+                                var total = r.Counts.Sum();
+                                <tr>
+                                    <td style="position:sticky;left:0;background:var(--bs-body-bg);z-index:1;">
+                                        <a href="/@r.OwnerName/@r.Slug" class="text-decoration-none">@r.Slug</a>
+                                        @if (r.Visibility != GitRepoVisibility.Public)
+                                        {
+                                            <span class="badge bg-secondary ms-1" style="font-size:0.6rem;">@r.Visibility</span>
+                                        }
+                                    </td>
+                                    @for (var i = 0; i < r.Counts.Length; i++)
+                                    {
+                                        var idx = i; // capture
+                                        var count = r.Counts[idx];
+                                        var bucket = activity.Buckets[idx];
+                                        <td class="text-center p-0" style="cursor:pointer;"
+                                            title="@($"{r.Slug} on {bucket.Label}: {count} commit{(count == 1 ? "" : "s")}")"
+                                            @onclick="() => OpenCommitsModal(r, idx)">
+                                            <div style="display:inline-block;width:18px;height:18px;border-radius:3px;@CellStyle(count, maxCount)"></div>
+                                        </td>
+                                    }
+                                    <td class="text-center small text-muted">@total</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+                <div class="card-footer text-muted small d-flex align-items-center gap-2">
+                    Less
+                    <span style="display:inline-block;width:14px;height:14px;border-radius:2px;@CellStyle(0, maxCount)"></span>
+                    <span style="display:inline-block;width:14px;height:14px;border-radius:2px;@CellStyle(Math.Max(1, maxCount/4), maxCount)"></span>
+                    <span style="display:inline-block;width:14px;height:14px;border-radius:2px;@CellStyle(Math.Max(1, maxCount/2), maxCount)"></span>
+                    <span style="display:inline-block;width:14px;height:14px;border-radius:2px;@CellStyle(Math.Max(1, (3*maxCount)/4), maxCount)"></span>
+                    <span style="display:inline-block;width:14px;height:14px;border-radius:2px;@CellStyle(maxCount, maxCount)"></span>
+                    More
+                </div>
+            </div>
+        }
+        else if (!loadingActivity)
+        {
+            <div class="text-center py-5 text-muted">
+                <i class="fa-duotone fa-chart-simple fa-2x mb-2 d-block"></i>
+                <p>No commit activity in this range.</p>
+            </div>
+        }
+
+        @if (modalRepo != null && modalBucketIndex >= 0)
+        {
+            var bucket = activity!.Buckets[modalBucketIndex];
+            var inBucket = modalRepo.Commits.Where(c => c.BucketIndex == modalBucketIndex).ToList();
+            <div class="modal d-block" tabindex="-1" style="background:rgba(0,0,0,0.5);" @onclick="CloseCommitsModal">
+                <div class="modal-dialog modal-dialog-centered modal-lg" @onclick:stopPropagation>
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <h5 class="modal-title">
+                                <a href="/@modalRepo.OwnerName/@modalRepo.Slug" class="text-decoration-none">@modalRepo.Slug</a>
+                                <span class="text-muted">·</span> @bucket.Label
+                                <span class="text-muted small ms-1">(@inBucket.Count commit@(inBucket.Count == 1 ? "" : "s"))</span>
+                            </h5>
+                            <button class="btn-close" @onclick="CloseCommitsModal"></button>
+                        </div>
+                        <div class="modal-body p-0">
+                            @if (inBucket.Count == 0)
+                            {
+                                <div class="text-center text-muted p-4">No commits.</div>
+                            }
+                            else
+                            {
+                                <ul class="list-group list-group-flush">
+                                    @foreach (var c in inBucket)
+                                    {
+                                        <li class="list-group-item">
+                                            <div class="d-flex justify-content-between align-items-start">
+                                                <div>
+                                                    <a href="/@modalRepo.OwnerName/@modalRepo.Slug/commit/@c.Sha" class="fw-semibold text-decoration-none">@c.MessageFirstLine</a>
+                                                    <div class="text-muted small">
+                                                        @c.AuthorName · @c.AuthorDateUtc.ToLocalTime().ToString("MMM d, HH:mm")
+                                                    </div>
+                                                </div>
+                                                <code class="text-muted small">@c.ShortSha</code>
+                                            </div>
+                                        </li>
+                                    }
+                                </ul>
+                            }
+                        </div>
+                    </div>
+                </div>
             </div>
         }
     }
@@ -258,6 +406,15 @@ else if (!loading)
     private string? profileReadme;
     private bool isAnonymous => string.IsNullOrEmpty(UserId);
 
+    // Activity tab
+    private OrgActivity? activity;
+    private bool loadingActivity;
+    private int activityDays = 30;
+    private string activityGranularity = "day";
+    private bool includePrivate;
+    private RepoActivity? modalRepo;
+    private int modalBucketIndex = -1;
+
     // User search
     private string userSearchTerm = "";
     private List<DaisiGit.Web.Services.DaisiUserInfo> searchResults = [];
@@ -380,6 +537,60 @@ else if (!loading)
     private void SetTabRepos() => activeTab = "repos";
     private void SetTabMembers() => activeTab = "members";
     private void SetTabTeams() => activeTab = "teams";
+    private async Task SetTabActivity()
+    {
+        activeTab = "activity";
+        if (activity == null) await ReloadActivity();
+    }
+
+    private async Task ReloadActivity()
+    {
+        if (org == null) return;
+        loadingActivity = true;
+        StateHasChanged();
+        try
+        {
+            var granularity = activityGranularity.ToLowerInvariant() switch
+            {
+                "month" => ActivityGranularity.Month,
+                "week" => ActivityGranularity.Week,
+                _ => ActivityGranularity.Day
+            };
+            activity = await ActivityService.GetActivityAsync(
+                org.Slug, activityDays, granularity, includePrivate, UserId);
+        }
+        catch { activity = null; }
+        loadingActivity = false;
+    }
+
+    private void OpenCommitsModal(RepoActivity repo, int bucketIndex)
+    {
+        modalRepo = repo;
+        modalBucketIndex = bucketIndex;
+    }
+
+    private void CloseCommitsModal()
+    {
+        modalRepo = null;
+        modalBucketIndex = -1;
+    }
+
+    /// <summary>Inline style for a heatmap cell. Linear ramp on saturation across green.</summary>
+    private static string CellStyle(int count, int max)
+    {
+        if (count <= 0) return "background:#ebedf0;";
+        if (max <= 0) max = 1;
+        var ratio = (double)count / max;
+        // 5-step ramp similar to GitHub's contributions graph
+        var color = ratio switch
+        {
+            <= 0.25 => "#9be9a8",
+            <= 0.50 => "#40c463",
+            <= 0.75 => "#30a14e",
+            _       => "#216e39"
+        };
+        return $"background:{color};";
+    }
 
     private static string RoleBadgeColor(GitRole role) => role switch
     {

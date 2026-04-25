@@ -328,9 +328,9 @@ public class DaisiGitClient : IDisposable
     public async Task DeleteWorkflowAsync(string owner, string slug, string id)
         => await DeleteAsync($"api/git/repos/{owner}/{slug}/workflows/{id}");
 
-    /// <summary>Triggers a workflow execution immediately ("run now").</summary>
-    public async Task<WorkflowExecution> RunWorkflowAsync(string owner, string slug, string id)
-        => await PostAsync<WorkflowExecution>($"api/git/repos/{owner}/{slug}/workflows/{id}/run", new { });
+    /// <summary>Triggers a workflow execution immediately ("run now"), optionally with inputs.</summary>
+    public async Task<WorkflowExecution> RunWorkflowAsync(string owner, string slug, string id, Dictionary<string, string>? inputs = null)
+        => await PostAsync<WorkflowExecution>($"api/git/repos/{owner}/{slug}/workflows/{id}/run", new { inputs });
 
     /// <summary>Lists executions for a workflow.</summary>
     public async Task<List<WorkflowExecution>> ListWorkflowRunsAsync(string owner, string slug, string id, int take = 50, int skip = 0)

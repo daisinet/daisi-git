@@ -134,7 +134,7 @@ public static class WorkflowApiEndpoints
     }
 
     private static async Task<IResult> RunWorkflowNow(
-        HttpContext ctx, string owner, string slug, string id,
+        HttpContext ctx, string owner, string slug, string id, RunWorkflowRequest? req,
         RepositoryService repoService, WorkflowService workflowService,
         PermissionService permissionService)
     {
@@ -148,8 +148,16 @@ public static class WorkflowApiEndpoints
         if (workflow == null) return Results.NotFound();
         if (workflow.RepositoryId != null && workflow.RepositoryId != repo.id) return Results.NotFound();
 
-        var execution = await workflowService.RunNowAsync(workflow, repo, GetUserId(ctx), GetUserName(ctx));
-        return Results.Accepted($"/api/git/repos/{owner}/{slug}/runs/{execution.id}", execution);
+        try
+        {
+            var execution = await workflowService.RunNowAsync(
+                workflow, repo, GetUserId(ctx), GetUserName(ctx), inputs: req?.Inputs);
+            return Results.Accepted($"/api/git/repos/{owner}/{slug}/runs/{execution.id}", execution);
+        }
+        catch (ArgumentException ex)
+        {
+            return Results.BadRequest(new { error = ex.Message });
+        }
     }
 
     private static async Task<IResult> GetRun(
@@ -175,6 +183,7 @@ public static class WorkflowApiEndpoints
         workflow.Name = parsed.Name;
         workflow.Steps = parsed.Steps;
         workflow.Env = parsed.Env;
+        workflow.Inputs = parsed.Inputs ?? [];
 
         var firstTrigger = parsed.Triggers.FirstOrDefault();
         if (firstTrigger != null)
@@ -316,6 +325,8 @@ public record CreateWorkflowRequest(
     bool AccountWide = false);
 
 public record YamlBody(string? Yaml);
+
+public record RunWorkflowRequest(Dictionary<string, string>? Inputs);
 
 public record UpdateWorkflowRequest(
     string? Name = null,

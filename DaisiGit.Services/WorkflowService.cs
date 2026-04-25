@@ -43,7 +43,8 @@ public class WorkflowService(DaisiGitCosmo cosmo)
     /// Populates a minimal context with repo info and the actor who triggered it.
     /// </summary>
     public async Task<WorkflowExecution> RunNowAsync(GitWorkflow workflow, GitRepository repo,
-        string actorId, string actorName, string? actorEmail = null)
+        string actorId, string actorName, string? actorEmail = null,
+        Dictionary<string, string>? inputs = null)
     {
         var context = new Dictionary<string, string>
         {
@@ -64,6 +65,29 @@ public class WorkflowService(DaisiGitCosmo cosmo)
         var nameParts = actorName.Split(' ', 2, StringSplitOptions.TrimEntries);
         context["actor.firstName"] = nameParts[0];
         context["actor.lastName"] = nameParts.Length > 1 ? nameParts[1] : "";
+
+        // Resolve and validate declared inputs. Missing required inputs throw; missing
+        // optional inputs fall back to Default. Unknown supplied inputs are ignored
+        // (mirrors GitHub Actions behavior — keeps callers forward-compatible).
+        if (workflow.Inputs is { Count: > 0 })
+        {
+            foreach (var def in workflow.Inputs)
+            {
+                if (string.IsNullOrWhiteSpace(def.Name)) continue;
+                inputs ??= new();
+                inputs.TryGetValue(def.Name, out var supplied);
+                var value = supplied ?? def.Default;
+                if (string.IsNullOrEmpty(value))
+                {
+                    if (def.Required)
+                        throw new ArgumentException($"Input '{def.Name}' is required.");
+                    continue;
+                }
+                if (def.Type == "choice" && def.Choices is { Count: > 0 } && !def.Choices.Contains(value))
+                    throw new ArgumentException($"Input '{def.Name}' must be one of: {string.Join(", ", def.Choices)}");
+                context[$"inputs.{def.Name}"] = value;
+            }
+        }
 
         return await cosmo.CreateWorkflowExecutionAsync(new WorkflowExecution
         {

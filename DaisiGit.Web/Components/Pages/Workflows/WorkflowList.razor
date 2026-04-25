@@ -103,6 +103,67 @@
         </div>
     }
 
+    @if (runInputsTarget != null)
+    {
+        <div class="modal d-block" tabindex="-1" style="background: rgba(0,0,0,0.4);" @onclick="() => runInputsTarget = null">
+            <div class="modal-dialog modal-dialog-centered" @onclick:stopPropagation="true">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title">Run @runInputsTarget.Name</h5>
+                        <button type="button" class="btn-close" @onclick="() => runInputsTarget = null"></button>
+                    </div>
+                    <div class="modal-body">
+                        @foreach (var input in runInputsTarget.Inputs)
+                        {
+                            var nm = input.Name;
+                            <div class="mb-3">
+                                <label class="form-label">@(string.IsNullOrEmpty(input.Description) ? input.Name : input.Description)
+                                    @if (input.Required) { <span class="text-danger ms-1">*</span> }
+                                </label>
+                                @if (input.Type == "choice" && input.Choices is { Count: > 0 })
+                                {
+                                    <select class="form-select form-select-sm" value="@runInputValues.GetValueOrDefault(nm, input.Default ?? "")"
+                                            @onchange="e => runInputValues[nm] = e.Value?.ToString() ?? string.Empty">
+                                        @if (!input.Required) { <option value="">— None —</option> }
+                                        @foreach (var c in input.Choices)
+                                        {
+                                            <option value="@c">@c</option>
+                                        }
+                                    </select>
+                                }
+                                else if (input.Type == "boolean")
+                                {
+                                    <select class="form-select form-select-sm" value="@runInputValues.GetValueOrDefault(nm, input.Default ?? "false")"
+                                            @onchange="e => runInputValues[nm] = e.Value?.ToString() ?? string.Empty">
+                                        <option value="true">true</option>
+                                        <option value="false">false</option>
+                                    </select>
+                                }
+                                else
+                                {
+                                    <input type="@(input.Type == "number" ? "number" : "text")" class="form-control form-control-sm"
+                                           value="@runInputValues.GetValueOrDefault(nm, input.Default ?? "")"
+                                           @oninput="e => runInputValues[nm] = e.Value?.ToString() ?? string.Empty" />
+                                }
+                            </div>
+                        }
+                        @if (!string.IsNullOrEmpty(runMessage))
+                        {
+                            <div class="alert alert-danger small">@runMessage</div>
+                        }
+                    </div>
+                    <div class="modal-footer">
+                        <button class="btn btn-sm btn-outline-secondary" @onclick="() => runInputsTarget = null">Cancel</button>
+                        <button class="btn btn-sm btn-success" @onclick="RunWithInputsConfirmed" disabled="@(runningWorkflowId != null)">
+                            @if (runningWorkflowId != null) { <span class="spinner-border spinner-border-sm me-1"></span> }
+                            Run
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    }
+
     @if (deleteTarget != null)
     {
         <div class="modal d-block" tabindex="-1" style="background: rgba(0,0,0,0.4);" @onclick="() => deleteTarget = null">
@@ -164,10 +225,39 @@
     private async Task RunNow(GitWorkflow wf)
     {
         if (repo == null) return;
+        if (wf.Inputs is { Count: > 0 })
+        {
+            runInputsTarget = wf;
+            runInputValues = new Dictionary<string, string>();
+            runMessage = null;
+            return;
+        }
+        await RunWithInputs(wf, null);
+    }
+
+    private GitWorkflow? runInputsTarget;
+    private Dictionary<string, string> runInputValues = new();
+
+    private async Task RunWithInputsConfirmed()
+    {
+        var wf = runInputsTarget;
+        if (wf == null) return;
+        // Drop empty values so server-side defaults / required-checks see "missing", not "blank".
+        var supplied = runInputValues
+            .Where(kv => !string.IsNullOrEmpty(kv.Value))
+            .ToDictionary(kv => kv.Key, kv => kv.Value);
+        await RunWithInputs(wf, supplied);
+    }
+
+    private async Task RunWithInputs(GitWorkflow wf, Dictionary<string, string>? inputs)
+    {
+        if (repo == null) return;
         runningWorkflowId = wf.id;
+        runMessage = null;
         try
         {
-            var execution = await WorkflowService.RunNowAsync(wf, repo, UserId, UserName);
+            var execution = await WorkflowService.RunNowAsync(wf, repo, UserId, UserName, inputs: inputs);
+            runInputsTarget = null;
             Nav.NavigateTo($"/{Owner}/{RepoSlug}/workflows/{wf.id}/history");
         }
         catch (Exception ex)

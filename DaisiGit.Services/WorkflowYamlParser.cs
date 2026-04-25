@@ -53,6 +53,7 @@ public static class WorkflowYamlParser
             }
 
             var triggers = ParseTriggers(raw.On);
+            var inputs = ParseInputs(raw.On);
             var steps = ParseJobs(raw.Jobs);
 
             result = new ParsedFileWorkflow
@@ -60,7 +61,8 @@ public static class WorkflowYamlParser
                 Name = raw.Name ?? "Unnamed workflow",
                 Triggers = triggers,
                 Steps = steps,
-                Env = raw.Env
+                Env = raw.Env,
+                Inputs = inputs
             };
             return true;
         }
@@ -96,6 +98,25 @@ public static class WorkflowYamlParser
         {
             onSection[triggerKey] = null;
         }
+
+        // Render declared inputs alongside the trigger as workflow_dispatch.inputs.
+        if (workflow.Inputs is { Count: > 0 })
+        {
+            var inputsMap = new Dictionary<string, object?>();
+            foreach (var input in workflow.Inputs)
+            {
+                if (string.IsNullOrWhiteSpace(input.Name)) continue;
+                var entry = new Dictionary<string, object?>();
+                if (!string.IsNullOrEmpty(input.Description)) entry["description"] = input.Description;
+                if (!string.IsNullOrEmpty(input.Type) && input.Type != "string") entry["type"] = input.Type;
+                if (input.Required) entry["required"] = true;
+                if (!string.IsNullOrEmpty(input.Default)) entry["default"] = input.Default;
+                if (input.Choices is { Count: > 0 }) entry["options"] = input.Choices;
+                inputsMap[input.Name] = entry;
+            }
+            onSection["workflow_dispatch"] = new Dictionary<string, object?> { ["inputs"] = inputsMap };
+        }
+
         doc["on"] = onSection;
 
         if (workflow.Env is { Count: > 0 })
@@ -260,6 +281,37 @@ public static class WorkflowYamlParser
     }
 
     // ── Parsing helpers ──
+
+    /// <summary>
+    /// Reads the inputs declared under <c>on: workflow_dispatch: inputs:</c>. Mirrors the
+    /// GitHub Actions schema; ignores anything we don't understand.
+    /// </summary>
+    private static List<WorkflowInput> ParseInputs(Dictionary<string, object?>? on)
+    {
+        var result = new List<WorkflowInput>();
+        if (on == null) return result;
+        if (!on.TryGetValue("workflow_dispatch", out var wd) || wd is not Dictionary<object, object> wdMap) return result;
+        if (!wdMap.TryGetValue("inputs", out var inputsObj) || inputsObj is not Dictionary<object, object> inputs) return result;
+
+        foreach (var (key, value) in inputs)
+        {
+            var name = key?.ToString();
+            if (string.IsNullOrEmpty(name)) continue;
+            var def = new WorkflowInput { Name = name };
+
+            if (value is Dictionary<object, object> map)
+            {
+                if (map.TryGetValue("description", out var d)) def.Description = d?.ToString();
+                if (map.TryGetValue("type", out var t)) def.Type = t?.ToString() ?? "string";
+                if (map.TryGetValue("default", out var dv)) def.Default = dv?.ToString();
+                if (map.TryGetValue("required", out var rv) && bool.TryParse(rv?.ToString(), out var rq)) def.Required = rq;
+                if (map.TryGetValue("options", out var opts) && opts is List<object> list)
+                    def.Choices = list.Select(o => o?.ToString() ?? "").Where(s => s.Length > 0).ToList();
+            }
+            result.Add(def);
+        }
+        return result;
+    }
 
     private static List<WorkflowTrigger> ParseTriggers(Dictionary<string, object?>? on)
     {
@@ -503,6 +555,7 @@ public class ParsedFileWorkflow
     public List<WorkflowTrigger> Triggers { get; set; } = [];
     public List<WorkflowStep> Steps { get; set; } = [];
     public Dictionary<string, string>? Env { get; set; }
+    public List<WorkflowInput> Inputs { get; set; } = [];
 }
 
 /// <summary>

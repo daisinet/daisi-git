@@ -122,6 +122,17 @@ public class WorkflowStep
     /// <summary>If true, ignore "package already exists" errors.</summary>
     public bool? NugetSkipDuplicate { get; set; }
 
+    // ── Matrix fanout ──
+    /// <summary>
+    /// Declared matrix dimensions: each key produces one variant per value. The engine
+    /// expands this into one effective step per cell of the cartesian product, exposing
+    /// the chosen values to merge fields as {{matrix.&lt;key&gt;}}.
+    /// </summary>
+    public Dictionary<string, List<string>>? Matrix { get; set; }
+
+    /// <summary>Set per-cell after expansion. Inputs to the cell as matrix.&lt;key&gt;.</summary>
+    public Dictionary<string, string>? MatrixValues { get; set; }
+
     // ── DispatchWorkflow (call another workflow in this or another repo) ──
     /// <summary>Target repo as "owner/slug". Empty = same repo as the current workflow.</summary>
     public string? DispatchRepo { get; set; }

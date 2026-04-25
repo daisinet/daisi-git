@@ -185,11 +185,14 @@ app.Use(async (context, next) =>
         && !Path.HasExtension(path))
     {
         // Allow potential public pages through without auth:
-        // /{owner}/{repo}/... paths (2+ segments that aren't system routes)
-        var segments = path.Trim('/').Split('/');
+        //   /{owner}            -> user/org profile (1 segment)
+        //   /{owner}/{repo}/... -> repo or nested page (2+ segments)
+        // Either way, the page itself enforces what's visible to anonymous viewers.
+        var segments = path.Trim('/').Split('/', StringSplitOptions.RemoveEmptyEntries);
         var firstSegment = segments.Length > 0 ? segments[0] : "";
-        var isSystemRoute = firstSegment is "" or "settings" or "repositories" or "organizations" or "new";
-        var isPotentialPublicPage = segments.Length >= 2 && !isSystemRoute;
+        var isSystemRoute = firstSegment is "" or "settings" or "repositories" or "organizations"
+            or "new" or "import" or "welcome" or "dashboard";
+        var isPotentialPublicPage = segments.Length >= 1 && !isSystemRoute;
 
         if (!isPotentialPublicPage && !path.StartsWith("/welcome"))
         {

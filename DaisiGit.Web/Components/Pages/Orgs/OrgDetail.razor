@@ -6,7 +6,6 @@
 @inject RepoGroupService RepoGroupService
 @inject BrowseService BrowseService
 @inject OrgActivityService ActivityService
-@inject IHttpClientFactory HttpClientFactory
 @inject NavigationManager Nav
 @inject DaisiGit.Web.Services.DaisiUserService UserService
 
@@ -612,14 +611,28 @@ else if (!loading)
         try
         {
             var bucket = activity!.Buckets[bucketIndex];
-            var http = HttpClientFactory.CreateClient();
-            http.BaseAddress = new Uri(Nav.BaseUri);
-            var url = $"api/git/repos/{repo.OwnerName}/{repo.Slug}/commits-in-range" +
-                      $"?from={bucket.StartUtc:yyyy-MM-ddTHH:mm:ssZ}&to={bucket.EndUtc:yyyy-MM-ddTHH:mm:ssZ}&limit=200";
-            var result = await http.GetFromJsonAsync<List<ModalCommit>>(url);
-            modalCommits = result ?? [];
+            var headSha = await BrowseService.ResolveRefAsync(repo.Id, "main");
+            // Try the actual default branch if "main" didn't resolve.
+            if (headSha == null)
+            {
+                var loaded = await RepoService.GetRepositoryAsync(repo.Id, org!.AccountId);
+                if (loaded != null)
+                    headSha = await BrowseService.ResolveRefAsync(repo.Id, loaded.DefaultBranch);
+            }
+            if (headSha == null) { modalLoading = false; return; }
+
+            var log = await BrowseService.GetCommitLogAsync(repo.Id, headSha, 1000);
+            foreach (var c in log)
+            {
+                var when = c.AuthorDate.UtcDateTime;
+                if (when >= bucket.EndUtc) continue;
+                if (when < bucket.StartUtc) break;
+                modalCommits.Add(new ModalCommit(
+                    c.Sha, c.ShortSha, c.MessageFirstLine, c.AuthorName, when));
+                if (modalCommits.Count >= 200) break;
+            }
         }
-        catch { modalCommits = []; }
+        catch { /* leave list empty */ }
         modalLoading = false;
     }
 

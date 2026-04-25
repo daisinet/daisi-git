@@ -42,6 +42,11 @@
     }
     else if (browseResult != null)
     {
+        @* Activity heatmap is only meaningful at the repo root, not inside subdirectories. *@
+        @if (string.IsNullOrEmpty(Path) && repo != null)
+        {
+            <RepoActivityHeatmap Repo="@repo" />
+        }
         <!-- Branch selector + path breadcrumb + clone button -->
         <div class="d-flex align-items-center gap-2 mb-3">
             <div class="dropdown">

@@ -1,0 +1,244 @@
+@inject BrowseService BrowseService
+@using DaisiGit.Core.Models
+
+@if (Repo == null)
+{
+    return;
+}
+
+<div class="card mb-3">
+    <div class="card-header py-2 d-flex flex-wrap gap-2 align-items-center">
+        <span class="fw-semibold"><i class="fa-duotone fa-chart-simple me-1 text-muted"></i>Activity</span>
+        <div class="ms-auto d-flex flex-wrap gap-2 align-items-center">
+            <select class="form-select form-select-sm" style="width:auto;" @bind="days" @bind:after="Rebuild">
+                <option value="7">7 days</option>
+                <option value="30">30 days</option>
+                <option value="90">90 days</option>
+                <option value="180">180 days</option>
+                <option value="365">1 year</option>
+            </select>
+            <select class="form-select form-select-sm" style="width:auto;" @bind="granularity" @bind:after="Rebuild">
+                <option value="day">Day</option>
+                <option value="week">Week</option>
+                <option value="month">Month</option>
+            </select>
+        </div>
+    </div>
+    <div class="card-body p-2" style="overflow-x:auto;">
+        @{
+            var maxCount = counts.DefaultIfEmpty(0).Max();
+            var total = counts.Sum();
+        }
+        @if (total == 0)
+        {
+            <div class="text-center text-muted small py-3">No commits in this range.</div>
+        }
+        else
+        {
+            <table class="table table-sm table-borderless mb-0 align-middle">
+                <thead>
+                    <tr class="text-muted small">
+                        @foreach (var b in buckets)
+                        {
+                            <th class="text-center fw-normal" style="font-size:0.7rem;white-space:nowrap;">@b.Label</th>
+                        }
+                        <th class="text-center small">Total</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        @for (var i = 0; i < counts.Length; i++)
+                        {
+                            var idx = i;
+                            var count = counts[idx];
+                            var bucket = buckets[idx];
+                            <td class="text-center p-0" style="cursor:pointer;vertical-align:middle;"
+                                title="@($"{bucket.Label}: {count} commit{(count == 1 ? "" : "s")}")"
+                                @onclick="() => OpenModal(idx)">
+                                <div style="display:inline-block;width:18px;height:18px;border-radius:3px;vertical-align:middle;@CellStyle(count, maxCount)"></div>
+                            </td>
+                        }
+                        <td class="text-center small text-muted">@total</td>
+                    </tr>
+                </tbody>
+            </table>
+        }
+    </div>
+</div>
+
+@if (modalBucketIndex >= 0)
+{
+    var bucket = buckets[modalBucketIndex];
+    <div class="modal d-block" tabindex="-1" style="background:rgba(0,0,0,0.5);" @onclick="CloseModal">
+        <div class="modal-dialog modal-dialog-centered modal-lg" @onclick:stopPropagation>
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">
+                        @Repo!.Slug <span class="text-muted">·</span> @bucket.Label
+                        <span class="text-muted small ms-1">(@modalCommits.Count commit@(modalCommits.Count == 1 ? "" : "s"))</span>
+                    </h5>
+                    <button class="btn-close" @onclick="CloseModal"></button>
+                </div>
+                <div class="modal-body p-0">
+                    @if (modalLoading)
+                    {
+                        <div class="text-center p-4"><div class="spinner-border spinner-border-sm text-muted"></div></div>
+                    }
+                    else if (modalCommits.Count == 0)
+                    {
+                        <div class="text-center text-muted p-4">No commits.</div>
+                    }
+                    else
+                    {
+                        <ul class="list-group list-group-flush">
+                            @foreach (var c in modalCommits)
+                            {
+                                <li class="list-group-item">
+                                    <div class="d-flex justify-content-between align-items-start">
+                                        <div>
+                                            <a href="/@Repo.OwnerName/@Repo.Slug/commit/@c.Sha" class="fw-semibold text-decoration-none">@c.MessageFirstLine</a>
+                                            <div class="text-muted small">@c.AuthorName · @c.AuthorDateUtc.ToLocalTime().ToString("MMM d, HH:mm")</div>
+                                        </div>
+                                        <code class="text-muted small">@c.ShortSha</code>
+                                    </div>
+                                </li>
+                            }
+                        </ul>
+                    }
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public GitRepository? Repo { get; set; }
+
+    private int days = 30;
+    private string granularity = "day";
+
+    private List<ActivityBucket> buckets = [];
+    private int[] counts = [];
+    private int modalBucketIndex = -1;
+    private List<ModalCommit> modalCommits = [];
+    private bool modalLoading;
+
+    private record ActivityBucket(DateTime StartUtc, DateTime EndUtc, string Label);
+    private record ModalCommit(string Sha, string ShortSha, string MessageFirstLine, string AuthorName, DateTime AuthorDateUtc);
+
+    protected override void OnParametersSet() => Rebuild();
+
+    private void Rebuild()
+    {
+        if (Repo == null) return;
+        var nowUtc = DateTime.UtcNow;
+        var endExclusive = new DateTime(nowUtc.Year, nowUtc.Month, nowUtc.Day, 0, 0, 0, DateTimeKind.Utc).AddDays(1);
+        var rangeStart = endExclusive.AddDays(-days);
+        buckets = BuildBuckets(rangeStart, endExclusive, granularity);
+
+        var rollup = Repo.CommitCountsByDate ?? new Dictionary<string, int>();
+        counts = new int[buckets.Count];
+        foreach (var (key, count) in rollup)
+        {
+            if (!DateTime.TryParse(key, out var date)) continue;
+            date = DateTime.SpecifyKind(date, DateTimeKind.Utc);
+            for (var i = 0; i < buckets.Count; i++)
+            {
+                if (date >= buckets[i].StartUtc && date < buckets[i].EndUtc)
+                {
+                    counts[i] += count;
+                    break;
+                }
+            }
+        }
+    }
+
+    private static List<ActivityBucket> BuildBuckets(DateTime rangeStart, DateTime endExclusive, string granularity)
+    {
+        var buckets = new List<ActivityBucket>();
+        if (granularity == "month")
+        {
+            var cursor = new DateTime(rangeStart.Year, rangeStart.Month, 1, 0, 0, 0, DateTimeKind.Utc);
+            while (cursor < endExclusive)
+            {
+                var next = cursor.AddMonths(1);
+                buckets.Add(new ActivityBucket(cursor, next, cursor.ToString("yyyy-MM")));
+                cursor = next;
+            }
+        }
+        else if (granularity == "week")
+        {
+            var cursor = rangeStart;
+            var dow = (int)cursor.DayOfWeek;
+            var deltaToMonday = dow == 0 ? -6 : 1 - dow;
+            cursor = cursor.AddDays(deltaToMonday);
+            while (cursor < endExclusive)
+            {
+                var next = cursor.AddDays(7);
+                buckets.Add(new ActivityBucket(cursor, next, cursor.ToString("MMM dd")));
+                cursor = next;
+            }
+        }
+        else
+        {
+            var cursor = rangeStart;
+            while (cursor < endExclusive)
+            {
+                var next = cursor.AddDays(1);
+                buckets.Add(new ActivityBucket(cursor, next, cursor.ToString("MMM dd")));
+                cursor = next;
+            }
+        }
+        return buckets;
+    }
+
+    private async Task OpenModal(int bucketIndex)
+    {
+        modalBucketIndex = bucketIndex;
+        modalCommits = [];
+        modalLoading = true;
+        try
+        {
+            if (Repo != null)
+            {
+                var headSha = await BrowseService.ResolveRefAsync(Repo.id, Repo.DefaultBranch);
+                if (headSha != null)
+                {
+                    var bucket = buckets[bucketIndex];
+                    var log = await BrowseService.GetCommitLogAsync(Repo.id, headSha, 1000);
+                    foreach (var c in log)
+                    {
+                        var when = c.AuthorDate.UtcDateTime;
+                        if (when >= bucket.EndUtc) continue;
+                        if (when < bucket.StartUtc) break;
+                        modalCommits.Add(new ModalCommit(c.Sha, c.ShortSha, c.MessageFirstLine, c.AuthorName, when));
+                        if (modalCommits.Count >= 200) break;
+                    }
+                }
+            }
+        }
+        catch { }
+        modalLoading = false;
+    }
+
+    private void CloseModal()
+    {
+        modalBucketIndex = -1;
+        modalCommits = [];
+    }
+
+    private static string CellStyle(int count, int max)
+    {
+        if (count <= 0) return "background:#ebedf0;";
+        if (max <= 0) max = 1;
+        var ratio = (double)count / max;
+        var color = ratio switch
+        {
+            <= 0.25 => "#9be9a8",
+            <= 0.50 => "#40c463",
+            <= 0.75 => "#30a14e",
+            _       => "#216e39"
+        };
+        return $"background:{color};";
+    }
+}

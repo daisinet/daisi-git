@@ -3,6 +3,7 @@
 @inject OrganizationService OrgService
 @inject RepositoryService RepoService
 @inject TeamService TeamService
+@inject RepoGroupService RepoGroupService
 @inject BrowseService BrowseService
 @inject OrgActivityService ActivityService
 @inject IHttpClientFactory HttpClientFactory
@@ -14,15 +15,26 @@
 @if (org != null)
 {
     <div class="d-flex justify-content-between align-items-start mb-3">
-        <div>
-            <h3>
-                <i class="fa-duotone fa-building me-1 text-muted"></i>
-                @org.Name
-            </h3>
-            @if (!string.IsNullOrEmpty(org.Description))
+        <div class="d-flex align-items-start gap-3">
+            @if (!string.IsNullOrEmpty(org.AvatarUrl))
             {
-                <p class="text-muted mb-0">@org.Description</p>
+                <img src="@org.AvatarUrl" alt="@org.Name" class="rounded"
+                     style="width:64px;height:64px;object-fit:cover;" />
             }
+            else
+            {
+                <div class="rounded d-flex align-items-center justify-content-center bg-light text-muted"
+                     style="width:64px;height:64px;">
+                    <i class="fa-duotone fa-building" style="font-size:1.75rem;"></i>
+                </div>
+            }
+            <div>
+                <h3 class="mb-1">@org.Name</h3>
+                @if (!string.IsNullOrEmpty(org.Description))
+                {
+                    <p class="text-muted mb-0">@org.Description</p>
+                }
+            </div>
         </div>
         @if (!isAnonymous)
         {
@@ -83,25 +95,35 @@
 
         @if (repos.Count > 0)
         {
-            <div class="list-group">
-                @foreach (var r in repos)
-                {
-                    <a href="/@org.Slug/@r.Slug" class="list-group-item list-group-item-action">
-                        <div class="d-flex justify-content-between align-items-center">
-                            <div>
-                                <div class="fw-semibold">@r.Name</div>
-                                @if (!string.IsNullOrEmpty(r.Description))
-                                {
-                                    <div class="text-muted small">@r.Description</div>
-                                }
-                            </div>
-                            <span class="badge bg-@(r.Visibility == GitRepoVisibility.Public ? "success" : r.Visibility == GitRepoVisibility.Internal ? "warning" : "secondary")">
-                                @r.Visibility
-                            </span>
-                        </div>
-                    </a>
-                }
-            </div>
+            @* Render groups in their explicit order, then ungrouped repos at the end. *@
+            @foreach (var group in repoGroups.OrderBy(g => g.SortOrder).ThenBy(g => g.Name, StringComparer.OrdinalIgnoreCase))
+            {
+                var inGroup = repos.Where(r => r.GroupId == group.id).ToList();
+                if (inGroup.Count == 0) continue;
+                <div class="mb-4">
+                    <div class="mb-2">
+                        <h5 class="mb-0">@group.Name</h5>
+                        @if (!string.IsNullOrEmpty(group.Description))
+                        {
+                            <div class="text-muted small">@group.Description</div>
+                        }
+                    </div>
+                    @RenderRepoList(inGroup)
+                </div>
+            }
+
+            var ungrouped = repos.Where(r => string.IsNullOrEmpty(r.GroupId)
+                || !repoGroups.Any(g => g.id == r.GroupId)).ToList();
+            @if (ungrouped.Count > 0)
+            {
+                <div class="mb-3">
+                    @if (repoGroups.Any())
+                    {
+                        <h5 class="mb-2 text-muted">Other</h5>
+                    }
+                    @RenderRepoList(ungrouped)
+                </div>
+            }
         }
         else
         {
@@ -409,6 +431,7 @@ else if (!loading)
     private GitRole newMemberRole = GitRole.Read;
     private string? memberError;
     private string? profileReadme;
+    private List<RepoGroup> repoGroups = [];
     private bool isAnonymous => string.IsNullOrEmpty(UserId);
 
     // Activity tab
@@ -454,6 +477,8 @@ else if (!loading)
             {
                 profileReadme = await TryReadProfileReadmeAsync(profileRepo);
             }
+
+            repoGroups = await RepoGroupService.ListAsync(org.id);
 
             // Member/team management is sign-in only.
             if (!isAnonymous)
@@ -621,6 +646,35 @@ else if (!loading)
         };
         return $"background:{color};";
     }
+
+    private RenderFragment RenderRepoList(List<GitRepository> list) => __builder =>
+    {
+        <div class="list-group">
+            @foreach (var r in list)
+            {
+                <a href="/@org!.Slug/@r.Slug" class="list-group-item list-group-item-action">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <div>
+                            <div class="fw-semibold">
+                                @if (r.Visibility != GitRepoVisibility.Public)
+                                {
+                                    <i class="fa-solid fa-lock text-muted me-1" style="font-size:0.75rem;"></i>
+                                }
+                                @r.Name
+                            </div>
+                            @if (!string.IsNullOrEmpty(r.Description))
+                            {
+                                <div class="text-muted small">@r.Description</div>
+                            }
+                        </div>
+                        <span class="badge bg-@(r.Visibility == GitRepoVisibility.Public ? "success" : r.Visibility == GitRepoVisibility.Internal ? "warning" : "secondary")">
+                            @r.Visibility
+                        </span>
+                    </div>
+                </a>
+            }
+        </div>
+    };
 
     private static string RoleBadgeColor(GitRole role) => role switch
     {

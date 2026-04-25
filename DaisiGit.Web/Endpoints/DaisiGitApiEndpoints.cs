@@ -80,6 +80,7 @@ public static class DaisiGitApiEndpoints
         // GitHub bulk import (org-scoped)
         api.MapPost("/orgs/{slug}/import-from-github", StartGitHubImport);
         api.MapGet("/orgs/{slug}/import-from-github/{jobId}", GetGitHubImportJob);
+        api.MapPost("/orgs/{slug}/repair-owner", RepairOrgRepoOwner);
 
         // Org activity is intentionally on the public group — anonymous viewers see
         // only public-repo data, authenticated viewers can opt into private repos.
@@ -1194,6 +1195,36 @@ public static class DaisiGitApiEndpoints
         return result;
     }
 
+    /// <summary>
+    /// Re-points repositories that were imported with the wrong OwnerName (commonly the
+    /// org's display name instead of its slug) back to the org. Looks up by AccountId so
+    /// only repos in this account are affected; matches on a from-owner-name parameter.
+    /// </summary>
+    private static async Task<IResult> RepairOrgRepoOwner(
+        HttpContext ctx, string slug, RepairOrgRepoOwnerRequest req,
+        OrganizationService orgService, RepositoryService repoService,
+        DaisiGit.Data.DaisiGitCosmo cosmo)
+    {
+        var org = await orgService.GetBySlugAsync(slug);
+        if (org == null) return Results.NotFound();
+        if (string.IsNullOrWhiteSpace(req.FromOwnerName))
+            return Results.BadRequest(new { error = "fromOwnerName is required." });
+        if (string.Equals(req.FromOwnerName, org.Slug, StringComparison.OrdinalIgnoreCase))
+            return Results.BadRequest(new { error = "fromOwnerName matches the org slug — nothing to do." });
+
+        var bad = await cosmo.GetRepositoriesByOwnerAsync(req.FromOwnerName);
+        var fixedNames = new List<string>();
+        foreach (var repo in bad)
+        {
+            if (repo.AccountId != org.AccountId) continue;
+            repo.OwnerName = org.Slug;
+            repo.OwnerId = org.id;
+            await repoService.UpdateRepositoryAsync(repo);
+            fixedNames.Add(repo.Slug);
+        }
+        return Results.Ok(new { fromOwnerName = req.FromOwnerName, toOwnerName = org.Slug, repaired = fixedNames });
+    }
+
     // ── GitHub bulk import ──
 
     private static async Task<IResult> StartGitHubImport(
@@ -1619,6 +1650,8 @@ public record SetStorageProviderRequest(StorageProvider Provider);
 public record RepoGroupRequest(string? Name, string? Description, int? SortOrder);
 
 public record SetRepoGroupRequest(string? GroupId);
+
+public record RepairOrgRepoOwnerRequest(string? FromOwnerName);
 
 public record GitHubImportRequest(
     string? GithubOrg,

@@ -30,6 +30,10 @@
                    href="/@Slug/settings/secrets">
                     <i class="fa-duotone fa-key me-1"></i> Secrets
                 </a>
+                <a class="nav-link @(activeTab == "vars" ? "active" : "")"
+                   href="/@Slug/settings/vars">
+                    <i class="fa-duotone fa-tag me-1"></i> Vars
+                </a>
                 <a class="nav-link @(activeTab == "groups" ? "active" : "")"
                    href="/@Slug/settings/groups">
                     <i class="fa-duotone fa-folder-tree me-1"></i> Repo Groups
@@ -172,6 +176,56 @@
                             }
                         </ul>
                     </div>
+                }
+            }
+            else if (activeTab == "vars")
+            {
+                <h5 class="mb-3">Variables</h5>
+                <p class="text-muted small">
+                    Non-secret config values exposed to workflows as <code>{{vars.NAME}}</code>.
+                    Repo-level vars override these when set.
+                </p>
+                <div class="card mb-3" style="max-width: 700px;">
+                    <div class="card-body">
+                        <div class="row g-2 align-items-end">
+                            <div class="col-md-4">
+                                <label class="form-label small mb-1">Name</label>
+                                <input type="text" class="form-control form-control-sm" @bind="newVarName"
+                                       placeholder="DAISI_CRM_DOMAIN" style="text-transform: uppercase;" />
+                            </div>
+                            <div class="col-md-7">
+                                <label class="form-label small mb-1">Value</label>
+                                <input type="text" class="form-control form-control-sm" @bind="newVarValue" />
+                            </div>
+                            <div class="col-md-1 d-grid">
+                                <button class="btn btn-sm btn-success" @onclick="AddVar">Add</button>
+                            </div>
+                        </div>
+                        @if (!string.IsNullOrEmpty(varError))
+                        {
+                            <div class="text-danger small mt-2">@varError</div>
+                        }
+                    </div>
+                </div>
+
+                @if (orgVars.Count > 0)
+                {
+                    <div class="card" style="max-width: 700px;">
+                        <ul class="list-group list-group-flush">
+                            @foreach (var (k, v) in orgVars)
+                            {
+                                var key = k;
+                                <li class="list-group-item d-flex justify-content-between align-items-center">
+                                    <div><code class="me-2">@key</code><span class="text-muted">@v</span></div>
+                                    <button class="btn btn-sm btn-outline-danger" @onclick="() => RemoveVar(key)"><i class="fa-solid fa-xmark"></i></button>
+                                </li>
+                            }
+                        </ul>
+                    </div>
+                }
+                else
+                {
+                    <div class="text-muted small">No variables yet.</div>
                 }
             }
             else if (activeTab == "import")
@@ -349,6 +403,7 @@ else if (!loading)
         "secrets" => "secrets",
         "groups" => "groups",
         "import" => "import",
+        "vars" => "vars",
         _ => "general"
     };
 
@@ -372,6 +427,12 @@ else if (!loading)
     private string? importError;
     private GitHubImportJob? importJob;
     private System.Threading.Timer? importPollTimer;
+
+    // Vars
+    private Dictionary<string, string> orgVars = new();
+    private string newVarName = "";
+    private string newVarValue = "";
+    private string? varError;
 
     // Repo groups
     private List<RepoGroup> groups = [];
@@ -406,6 +467,7 @@ else if (!loading)
                 orgAvatarUrl = org.AvatarUrl;
                 await LoadOrgSecrets();
                 await LoadGroups();
+                orgVars = new(org.Vars ?? new());
             }
         }
         catch { }
@@ -458,6 +520,40 @@ else if (!loading)
             await LoadGroups();
         }
         catch (Exception ex) { groupError = ex.Message; }
+    }
+
+    private async Task AddVar()
+    {
+        if (org == null) return;
+        varError = null;
+        var name = (newVarName ?? "").Trim();
+        if (!System.Text.RegularExpressions.Regex.IsMatch(name, @"^[A-Za-z_][A-Za-z0-9_]*$"))
+        {
+            varError = "Name must match ENV-style identifier ([A-Za-z_][A-Za-z0-9_]*).";
+            return;
+        }
+        orgVars[name] = newVarValue ?? "";
+        newVarName = "";
+        newVarValue = "";
+        await SaveVars();
+    }
+
+    private async Task RemoveVar(string key)
+    {
+        if (org == null) return;
+        orgVars.Remove(key);
+        await SaveVars();
+    }
+
+    private async Task SaveVars()
+    {
+        if (org == null) return;
+        try
+        {
+            org.Vars = new(orgVars);
+            await OrgService.UpdateAsync(org);
+        }
+        catch (Exception ex) { varError = ex.Message; }
     }
 
     private async Task DeleteGroup(string id)

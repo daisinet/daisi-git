@@ -71,6 +71,12 @@ public static class DaisiGitApiEndpoints
         api.MapDelete("/orgs/{slug}/groups/{id}", DeleteRepoGroup);
         api.MapPut("/repos/{owner}/{slug}/group", SetRepoGroup);
 
+        // Vars (non-secret config)
+        api.MapGet("/orgs/{slug}/vars", GetOrgVars);
+        api.MapPut("/orgs/{slug}/vars", SetOrgVars);
+        api.MapGet("/repos/{owner}/{slug}/vars", GetRepoVars);
+        api.MapPut("/repos/{owner}/{slug}/vars", SetRepoVars);
+
         // GitHub bulk import (org-scoped)
         api.MapPost("/orgs/{slug}/import-from-github", StartGitHubImport);
         api.MapGet("/orgs/{slug}/import-from-github/{jobId}", GetGitHubImportJob);
@@ -1110,6 +1116,58 @@ public static class DaisiGitApiEndpoints
         repo!.GroupId = string.IsNullOrEmpty(req.GroupId) ? null : req.GroupId;
         await repoService.UpdateRepositoryAsync(repo);
         return Results.Ok(new { repo.GroupId });
+    }
+
+    // ── Vars ──
+
+    private static async Task<IResult> GetOrgVars(string slug, OrganizationService orgService)
+    {
+        var org = await orgService.GetBySlugAsync(slug);
+        return org == null ? Results.NotFound() : Results.Ok(org.Vars ?? new());
+    }
+
+    private static async Task<IResult> SetOrgVars(string slug, Dictionary<string, string> req, OrganizationService orgService)
+    {
+        var org = await orgService.GetBySlugAsync(slug);
+        if (org == null) return Results.NotFound();
+        org.Vars = SanitizeVarMap(req);
+        await orgService.UpdateAsync(org);
+        return Results.Ok(org.Vars);
+    }
+
+    private static async Task<IResult> GetRepoVars(
+        HttpContext ctx, string owner, string slug,
+        RepositoryService repoService, PermissionService permissionService)
+    {
+        var (repo, error) = await RequireRead(ctx, owner, slug, repoService, permissionService);
+        if (error != null) return error;
+        return Results.Ok(repo!.Vars ?? new());
+    }
+
+    private static async Task<IResult> SetRepoVars(
+        HttpContext ctx, string owner, string slug, Dictionary<string, string> req,
+        RepositoryService repoService, PermissionService permissionService)
+    {
+        var (repo, error) = await RequireWrite(ctx, owner, slug, repoService, permissionService);
+        if (error != null) return error;
+        repo!.Vars = SanitizeVarMap(req);
+        await repoService.UpdateRepositoryAsync(repo);
+        return Results.Ok(repo.Vars);
+    }
+
+    private static Dictionary<string, string> SanitizeVarMap(Dictionary<string, string>? input)
+    {
+        var result = new Dictionary<string, string>();
+        if (input == null) return result;
+        foreach (var (k, v) in input)
+        {
+            var key = (k ?? "").Trim();
+            if (string.IsNullOrEmpty(key)) continue;
+            // Restrict to ENV-safe identifiers so {{vars.X}} usage stays predictable.
+            if (!System.Text.RegularExpressions.Regex.IsMatch(key, @"^[A-Za-z_][A-Za-z0-9_]*$")) continue;
+            result[key] = v ?? "";
+        }
+        return result;
     }
 
     // ── GitHub bulk import ──

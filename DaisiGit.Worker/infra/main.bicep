@@ -16,6 +16,15 @@ param daisiSecretKey string
 @secure()
 param azureBlobConnectionString string
 
+@description('Workflow runtimes that get a dedicated job + queue. Each name maps to daisigit-worker-<name>:latest in ACR.')
+param runtimes array = [
+  'minimal'
+  'dotnet'
+  'node'
+  'python'
+  'full'
+]
+
 // ── Azure Container Registry ──
 
 resource acr 'Microsoft.ContainerRegistry/registries@2023-07-01' = {
@@ -29,7 +38,7 @@ resource acr 'Microsoft.ContainerRegistry/registries@2023-07-01' = {
   }
 }
 
-// ── Storage Account (for workflow dispatch queue) ──
+// ── Storage Account ──
 
 resource storageAccount 'Microsoft.Storage/storageAccounts@2023-05-01' = {
   name: '${namePrefix}wfqueue'
@@ -45,12 +54,20 @@ resource queueService 'Microsoft.Storage/storageAccounts/queueServices@2023-05-0
   name: 'default'
 }
 
-resource workflowQueue 'Microsoft.Storage/storageAccounts/queueServices/queues@2023-05-01' = {
+// One queue per runtime: workflow-executions-<runtime>.
+resource runtimeQueues 'Microsoft.Storage/storageAccounts/queueServices/queues@2023-05-01' = [for runtime in runtimes: {
+  parent: queueService
+  name: 'workflow-executions-${runtime}'
+}]
+
+// Legacy single queue retained so dispatchers/jobs deployed against the old shape can drain.
+// Safe to remove once nothing references it.
+resource legacyQueue 'Microsoft.Storage/storageAccounts/queueServices/queues@2023-05-01' = {
   parent: queueService
   name: 'workflow-executions'
 }
 
-// ── Log Analytics (required by Container Apps Environment) ──
+// ── Log Analytics + Container Apps Environment ──
 
 resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
   name: '${namePrefix}-logs'
@@ -62,8 +79,6 @@ resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
     retentionInDays: 30
   }
 }
-
-// ── Container Apps Environment ──
 
 resource containerAppsEnv 'Microsoft.App/managedEnvironments@2024-03-01' = {
   name: '${namePrefix}-env'
@@ -79,16 +94,16 @@ resource containerAppsEnv 'Microsoft.App/managedEnvironments@2024-03-01' = {
   }
 }
 
-// ── Container Apps Job (queue-triggered) ──
+// ── Container Apps Jobs — one per runtime ──
 
-resource workerJob 'Microsoft.App/jobs@2024-03-01' = {
-  name: '${namePrefix}-worker'
+resource workerJobs 'Microsoft.App/jobs@2024-03-01' = [for runtime in runtimes: {
+  name: '${namePrefix}-worker-${runtime}'
   location: location
   properties: {
     environmentId: containerAppsEnv.id
     configuration: {
       triggerType: 'Event'
-      replicaTimeout: 1800 // 30 minutes (matches max RunScript timeout)
+      replicaTimeout: 1800
       replicaRetryLimit: 1
       eventTriggerConfig: {
         scale: {
@@ -99,7 +114,7 @@ resource workerJob 'Microsoft.App/jobs@2024-03-01' = {
               name: 'queue-trigger'
               type: 'azure-queue'
               metadata: {
-                queueName: 'workflow-executions'
+                queueName: 'workflow-executions-${runtime}'
                 queueLength: '1'
                 accountName: storageAccount.name
               }
@@ -147,39 +162,28 @@ resource workerJob 'Microsoft.App/jobs@2024-03-01' = {
       containers: [
         {
           name: 'worker'
-          image: '${acr.properties.loginServer}/${namePrefix}-worker:latest'
+          image: '${acr.properties.loginServer}/${namePrefix}-worker-${runtime}:latest'
           resources: {
             cpu: json('0.5')
             memory: '1Gi'
           }
           env: [
-            {
-              name: 'Cosmo__ConnectionString'
-              secretRef: 'cosmo-connection'
-            }
-            {
-              name: 'WorkflowQueue__ConnectionString'
-              secretRef: 'storage-connection'
-            }
-            {
-              name: 'Daisi__SecretKey'
-              secretRef: 'daisi-secret-key'
-            }
-            {
-              name: 'AzureBlob__ConnectionString'
-              secretRef: 'azure-blob-connection'
-            }
+            { name: 'Cosmo__ConnectionString',          secretRef: 'cosmo-connection' }
+            { name: 'WorkflowQueue__ConnectionString',  secretRef: 'storage-connection' }
+            { name: 'WorkflowQueue__Name',              value: 'workflow-executions-${runtime}' }
+            { name: 'WorkflowQueue__Runtime',           value: runtime }
+            { name: 'Daisi__SecretKey',                 secretRef: 'daisi-secret-key' }
+            { name: 'AzureBlob__ConnectionString',      secretRef: 'azure-blob-connection' }
           ]
         }
       ]
     }
   }
-}
+}]
 
 // ── Outputs ──
 
 output acrLoginServer string = acr.properties.loginServer
 output storageAccountName string = storageAccount.name
 output containerAppsEnvironmentName string = containerAppsEnv.name
-output workerJobName string = workerJob.name
 output queueConnectionString string = 'DefaultEndpointsProtocol=https;AccountName=${storageAccount.name};AccountKey=${storageAccount.listKeys().keys[0].value}'

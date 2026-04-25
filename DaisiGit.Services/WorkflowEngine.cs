@@ -40,6 +40,21 @@ public class WorkflowEngine(
             foreach (var (key, value) in secrets)
                 execution.Context[key] = value;
 
+            // Inject vars (non-secret config) — same precedence as secrets.
+            try
+            {
+                var repo = await repoService.GetRepositoryAsync(execution.RepositoryId, execution.AccountId);
+                if (repo != null)
+                {
+                    var org = await cosmo.GetOrganizationBySlugAsync(repo.OwnerName);
+                    if (org?.Vars is { Count: > 0 })
+                        foreach (var (k, v) in org.Vars) execution.Context[$"vars.{k}"] = v;
+                    if (repo.Vars is { Count: > 0 })
+                        foreach (var (k, v) in repo.Vars) execution.Context[$"vars.{k}"] = v;
+                }
+            }
+            catch { /* vars are best-effort — don't fail the workflow if lookup throws */ }
+
             // Inject env variables
             if (env != null)
             {
@@ -111,6 +126,15 @@ public class WorkflowEngine(
                             break;
                         case WorkflowStepType.RunMinion:
                             await ExecuteRunMinion(step, stepResult, execution);
+                            break;
+                        case WorkflowStepType.AcrBuild:
+                            await ExecuteAcrBuild(step, stepResult, execution);
+                            break;
+                        case WorkflowStepType.NugetPush:
+                            await ExecuteNugetPush(step, stepResult, execution);
+                            break;
+                        case WorkflowStepType.DispatchWorkflow:
+                            await ExecuteDispatchWorkflow(step, stepResult, execution);
                             break;
                         case WorkflowStepType.Condition:
                             stepResult.Success = true;
@@ -1159,6 +1183,226 @@ public class WorkflowEngine(
             waitTime = TimeSpan.FromMinutes(1);
 
         execution.NextRunAt = DateTime.UtcNow + waitTime;
+    }
+
+    // ── AcrBuild: server-side Docker build via `az acr build`. No DinD required. ──
+
+    private async Task ExecuteAcrBuild(WorkflowStep step, WorkflowStepResult result, WorkflowExecution execution)
+    {
+        var registry = WorkflowMergeService.Render(step.AcrRegistry ?? "", execution.Context).Trim();
+        var image = WorkflowMergeService.Render(step.AcrImage ?? "", execution.Context).Trim();
+        var dockerfile = WorkflowMergeService.Render(step.AcrDockerfile ?? "Dockerfile", execution.Context).Trim();
+        var contextDir = WorkflowMergeService.Render(step.AcrContext ?? ".", execution.Context).Trim();
+        var buildArgs = WorkflowMergeService.Render(step.AcrBuildArgs ?? "", execution.Context).Trim();
+
+        if (string.IsNullOrEmpty(registry) || string.IsNullOrEmpty(image))
+        {
+            result.Success = false;
+            result.Error = "acr-build requires both `registry` and `image`.";
+            return;
+        }
+
+        // Build a comma-separated tag list as repeated `-t image:tag`. Inputs accept
+        // either a single image:tag, or a comma-separated list (e.g. `myapp:latest,myapp:1.2`).
+        var tags = image.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        var tagArgs = string.Join(" ", tags.Select(t => $"-t {EscapeArg(t)}"));
+
+        var argsBuilder = new StringBuilder();
+        argsBuilder.Append($"acr build --registry {EscapeArg(registry)} {tagArgs} --file {EscapeArg(dockerfile)}");
+        if (!string.IsNullOrEmpty(buildArgs))
+        {
+            foreach (var pair in buildArgs.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
+                argsBuilder.Append($" --build-arg {EscapeArg(pair)}");
+        }
+        argsBuilder.Append($" {EscapeArg(contextDir)}");
+
+        await RunShellCommandAsync(
+            command: "az " + argsBuilder.ToString(),
+            workspaceSubdir: null,
+            timeoutSeconds: 1800,
+            execution: execution,
+            stepResult: result,
+            successMessage: $"Built and pushed {image} to {registry}");
+        result.RenderedBody ??= $"acr build {registry}/{image}";
+    }
+
+    // ── NugetPush ──
+
+    private async Task ExecuteNugetPush(WorkflowStep step, WorkflowStepResult result, WorkflowExecution execution)
+    {
+        var packagePath = WorkflowMergeService.Render(step.NugetPackagePath ?? "", execution.Context).Trim();
+        var source = WorkflowMergeService.Render(step.NugetSource ?? "https://api.nuget.org/v3/index.json", execution.Context).Trim();
+        var apiKeyName = step.NugetApiKeySecret;
+        if (string.IsNullOrEmpty(packagePath))
+        {
+            result.Success = false; result.Error = "nuget-push requires `package`."; return;
+        }
+        if (string.IsNullOrEmpty(apiKeyName))
+        {
+            result.Success = false; result.Error = "nuget-push requires `api-key-secret`."; return;
+        }
+        var apiKey = execution.Context.GetValueOrDefault($"secrets.{apiKeyName}");
+        if (string.IsNullOrEmpty(apiKey))
+        {
+            result.Success = false; result.Error = $"Could not resolve secret '{apiKeyName}' for nuget-push."; return;
+        }
+
+        var skipDup = step.NugetSkipDuplicate == true ? " --skip-duplicate" : "";
+        var cmd = $"dotnet nuget push {EscapeArg(packagePath)} --source {EscapeArg(source)} --api-key {EscapeArg(apiKey)}{skipDup}";
+
+        await RunShellCommandAsync(cmd, workspaceSubdir: null, timeoutSeconds: 600,
+            execution: execution, stepResult: result,
+            successMessage: $"Pushed {packagePath} -> {source}");
+        result.RenderedBody ??= $"nuget push {packagePath}";
+    }
+
+    // ── DispatchWorkflow: trigger another daisi-git workflow synchronously (no wait). ──
+
+    private async Task ExecuteDispatchWorkflow(WorkflowStep step, WorkflowStepResult result, WorkflowExecution execution)
+    {
+        var repoStr = WorkflowMergeService.Render(step.DispatchRepo ?? "", execution.Context).Trim();
+        var workflowRef = WorkflowMergeService.Render(step.DispatchWorkflow ?? "", execution.Context).Trim();
+        if (string.IsNullOrEmpty(workflowRef))
+        {
+            result.Success = false; result.Error = "dispatch-workflow requires `workflow`."; return;
+        }
+
+        // Default target repo to the executing one.
+        var ownerSlug = repoStr;
+        if (string.IsNullOrEmpty(ownerSlug))
+        {
+            var owner = execution.Context.GetValueOrDefault("repo.owner");
+            var slug = execution.Context.GetValueOrDefault("repo.slug");
+            if (!string.IsNullOrEmpty(owner) && !string.IsNullOrEmpty(slug))
+                ownerSlug = $"{owner}/{slug}";
+        }
+        if (string.IsNullOrEmpty(ownerSlug) || !ownerSlug.Contains('/'))
+        {
+            result.Success = false; result.Error = "dispatch-workflow could not determine target repo (`repo: owner/slug`)."; return;
+        }
+        var parts = ownerSlug.Split('/', 2);
+        var targetRepo = await repoService.GetRepositoryBySlugAsync(parts[0], parts[1]);
+        if (targetRepo == null)
+        {
+            result.Success = false; result.Error = $"Target repo '{ownerSlug}' not found."; return;
+        }
+
+        // Resolve the target workflow by id first, then by name.
+        var targetWorkflow = await cosmo.GetWorkflowAsync(workflowRef, targetRepo.AccountId);
+        if (targetWorkflow == null)
+        {
+            var all = await cosmo.GetWorkflowsAsync(targetRepo.AccountId);
+            targetWorkflow = all.FirstOrDefault(w =>
+                (w.RepositoryId == null || w.RepositoryId == targetRepo.id) &&
+                string.Equals(w.Name, workflowRef, StringComparison.OrdinalIgnoreCase));
+        }
+        if (targetWorkflow == null)
+        {
+            result.Success = false; result.Error = $"Workflow '{workflowRef}' not found in {ownerSlug}."; return;
+        }
+
+        // Parse `inputs:` -> dictionary, with merge-field expansion against the current context.
+        Dictionary<string, string>? inputs = null;
+        var rawInputs = WorkflowMergeService.Render(step.DispatchInputs ?? "", execution.Context);
+        if (!string.IsNullOrWhiteSpace(rawInputs))
+        {
+            inputs = new();
+            foreach (var pair in rawInputs.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
+            {
+                var eq = pair.IndexOf('=');
+                if (eq <= 0) continue;
+                inputs[pair[..eq].Trim()] = pair[(eq + 1)..].Trim();
+            }
+        }
+
+        var actorId = execution.Context.GetValueOrDefault("actor.id", "system");
+        var actorName = execution.Context.GetValueOrDefault("actor.name", "Workflow Dispatcher");
+        var newExec = await new WorkflowService(cosmo).RunNowAsync(
+            targetWorkflow, targetRepo, actorId, actorName, inputs: inputs);
+
+        result.Success = true;
+        result.RenderedBody = $"Dispatched {ownerSlug}/{targetWorkflow.Name} (execution {newExec.id})";
+    }
+
+    private static string EscapeArg(string value)
+    {
+        if (string.IsNullOrEmpty(value)) return "\"\"";
+        if (value.IndexOfAny(new[] { ' ', '"', '\\' }) < 0) return value;
+        return "\"" + value.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
+    }
+
+    /// <summary>
+    /// Common subprocess runner used by AcrBuild and NugetPush. Reuses the same shell-arg
+    /// strategy as ExecuteRunScript so the command stays a single argv element on Linux.
+    /// </summary>
+    private async Task RunShellCommandAsync(string command, string? workspaceSubdir, int timeoutSeconds,
+        WorkflowExecution execution, WorkflowStepResult stepResult, string successMessage)
+    {
+        var workspace = EnsureWorkspace(execution);
+        var workDir = workspace;
+        if (!string.IsNullOrWhiteSpace(workspaceSubdir))
+        {
+            workDir = Path.Combine(workspace, workspaceSubdir.Trim('/').Replace('/', Path.DirectorySeparatorChar));
+            if (!Directory.Exists(workDir))
+            {
+                stepResult.Success = false;
+                stepResult.Error = $"Working directory '{workspaceSubdir}' does not exist.";
+                return;
+            }
+        }
+
+        var isWindows = OperatingSystem.IsWindows();
+        var shell = isWindows ? "cmd.exe" : "/bin/bash";
+        var shellFlag = isWindows ? "/c" : "-c";
+
+        using var process = new Process();
+        process.StartInfo = new ProcessStartInfo
+        {
+            FileName = shell,
+            WorkingDirectory = workDir,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+        process.StartInfo.ArgumentList.Add(shellFlag);
+        process.StartInfo.ArgumentList.Add(command);
+
+        foreach (var (key, value) in execution.Context)
+        {
+            if (key.StartsWith("secrets."))
+                process.StartInfo.Environment[key.Replace("secrets.", "SECRET_")] = value;
+            else if (key.StartsWith("env."))
+                process.StartInfo.Environment[key.Replace("env.", "")] = value;
+        }
+
+        var output = new StringBuilder();
+        process.OutputDataReceived += (_, e) => { if (e.Data != null) output.AppendLine(e.Data); };
+        process.ErrorDataReceived += (_, e) => { if (e.Data != null) output.AppendLine(e.Data); };
+
+        process.Start();
+        process.BeginOutputReadLine();
+        process.BeginErrorReadLine();
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(Math.Min(timeoutSeconds, 1800)));
+        try { await process.WaitForExitAsync(cts.Token); }
+        catch (OperationCanceledException)
+        {
+            try { process.Kill(entireProcessTree: true); } catch { }
+            stepResult.Success = false;
+            stepResult.Error = $"Command timed out after {timeoutSeconds}s";
+            stepResult.ExitCode = -1;
+            stepResult.ScriptOutput = Truncate(output.ToString(), 8000);
+            return;
+        }
+
+        stepResult.ExitCode = process.ExitCode;
+        stepResult.ScriptOutput = Truncate(output.ToString(), 8000);
+        stepResult.Success = process.ExitCode == 0;
+        if (!stepResult.Success)
+            stepResult.Error = $"Command exited with code {process.ExitCode}";
+        else
+            stepResult.RenderedBody = successMessage;
     }
 
     // ── Condition flattening ──

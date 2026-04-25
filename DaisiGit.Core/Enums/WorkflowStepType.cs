@@ -19,5 +19,8 @@ public enum WorkflowStepType
     RunScript,
     SendEmail,
     ImportFromUrl,
-    RunMinion
+    RunMinion,
+    AcrBuild,
+    NugetPush,
+    DispatchWorkflow
 }

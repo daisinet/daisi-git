@@ -677,8 +677,18 @@ public class CliApp(string[] args)
             case "run":
                 {
                     var id = GetArg(2);
-                    if (string.IsNullOrEmpty(id)) { Console.Error.WriteLine("Usage: dg workflow run <id>"); Environment.ExitCode = 1; return; }
-                    var exec = await client.RunWorkflowAsync(owner!, slug!, id);
+                    if (string.IsNullOrEmpty(id)) { Console.Error.WriteLine("Usage: dg workflow run <id> [--input key=value ...]"); Environment.ExitCode = 1; return; }
+                    Dictionary<string, string>? inputs = null;
+                    for (var i = 3; i < args.Length - 1; i++)
+                    {
+                        if (args[i] != "--input" && args[i] != "-i") continue;
+                        var pair = args[i + 1];
+                        var eq = pair.IndexOf('=');
+                        if (eq <= 0) { Console.Error.WriteLine($"Invalid --input '{pair}': expected key=value"); Environment.ExitCode = 1; return; }
+                        inputs ??= new();
+                        inputs[pair[..eq]] = pair[(eq + 1)..];
+                    }
+                    var exec = await client.RunWorkflowAsync(owner!, slug!, id, inputs);
                     Console.WriteLine($"Started execution {exec.id} (status: {exec.Status})");
                     Console.WriteLine($"Watch: dg workflow run-view {exec.id}");
                     break;

@@ -17,6 +17,12 @@ public class GitOrganization
     public string CreatedByUserName { get; set; } = "";
     public int MemberCount { get; set; }
     public int TeamCount { get; set; }
+
+    /// <summary>
+    /// Non-secret config exposed to workflows as {{vars.NAME}}. Repo-level vars
+    /// override org-level vars with the same key.
+    /// </summary>
+    public Dictionary<string, string> Vars { get; set; } = new();
     public DateTime CreatedUtc { get; set; } = DateTime.UtcNow;
     public DateTime? UpdatedUtc { get; set; }
 }

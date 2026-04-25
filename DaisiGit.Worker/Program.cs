@@ -49,15 +49,18 @@ builder.Services.AddSingleton<EmailService>();
 // Workflow engine
 builder.Services.AddScoped<WorkflowEngine>();
 
-// Queue client
+// Queue client. Each runtime-specific Container Apps Job sets WorkflowQueue:Name to its
+// own queue (e.g. workflow-executions-dotnet); we fall back to the legacy single queue
+// when that env var isn't set so old deployments keep working.
 var queueConnectionString = builder.Configuration["WorkflowQueue:ConnectionString"]
     ?? builder.Configuration["AzureStorage:ConnectionString"]
     ?? "";
+var queueName = builder.Configuration["WorkflowQueue:Name"] ?? "workflow-executions";
 if (!string.IsNullOrEmpty(queueConnectionString))
 {
     builder.Services.AddSingleton(new QueueClient(
         queueConnectionString,
-        "workflow-executions",
+        queueName,
         new QueueClientOptions { MessageEncoding = QueueMessageEncoding.Base64 }));
 }
 

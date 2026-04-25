@@ -34,6 +34,11 @@ public class GitWorkflow
     /// <summary>Environment variables available to all steps as {{env.KEY}}.</summary>
     public Dictionary<string, string>? Env { get; set; }
 
+    /// <summary>
+    /// Declared inputs collected at Run Now time. Available to steps as {{inputs.NAME}}.
+    /// </summary>
+    public List<WorkflowInput> Inputs { get; set; } = [];
+
     public List<WorkflowStep> Steps { get; set; } = [];
     public bool IsEnabled { get; set; } = true;
     public string Status { get; set; } = "Active";

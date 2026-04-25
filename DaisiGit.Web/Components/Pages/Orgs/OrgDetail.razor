@@ -146,10 +146,10 @@
             var maxCount = activity.Repos.SelectMany(r => r.Counts).DefaultIfEmpty(0).Max();
             <div class="card">
                 <div class="card-body p-0" style="overflow-x:auto;">
-                    <table class="table table-sm mb-0" style="min-width:100%;">
+                    <table class="table table-sm table-borderless mb-0 align-middle" style="min-width:100%;">
                         <thead>
                             <tr class="text-muted small">
-                                <th style="position:sticky;left:0;background:var(--bs-body-bg);z-index:1;">Repository</th>
+                                <th style="position:sticky;left:0;background:var(--bs-body-bg);z-index:1;white-space:nowrap;">Repository</th>
                                 @foreach (var b in activity.Buckets)
                                 {
                                     <th class="text-center small fw-normal" style="font-size:0.7rem;white-space:nowrap;">@b.Label</th>
@@ -162,22 +162,22 @@
                             {
                                 var total = r.Counts.Sum();
                                 <tr>
-                                    <td style="position:sticky;left:0;background:var(--bs-body-bg);z-index:1;">
-                                        <a href="/@r.OwnerName/@r.Slug" class="text-decoration-none">@r.Slug</a>
+                                    <td style="position:sticky;left:0;background:var(--bs-body-bg);z-index:1;white-space:nowrap;">
                                         @if (r.Visibility != GitRepoVisibility.Public)
                                         {
-                                            <span class="badge bg-secondary ms-1" style="font-size:0.6rem;">@r.Visibility</span>
+                                            <i class="fa-solid fa-lock text-muted me-1" style="font-size:0.75rem;" title="@r.Visibility"></i>
                                         }
+                                        <a href="/@r.OwnerName/@r.Slug" class="text-decoration-none">@r.Slug</a>
                                     </td>
                                     @for (var i = 0; i < r.Counts.Length; i++)
                                     {
                                         var idx = i; // capture
                                         var count = r.Counts[idx];
                                         var bucket = activity.Buckets[idx];
-                                        <td class="text-center p-0" style="cursor:pointer;"
+                                        <td class="text-center p-0" style="cursor:pointer;vertical-align:middle;"
                                             title="@($"{r.Slug} on {bucket.Label}: {count} commit{(count == 1 ? "" : "s")}")"
                                             @onclick="() => OpenCommitsModal(r, idx)">
-                                            <div style="display:inline-block;width:18px;height:18px;border-radius:3px;@CellStyle(count, maxCount)"></div>
+                                            <div style="display:inline-block;width:18px;height:18px;border-radius:3px;vertical-align:middle;@CellStyle(count, maxCount)"></div>
                                         </td>
                                     }
                                     <td class="text-center small text-muted">@total</td>
@@ -409,9 +409,10 @@ else if (!loading)
     // Activity tab
     private OrgActivity? activity;
     private bool loadingActivity;
-    private int activityDays = 30;
+    private int activityDays = 7;
     private string activityGranularity = "day";
     private bool includePrivate;
+    private bool activityDefaultsApplied;
     private RepoActivity? modalRepo;
     private int modalBucketIndex = -1;
 
@@ -540,6 +541,12 @@ else if (!loading)
     private async Task SetTabActivity()
     {
         activeTab = "activity";
+        if (!activityDefaultsApplied)
+        {
+            // Authenticated viewers default to including private repos.
+            includePrivate = !isAnonymous;
+            activityDefaultsApplied = true;
+        }
         if (activity == null) await ReloadActivity();
     }
 

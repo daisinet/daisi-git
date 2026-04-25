@@ -113,8 +113,13 @@ public class GitHubBulkImportService(
 
                 var visibility = item.IsPrivate ? defaultPrivateVisibility : defaultPublicVisibility;
 
+                // Owner of the imported repo is the daisi-git org itself, identified by its
+                // SLUG (URL handle, e.g. "daisinet"). The actor's id/name is not used for
+                // ownership — the org is the owner regardless of who kicked off the import.
                 var imported = await importService.ImportAsync(
-                    cloneUrl, accountId, actorUserId, actorUserName,
+                    cloneUrl, accountId,
+                    ownerId: job.DaisiOrgId,
+                    ownerName: job.DaisiOrgSlug,
                     repoName: targetName, description: item.Description,
                     visibility: visibility, storageProvider: storageProvider,
                     onProgress: msg => { item.LastMessage = msg; job.UpdatedUtc = DateTime.UtcNow; });

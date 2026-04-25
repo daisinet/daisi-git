@@ -49,6 +49,10 @@ public class CliApp(string[] args)
             case "browse":
                 HandleBrowse();
                 break;
+            case "workflow":
+            case "wf":
+                await HandleWorkflow();
+                break;
             case "version":
             case "--version":
                 Console.WriteLine("dg 0.1.0");
@@ -597,6 +601,162 @@ public class CliApp(string[] args)
 
             default:
                 Console.WriteLine("Usage: dg pr <list|create|merge|view>");
+                break;
+        }
+    }
+
+    // ── Workflow ──
+
+    private async Task HandleWorkflow()
+    {
+        var sub = GetSubcommand();
+        using var client = RequireAuth();
+        if (client == null) return;
+
+        var (owner, slug) = ResolveRepo();
+        if (owner == null && sub is not (null or "help" or "--help"))
+        {
+            Console.Error.WriteLine("Not in a repository. Specify with --repo owner/repo or run from a cloned repo.");
+            Environment.ExitCode = 1;
+            return;
+        }
+
+        switch (sub)
+        {
+            case "list" or "ls":
+                {
+                    var workflows = await client.ListWorkflowsAsync(owner!, slug!);
+                    if (workflows.Count == 0) { Console.WriteLine("No workflows."); return; }
+                    Console.WriteLine($"{"ID",-32} {"NAME",-40} {"TRIGGER",-12} {"ENABLED"}");
+                    foreach (var w in workflows)
+                        Console.WriteLine($"{w.id,-32} {Truncate(w.Name, 40),-40} {w.TriggerType,-12} {(w.IsEnabled ? "yes" : "no")}");
+                    break;
+                }
+
+            case "view":
+                {
+                    var id = GetArg(2);
+                    if (string.IsNullOrEmpty(id)) { Console.Error.WriteLine("Usage: dg workflow view <id>"); Environment.ExitCode = 1; return; }
+                    var yaml = await client.GetWorkflowYamlAsync(owner!, slug!, id);
+                    Console.Write(yaml);
+                    break;
+                }
+
+            case "create":
+                {
+                    var path = GetArg(2);
+                    if (string.IsNullOrEmpty(path) || !File.Exists(path))
+                    { Console.Error.WriteLine("Usage: dg workflow create <yaml-file>"); Environment.ExitCode = 1; return; }
+                    var yaml = await File.ReadAllTextAsync(path);
+                    var created = await client.CreateWorkflowFromYamlAsync(owner!, slug!, yaml);
+                    Console.WriteLine($"Created workflow {created.id} ({created.Name})");
+                    break;
+                }
+
+            case "update":
+                {
+                    var id = GetArg(2);
+                    var path = GetArg(3);
+                    if (string.IsNullOrEmpty(id) || string.IsNullOrEmpty(path) || !File.Exists(path))
+                    { Console.Error.WriteLine("Usage: dg workflow update <id> <yaml-file>"); Environment.ExitCode = 1; return; }
+                    var yaml = await File.ReadAllTextAsync(path);
+                    var updated = await client.UpdateWorkflowFromYamlAsync(owner!, slug!, id, yaml);
+                    Console.WriteLine($"Updated workflow {updated.id} ({updated.Name})");
+                    break;
+                }
+
+            case "delete" or "rm":
+                {
+                    var id = GetArg(2);
+                    if (string.IsNullOrEmpty(id)) { Console.Error.WriteLine("Usage: dg workflow delete <id>"); Environment.ExitCode = 1; return; }
+                    await client.DeleteWorkflowAsync(owner!, slug!, id);
+                    Console.WriteLine($"Deleted workflow {id}");
+                    break;
+                }
+
+            case "run":
+                {
+                    var id = GetArg(2);
+                    if (string.IsNullOrEmpty(id)) { Console.Error.WriteLine("Usage: dg workflow run <id>"); Environment.ExitCode = 1; return; }
+                    var exec = await client.RunWorkflowAsync(owner!, slug!, id);
+                    Console.WriteLine($"Started execution {exec.id} (status: {exec.Status})");
+                    Console.WriteLine($"Watch: dg workflow run-view {exec.id}");
+                    break;
+                }
+
+            case "runs":
+                {
+                    var workflowId = GetFlag("--workflow") ?? GetFlag("-w");
+                    var take = int.TryParse(GetFlag("--limit") ?? GetFlag("-n"), out var n) ? n : 20;
+                    var runs = string.IsNullOrEmpty(workflowId)
+                        ? await client.ListRepoRunsAsync(owner!, slug!, take: take)
+                        : await client.ListWorkflowRunsAsync(owner!, slug!, workflowId, take: take);
+                    if (runs.Count == 0) { Console.WriteLine("No runs."); return; }
+                    Console.WriteLine($"{"ID",-32} {"STATUS",-10} {"WORKFLOW",-30} {"STARTED",-20} {"STEPS"}");
+                    foreach (var r in runs)
+                    {
+                        var stepsLabel = $"{r.StepResults?.Count ?? 0}/{r.TotalSteps}";
+                        Console.WriteLine($"{r.id,-32} {r.Status,-10} {Truncate(r.WorkflowName ?? "", 30),-30} {r.CreatedUtc:yyyy-MM-dd HH:mm:ss} {stepsLabel}");
+                    }
+                    break;
+                }
+
+            case "run-view":
+                {
+                    var execId = GetArg(2);
+                    if (string.IsNullOrEmpty(execId)) { Console.Error.WriteLine("Usage: dg workflow run-view <executionId>"); Environment.ExitCode = 1; return; }
+                    var exec = await client.GetRunAsync(owner!, slug!, execId);
+                    if (exec == null) { Console.Error.WriteLine("Execution not found."); Environment.ExitCode = 1; return; }
+                    Console.WriteLine($"Execution: {exec.id}");
+                    Console.WriteLine($"Workflow:  {exec.WorkflowName} ({exec.WorkflowId})");
+                    Console.WriteLine($"Status:    {exec.Status}");
+                    Console.WriteLine($"Source:    {exec.Source} ({exec.TriggerType})");
+                    Console.WriteLine($"Started:   {exec.CreatedUtc:yyyy-MM-dd HH:mm:ss} UTC");
+                    if (!string.IsNullOrEmpty(exec.Error)) Console.WriteLine($"Error:     {exec.Error}");
+                    if (exec.StepResults is { Count: > 0 })
+                    {
+                        Console.WriteLine();
+                        Console.WriteLine($"{"#",-3} {"RESULT",-7} {"STEP",-40} {"DETAIL"}");
+                        foreach (var s in exec.StepResults)
+                        {
+                            var label = string.IsNullOrWhiteSpace(s.StepName) ? s.StepType.ToString() : s.StepName;
+                            var detail = !string.IsNullOrEmpty(s.Error) ? s.Error
+                                : s.HttpStatusCode.HasValue ? $"HTTP {s.HttpStatusCode}"
+                                : s.ExitCode.HasValue ? $"exit {s.ExitCode}"
+                                : s.RenderedBody ?? "";
+                            Console.WriteLine($"{s.StepIndex + 1,-3} {(s.Success ? "ok" : "FAIL"),-7} {Truncate(label, 40),-40} {Truncate(detail, 100)}");
+                        }
+                        if (exec.StepResults.Any(r => !string.IsNullOrEmpty(r.ScriptOutput)))
+                        {
+                            Console.WriteLine();
+                            Console.WriteLine("── Script output ──");
+                            foreach (var s in exec.StepResults.Where(r => !string.IsNullOrEmpty(r.ScriptOutput)))
+                            {
+                                var label = string.IsNullOrWhiteSpace(s.StepName) ? s.StepType.ToString() : s.StepName;
+                                Console.WriteLine($"\n[step {s.StepIndex + 1} {label}]");
+                                Console.WriteLine(s.ScriptOutput);
+                            }
+                        }
+                    }
+                    break;
+                }
+
+            default:
+                Console.WriteLine("""
+                    Usage: dg workflow <command>
+
+                    Commands:
+                      list                       List workflows in this repo
+                      view <id>                  Print the workflow YAML
+                      create <yaml-file>         Create a workflow from a YAML file
+                      update <id> <yaml-file>    Replace a workflow's YAML
+                      delete <id>                Delete a workflow
+                      run <id>                   Trigger a Run Now execution
+                      runs [-w id] [-n limit]    List executions (workflow-scoped or repo-wide)
+                      run-view <exec-id>         Show execution detail with step results
+
+                    Use --repo owner/slug to target a different repo than the current directory's.
+                    """);
                 break;
         }
     }

@@ -16,12 +16,20 @@ public static class WorkflowApiEndpoints
 
         api.MapGet("/repos/{owner}/{slug}/workflows", ListWorkflows);
         api.MapPost("/repos/{owner}/{slug}/workflows", CreateWorkflow);
+        api.MapGet("/repos/{owner}/{slug}/workflows/{id}", GetWorkflow);
         api.MapPut("/repos/{owner}/{slug}/workflows/{id}", UpdateWorkflow);
         api.MapDelete("/repos/{owner}/{slug}/workflows/{id}", DeleteWorkflow);
+        api.MapGet("/repos/{owner}/{slug}/workflows/{id}/yaml", GetWorkflowYaml);
+        api.MapPut("/repos/{owner}/{slug}/workflows/{id}/yaml", UpdateWorkflowYaml);
+        api.MapPost("/repos/{owner}/{slug}/workflows/yaml", CreateWorkflowYaml);
+        api.MapPost("/repos/{owner}/{slug}/workflows/{id}/run", RunWorkflowNow);
         api.MapGet("/repos/{owner}/{slug}/workflows/{id}/runs", ListWorkflowRuns);
         api.MapGet("/repos/{owner}/{slug}/runs", ListRepoRuns);
+        api.MapGet("/repos/{owner}/{slug}/runs/{execId}", GetRun);
         api.MapGet("/repos/{owner}/{slug}/events", ListEvents);
     }
+
+    private static string GetUserName(HttpContext ctx) => ctx.Items["userName"] as string ?? "";
 
     private static string GetUserId(HttpContext ctx) => ctx.Items["userId"] as string ?? "";
 
@@ -39,6 +47,143 @@ public static class WorkflowApiEndpoints
         var workflows = await workflowService.ListAsync(repo.AccountId);
         var filtered = workflows.Where(w => w.RepositoryId == null || w.RepositoryId == repo.id).ToList();
         return Results.Ok(filtered);
+    }
+
+    private static async Task<IResult> GetWorkflow(
+        HttpContext ctx, string owner, string slug, string id,
+        RepositoryService repoService, WorkflowService workflowService,
+        PermissionService permissionService)
+    {
+        var repo = await repoService.GetRepositoryBySlugAsync(owner, slug);
+        if (repo == null) return Results.NotFound();
+
+        if (!await permissionService.CanReadAsync(GetUserId(ctx), repo))
+            return Results.Forbid();
+
+        var workflow = await workflowService.GetAsync(id, repo.AccountId);
+        if (workflow == null) return Results.NotFound();
+        if (workflow.RepositoryId != null && workflow.RepositoryId != repo.id) return Results.NotFound();
+        return Results.Ok(workflow);
+    }
+
+    private static async Task<IResult> GetWorkflowYaml(
+        HttpContext ctx, string owner, string slug, string id,
+        RepositoryService repoService, WorkflowService workflowService,
+        PermissionService permissionService)
+    {
+        var repo = await repoService.GetRepositoryBySlugAsync(owner, slug);
+        if (repo == null) return Results.NotFound();
+
+        if (!await permissionService.CanReadAsync(GetUserId(ctx), repo))
+            return Results.Forbid();
+
+        var workflow = await workflowService.GetAsync(id, repo.AccountId);
+        if (workflow == null) return Results.NotFound();
+        if (workflow.RepositoryId != null && workflow.RepositoryId != repo.id) return Results.NotFound();
+
+        var yaml = WorkflowYamlParser.ToYaml(workflow);
+        return Results.Text(yaml, "application/x-yaml");
+    }
+
+    private static async Task<IResult> UpdateWorkflowYaml(
+        HttpContext ctx, string owner, string slug, string id, YamlBody req,
+        RepositoryService repoService, WorkflowService workflowService,
+        PermissionService permissionService)
+    {
+        var repo = await repoService.GetRepositoryBySlugAsync(owner, slug);
+        if (repo == null) return Results.NotFound();
+
+        if (!await permissionService.CanWriteAsync(GetUserId(ctx), repo))
+            return Results.Forbid();
+
+        if (!WorkflowYamlParser.TryParse(req.Yaml ?? "", out var parseError, out var parsed) || parsed == null)
+            return Results.BadRequest(new { error = parseError ?? "Invalid YAML" });
+
+        var workflow = await workflowService.GetAsync(id, repo.AccountId);
+        if (workflow == null) return Results.NotFound();
+        if (workflow.RepositoryId != null && workflow.RepositoryId != repo.id) return Results.NotFound();
+
+        ApplyParsedToWorkflow(workflow, parsed);
+        var updated = await workflowService.UpdateAsync(workflow);
+        return Results.Ok(updated);
+    }
+
+    private static async Task<IResult> CreateWorkflowYaml(
+        HttpContext ctx, string owner, string slug, YamlBody req,
+        RepositoryService repoService, WorkflowService workflowService,
+        PermissionService permissionService)
+    {
+        var repo = await repoService.GetRepositoryBySlugAsync(owner, slug);
+        if (repo == null) return Results.NotFound();
+
+        if (!await permissionService.CanWriteAsync(GetUserId(ctx), repo))
+            return Results.Forbid();
+
+        if (!WorkflowYamlParser.TryParse(req.Yaml ?? "", out var parseError, out var parsed) || parsed == null)
+            return Results.BadRequest(new { error = parseError ?? "Invalid YAML" });
+
+        var workflow = new GitWorkflow
+        {
+            AccountId = repo.AccountId,
+            RepositoryId = repo.id,
+            IsEnabled = true
+        };
+        ApplyParsedToWorkflow(workflow, parsed);
+        var created = await workflowService.CreateAsync(workflow);
+        return Results.Created($"/api/git/repos/{owner}/{slug}/workflows/{created.id}", created);
+    }
+
+    private static async Task<IResult> RunWorkflowNow(
+        HttpContext ctx, string owner, string slug, string id,
+        RepositoryService repoService, WorkflowService workflowService,
+        PermissionService permissionService)
+    {
+        var repo = await repoService.GetRepositoryBySlugAsync(owner, slug);
+        if (repo == null) return Results.NotFound();
+
+        if (!await permissionService.CanWriteAsync(GetUserId(ctx), repo))
+            return Results.Forbid();
+
+        var workflow = await workflowService.GetAsync(id, repo.AccountId);
+        if (workflow == null) return Results.NotFound();
+        if (workflow.RepositoryId != null && workflow.RepositoryId != repo.id) return Results.NotFound();
+
+        var execution = await workflowService.RunNowAsync(workflow, repo, GetUserId(ctx), GetUserName(ctx));
+        return Results.Accepted($"/api/git/repos/{owner}/{slug}/runs/{execution.id}", execution);
+    }
+
+    private static async Task<IResult> GetRun(
+        HttpContext ctx, string owner, string slug, string execId,
+        RepositoryService repoService, WorkflowService workflowService,
+        DaisiGit.Data.DaisiGitCosmo cosmo,
+        PermissionService permissionService)
+    {
+        var repo = await repoService.GetRepositoryBySlugAsync(owner, slug);
+        if (repo == null) return Results.NotFound();
+
+        if (!await permissionService.CanReadAsync(GetUserId(ctx), repo))
+            return Results.Forbid();
+
+        var execution = await cosmo.GetWorkflowExecutionAsync(execId, repo.AccountId);
+        if (execution == null) return Results.NotFound();
+        if (execution.RepositoryId != repo.id) return Results.NotFound();
+        return Results.Ok(execution);
+    }
+
+    private static void ApplyParsedToWorkflow(GitWorkflow workflow, ParsedFileWorkflow parsed)
+    {
+        workflow.Name = parsed.Name;
+        workflow.Steps = parsed.Steps;
+        workflow.Env = parsed.Env;
+
+        var firstTrigger = parsed.Triggers.FirstOrDefault();
+        if (firstTrigger != null)
+        {
+            workflow.TriggerType = firstTrigger.EventType;
+            workflow.TriggerFilters = firstTrigger.Branches is { Count: > 0 }
+                ? new Dictionary<string, string> { ["branch"] = string.Join(",", firstTrigger.Branches) }
+                : null;
+        }
     }
 
     private static async Task<IResult> CreateWorkflow(
@@ -169,6 +314,8 @@ public record CreateWorkflowRequest(
     List<WorkflowStep>? Steps = null,
     bool? IsEnabled = true,
     bool AccountWide = false);
+
+public record YamlBody(string? Yaml);
 
 public record UpdateWorkflowRequest(
     string? Name = null,

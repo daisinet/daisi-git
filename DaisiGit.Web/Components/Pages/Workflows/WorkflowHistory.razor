@@ -178,9 +178,9 @@
     private void UpdateRefreshState()
     {
         anyActive = executions.Any(e => e.Status is "Running" or "Dispatched");
-        if (anyActive && refreshTimer == null)
+        if (anyActive && refreshTimer == null && !disposed)
         {
-            refreshTimer = new System.Threading.Timer(_ => InvokeAsync(RefreshExecutions),
+            refreshTimer = new System.Threading.Timer(TimerTick,
                 null, TimeSpan.FromSeconds(RefreshSeconds), TimeSpan.FromSeconds(RefreshSeconds));
         }
         else if (!anyActive && refreshTimer != null)
@@ -190,19 +190,32 @@
         }
     }
 
+    private void TimerTick(object? _)
+    {
+        if (disposed) return;
+        _ = InvokeAsync(async () =>
+        {
+            try { await RefreshExecutions(); }
+            catch { /* Refresh is best-effort; never let it crash the circuit. */ }
+        });
+    }
+
     private async Task RefreshExecutions()
     {
-        if (string.IsNullOrEmpty(accountId)) return;
-        try
-        {
-            executions = await WorkflowService.ListExecutionsAsync(accountId, workflowId: WorkflowId);
-        }
-        catch { }
+        if (disposed || string.IsNullOrEmpty(accountId)) return;
+        executions = await WorkflowService.ListExecutionsAsync(accountId, workflowId: WorkflowId);
         UpdateRefreshState();
         StateHasChanged();
     }
 
-    public void Dispose() => refreshTimer?.Dispose();
+    private bool disposed;
+    public void Dispose()
+    {
+        disposed = true;
+        var t = refreshTimer;
+        refreshTimer = null;
+        t?.Dispose();
+    }
 
     private void ToggleDetail(string id)
     {

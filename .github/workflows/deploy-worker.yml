@@ -56,3 +56,14 @@ jobs:
             .
           docker push ${{ secrets.ACR_NAME }}.azurecr.io/daisigit-worker-${{ matrix.runtime }}:${{ github.sha }}
           docker push ${{ secrets.ACR_NAME }}.azurecr.io/daisigit-worker-${{ matrix.runtime }}:latest
+
+      # The Container Apps Job in main.bicep pulls 'daisigit-worker:latest' (no runtime suffix).
+      # Until bicep is updated to deploy a job per runtime, the minimal image is the canonical
+      # one consumed by the live job.
+      - name: Tag and push minimal as canonical 'daisigit-worker' image
+        if: matrix.runtime == 'minimal'
+        run: |
+          docker tag ${{ secrets.ACR_NAME }}.azurecr.io/daisigit-worker-minimal:${{ github.sha }} ${{ secrets.ACR_NAME }}.azurecr.io/daisigit-worker:${{ github.sha }}
+          docker tag ${{ secrets.ACR_NAME }}.azurecr.io/daisigit-worker-minimal:latest ${{ secrets.ACR_NAME }}.azurecr.io/daisigit-worker:latest
+          docker push ${{ secrets.ACR_NAME }}.azurecr.io/daisigit-worker:${{ github.sha }}
+          docker push ${{ secrets.ACR_NAME }}.azurecr.io/daisigit-worker:latest

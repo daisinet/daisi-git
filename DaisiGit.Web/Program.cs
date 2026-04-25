@@ -86,26 +86,39 @@ builder.Services.AddScoped<WorkflowService>();
 // Daisinet catalog (singleton — caches model list across requests)
 builder.Services.AddSingleton<DaisinetModelCatalog>();
 
-// Workflow dispatch (queue-based isolation)
+// Workflow dispatch (queue-based isolation, one queue per runtime).
 var workflowQueueConnectionString = builder.Configuration["WorkflowQueue:ConnectionString"];
+var workflowRuntimes = new[] { "minimal", "dotnet", "node", "python", "full" };
+
 if (!string.IsNullOrEmpty(workflowQueueConnectionString))
 {
-    var queueClient = new QueueClient(
+    var perRuntime = workflowRuntimes.ToDictionary(
+        r => r,
+        r => new QueueClient(
+            workflowQueueConnectionString,
+            $"workflow-executions-{r}",
+            new QueueClientOptions { MessageEncoding = QueueMessageEncoding.Base64 }));
+    foreach (var (_, qc) in perRuntime)
+    {
+        try { qc.CreateIfNotExists(); } catch { /* RBAC may forbid create — KEDA handles it */ }
+    }
+
+    // Legacy single queue retained so executions dispatched against the old shape can drain.
+    var legacy = new QueueClient(
         workflowQueueConnectionString,
         "workflow-executions",
         new QueueClientOptions { MessageEncoding = QueueMessageEncoding.Base64 });
-    builder.Services.AddSingleton(queueClient);
+    try { legacy.CreateIfNotExists(); } catch { }
+
     builder.Services.AddScoped<WorkflowDispatchService>(sp =>
-        new WorkflowDispatchService(
-            sp.GetRequiredService<QueueClient>(),
+        new WorkflowDispatchService(perRuntime, legacy,
             sp.GetRequiredService<ILogger<WorkflowDispatchService>>()));
 }
 else
 {
-    // No queue configured — dispatch service will fall back to in-process execution
+    // No queue configured — dispatch service will fall back to in-process execution.
     builder.Services.AddScoped<WorkflowDispatchService>(sp =>
-        new WorkflowDispatchService(
-            null,
+        new WorkflowDispatchService(new Dictionary<string, QueueClient>(), null,
             sp.GetRequiredService<ILogger<WorkflowDispatchService>>()));
 }
 builder.Services.AddHostedService<GitWorkflowBackgroundWorker>();

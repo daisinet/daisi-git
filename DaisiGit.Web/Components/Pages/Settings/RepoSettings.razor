@@ -2,7 +2,9 @@
 @page "/{Owner}/{RepoSlug}/settings/{SettingsTab}"
 @inject RepositoryService RepoService
 @inject SecretService SecretService
+@inject AccountSettingsService AccountSettingsService
 @inject NavigationManager Nav
+@inject IHttpClientFactory HttpClientFactory
 
 <PageTitle>Settings - @Owner/@RepoSlug - Daisi Git</PageTitle>
 
@@ -24,6 +26,10 @@
                     <a class="nav-link @(activeTab == "secrets" ? "active" : "")"
                        href="/@Owner/@RepoSlug/settings/secrets">
                         <i class="fa-duotone fa-key me-1"></i> Secrets
+                    </a>
+                    <a class="nav-link @(activeTab == "merge" ? "active" : "")"
+                       href="/@Owner/@RepoSlug/settings/merge">
+                        <i class="fa-duotone fa-code-merge me-1"></i> Merge policy
                     </a>
                     <a class="nav-link @(activeTab == "danger" ? "active" : "") text-danger"
                        href="/@Owner/@RepoSlug/settings/danger">
@@ -175,6 +181,70 @@
                         </div>
                     </div>
                 }
+                else if (activeTab == "merge")
+                {
+                    <h5 class="mb-3">Merge policy</h5>
+                    <div class="card" style="max-width: 700px;">
+                        <div class="card-body">
+                            <p class="text-muted small mb-3">
+                                Override account defaults for this repo. <strong>Inherit</strong> uses the org-level setting.
+                            </p>
+
+                            <div class="mb-3">
+                                <label class="form-label">Auto-merge PRs</label>
+                                <select class="form-select" style="max-width: 250px;" @bind="autoMergeOverride">
+                                    <option value="inherit">Inherit (@(InheritedLabel(accountAutoMerge)))</option>
+                                    <option value="on">On</option>
+                                    <option value="off">Off</option>
+                                </select>
+                                <div class="form-text">PRs created via API/CLI merge as soon as they're mergeable.</div>
+                            </div>
+
+                            <div class="mb-3">
+                                <label class="form-label">Delete head branch on merge</label>
+                                <select class="form-select" style="max-width: 250px;" @bind="deleteBranchOverride">
+                                    <option value="inherit">Inherit (@(InheritedLabel(accountDeleteBranch)))</option>
+                                    <option value="on">On</option>
+                                    <option value="off">Off</option>
+                                </select>
+                                <div class="form-text">After a successful merge, delete the source branch (default branch is always kept).</div>
+                            </div>
+
+                            <hr class="my-3" />
+
+                            <div class="mb-3">
+                                <label class="form-label">Allow merge commits</label>
+                                <select class="form-select" style="max-width: 250px;" @bind="allowMergeOverride">
+                                    <option value="inherit">Inherit (@(InheritedLabel(accountAllowMerge)))</option>
+                                    <option value="on">On</option>
+                                    <option value="off">Off</option>
+                                </select>
+                            </div>
+
+                            <div class="mb-3">
+                                <label class="form-label">Allow squash merging</label>
+                                <select class="form-select" style="max-width: 250px;" @bind="allowSquashOverride">
+                                    <option value="inherit">Inherit (@(InheritedLabel(accountAllowSquash)))</option>
+                                    <option value="on">On</option>
+                                    <option value="off">Off</option>
+                                </select>
+                            </div>
+
+                            <button class="btn btn-primary" @onclick="SaveMergePolicy" disabled="@savingMergePolicy">
+                                @if (savingMergePolicy) { <span class="spinner-border spinner-border-sm me-1"></span> }
+                                Save
+                            </button>
+                            @if (mergePolicySaved)
+                            {
+                                <span class="text-success ms-2"><i class="fa-solid fa-check"></i> Saved</span>
+                            }
+                            @if (!string.IsNullOrEmpty(mergePolicyError))
+                            {
+                                <div class="alert alert-danger mt-2">@mergePolicyError</div>
+                            }
+                        </div>
+                    </div>
+                }
                 else if (activeTab == "danger")
                 {
                     <!-- Danger Zone -->
@@ -260,6 +330,7 @@
     private string activeTab => SettingsTab?.ToLowerInvariant() switch
     {
         "secrets" => "secrets",
+        "merge" => "merge",
         "danger" => "danger",
         _ => "general"
     };
@@ -290,6 +361,19 @@
     private string? secretError;
     private bool secretSaved;
 
+    // Merge policy
+    private string autoMergeOverride = "inherit";
+    private string deleteBranchOverride = "inherit";
+    private string allowMergeOverride = "inherit";
+    private string allowSquashOverride = "inherit";
+    private bool accountAutoMerge;
+    private bool accountDeleteBranch;
+    private bool accountAllowMerge = true;
+    private bool accountAllowSquash = true;
+    private bool savingMergePolicy;
+    private bool mergePolicySaved;
+    private string? mergePolicyError;
+
     protected override async Task OnParametersSetAsync()
     {
         if (dataLoaded) return;
@@ -306,10 +390,88 @@
                 visibility = repo.Visibility;
                 isFork = !string.IsNullOrEmpty(repo.ForkedFromId);
                 await LoadSecrets();
+                await LoadMergePolicyState();
             }
         }
         catch { }
         loading = false;
+    }
+
+    private async Task LoadMergePolicyState()
+    {
+        if (repo == null) return;
+        var account = await AccountSettingsService.GetSettingsAsync(repo.AccountId);
+        accountAutoMerge = account.AutoMergeEnabled;
+        accountDeleteBranch = account.DeleteBranchOnMerge;
+        accountAllowMerge = account.AllowMergeCommit;
+        accountAllowSquash = account.AllowSquashMerge;
+
+        autoMergeOverride = ToTriState(repo.AutoMergeEnabled);
+        deleteBranchOverride = ToTriState(repo.DeleteBranchOnMerge);
+        allowMergeOverride = ToTriState(repo.AllowMergeCommit);
+        allowSquashOverride = ToTriState(repo.AllowSquashMerge);
+    }
+
+    private static string ToTriState(bool? value) => value switch
+    {
+        true => "on",
+        false => "off",
+        _ => "inherit"
+    };
+
+    private static bool? FromTriState(string value) => value switch
+    {
+        "on" => true,
+        "off" => false,
+        _ => null
+    };
+
+    private static string InheritedLabel(bool inherited) => inherited ? "On" : "Off";
+
+    private async Task SaveMergePolicy()
+    {
+        if (repo == null) return;
+        mergePolicyError = null;
+        mergePolicySaved = false;
+        savingMergePolicy = true;
+        try
+        {
+            var auto = FromTriState(autoMergeOverride);
+            var delBranch = FromTriState(deleteBranchOverride);
+            var allowMerge = FromTriState(allowMergeOverride);
+            var allowSquash = FromTriState(allowSquashOverride);
+
+            // Refuse if explicit override would zero out both strategies
+            var effMerge = allowMerge ?? accountAllowMerge;
+            var effSquash = allowSquash ?? accountAllowSquash;
+            if (!effMerge && !effSquash)
+            {
+                mergePolicyError = "At least one merge strategy must be allowed.";
+                savingMergePolicy = false;
+                return;
+            }
+
+            var http = HttpClientFactory.CreateClient();
+            http.BaseAddress = new Uri(Nav.BaseUri);
+            var resp = await http.PutAsJsonAsync(
+                $"api/git/repos/{Owner}/{RepoSlug}/merge-policy",
+                new { autoMergeEnabled = auto, deleteBranchOnMerge = delBranch, allowMergeCommit = allowMerge, allowSquashMerge = allowSquash });
+            if (!resp.IsSuccessStatusCode)
+            {
+                var body = await resp.Content.ReadAsStringAsync();
+                mergePolicyError = $"Save failed: {(int)resp.StatusCode} {body}";
+            }
+            else
+            {
+                repo.AutoMergeEnabled = auto;
+                repo.DeleteBranchOnMerge = delBranch;
+                repo.AllowMergeCommit = allowMerge;
+                repo.AllowSquashMerge = allowSquash;
+                mergePolicySaved = true;
+            }
+        }
+        catch (Exception ex) { mergePolicyError = ex.Message; }
+        savingMergePolicy = false;
     }
 
     private void OnVisibilityChange(ChangeEventArgs e)

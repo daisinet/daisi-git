@@ -19,6 +19,18 @@ public class AccountSettings
     [JsonConverter(typeof(JsonStringEnumConverter))]
     public StorageProvider DefaultStorageProvider { get; set; } = StorageProvider.DaisiDrive;
 
+    /// <summary>When true, PRs created in this account auto-merge as soon as they're mergeable.</summary>
+    public bool AutoMergeEnabled { get; set; } = false;
+
+    /// <summary>When true, the source branch is deleted after a successful merge (unless it's the default branch).</summary>
+    public bool DeleteBranchOnMerge { get; set; } = false;
+
+    /// <summary>When true, the merge-commit strategy is allowed for PRs.</summary>
+    public bool AllowMergeCommit { get; set; } = true;
+
+    /// <summary>When true, the squash-merge strategy is allowed for PRs.</summary>
+    public bool AllowSquashMerge { get; set; } = true;
+
     public DateTime CreatedUtc { get; set; } = DateTime.UtcNow;
     public DateTime? UpdatedUtc { get; set; }
 }

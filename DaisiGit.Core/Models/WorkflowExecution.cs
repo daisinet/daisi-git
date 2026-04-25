@@ -44,8 +44,16 @@ public class WorkflowExecution
     public DateTime? NextRunAt { get; set; }
 
     public List<WorkflowStepResult> StepResults { get; set; } = [];
+
+    /// <summary>When the execution record was created (queue start).</summary>
     public DateTime CreatedUtc { get; set; } = DateTime.UtcNow;
     public DateTime? UpdatedUtc { get; set; }
+
+    /// <summary>When the worker first began running steps (after queue dispatch).</summary>
+    public DateTime? StartedUtc { get; set; }
+
+    /// <summary>When the execution reached a terminal status (Completed/Failed/Cancelled).</summary>
+    public DateTime? FinishedUtc { get; set; }
 
     /// <summary>Temp directory on disk for checkout/build steps. Cleaned up after execution.</summary>
     [JsonIgnore]

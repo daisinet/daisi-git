@@ -298,6 +298,52 @@ public class DaisiGitClient : IDisposable
         return await GetAsync<List<GitRepository>>($"api/git/explore?skip={skip}&take={take}");
     }
 
+    // ── Workflows ──
+
+    /// <summary>Lists workflows scoped to a repository (account-wide workflows included).</summary>
+    public async Task<List<GitWorkflow>> ListWorkflowsAsync(string owner, string slug)
+        => await GetAsync<List<GitWorkflow>>($"api/git/repos/{owner}/{slug}/workflows");
+
+    /// <summary>Gets a single workflow by id.</summary>
+    public async Task<GitWorkflow?> GetWorkflowAsync(string owner, string slug, string id)
+        => await GetAsync<GitWorkflow?>($"api/git/repos/{owner}/{slug}/workflows/{id}");
+
+    /// <summary>Returns the workflow as YAML.</summary>
+    public async Task<string> GetWorkflowYamlAsync(string owner, string slug, string id)
+    {
+        var resp = await _http.GetAsync($"api/git/repos/{owner}/{slug}/workflows/{id}/yaml");
+        resp.EnsureSuccessStatusCode();
+        return await resp.Content.ReadAsStringAsync();
+    }
+
+    /// <summary>Creates a workflow from a YAML document.</summary>
+    public async Task<GitWorkflow> CreateWorkflowFromYamlAsync(string owner, string slug, string yaml)
+        => await PostAsync<GitWorkflow>($"api/git/repos/{owner}/{slug}/workflows/yaml", new { yaml });
+
+    /// <summary>Updates a workflow from a YAML document.</summary>
+    public async Task<GitWorkflow> UpdateWorkflowFromYamlAsync(string owner, string slug, string id, string yaml)
+        => await PutAsync<GitWorkflow>($"api/git/repos/{owner}/{slug}/workflows/{id}/yaml", new { yaml });
+
+    /// <summary>Deletes a workflow.</summary>
+    public async Task DeleteWorkflowAsync(string owner, string slug, string id)
+        => await DeleteAsync($"api/git/repos/{owner}/{slug}/workflows/{id}");
+
+    /// <summary>Triggers a workflow execution immediately ("run now").</summary>
+    public async Task<WorkflowExecution> RunWorkflowAsync(string owner, string slug, string id)
+        => await PostAsync<WorkflowExecution>($"api/git/repos/{owner}/{slug}/workflows/{id}/run", new { });
+
+    /// <summary>Lists executions for a workflow.</summary>
+    public async Task<List<WorkflowExecution>> ListWorkflowRunsAsync(string owner, string slug, string id, int take = 50, int skip = 0)
+        => await GetAsync<List<WorkflowExecution>>($"api/git/repos/{owner}/{slug}/workflows/{id}/runs?take={take}&skip={skip}");
+
+    /// <summary>Lists executions across all workflows in a repository.</summary>
+    public async Task<List<WorkflowExecution>> ListRepoRunsAsync(string owner, string slug, int take = 50, int skip = 0)
+        => await GetAsync<List<WorkflowExecution>>($"api/git/repos/{owner}/{slug}/runs?take={take}&skip={skip}");
+
+    /// <summary>Gets a single execution with all step results.</summary>
+    public async Task<WorkflowExecution?> GetRunAsync(string owner, string slug, string execId)
+        => await GetAsync<WorkflowExecution?>($"api/git/repos/{owner}/{slug}/runs/{execId}");
+
     // ── Comments ──
 
     /// <summary>

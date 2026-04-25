@@ -160,4 +160,142 @@ public class WorkflowYamlTests
         Assert.Equal(WorkflowStepType.Wait, parsed.Steps[7].StepType);
         Assert.Equal(5, parsed.Steps[7].WaitMinutes);
     }
+
+    [Fact]
+    public void Parse_RunMinion_WithInlineInstructions_Roundtrips()
+    {
+        var yaml = """
+            name: Minion run
+            on:
+              push: {}
+            jobs:
+              agent:
+                steps:
+                  - name: Run the minion
+                    uses: run-minion
+                    with:
+                      instructions: "Analyze the repo and print a summary."
+                      model: "Qwen 3.5"
+                      role: coder
+                      max-iterations: "10"
+                      json: "true"
+                      grammar: "false"
+                      timeout: "600"
+                      orc-address: "orc.example.com:443"
+            """;
+
+        var parsed = WorkflowYamlParser.Parse(yaml);
+        Assert.NotNull(parsed);
+        Assert.Single(parsed.Steps);
+
+        var step = parsed.Steps[0];
+        Assert.Equal(WorkflowStepType.RunMinion, step.StepType);
+        Assert.Equal("Analyze the repo and print a summary.", step.MinionInstructions);
+        Assert.Null(step.MinionInstructionsFile);
+        Assert.Equal("Qwen 3.5", step.MinionModel);
+        Assert.Equal("coder", step.MinionRole);
+        Assert.Equal(10, step.MinionMaxIterations);
+        Assert.True(step.MinionJsonOutput);
+        Assert.False(step.MinionGrammar);
+        Assert.Equal(600, step.MinionTimeoutSeconds);
+        Assert.Equal("orc.example.com:443", step.MinionOrcAddress);
+    }
+
+    [Fact]
+    public void Parse_RunMinion_WithFileInstructions()
+    {
+        var yaml = """
+            name: Minion run
+            on:
+              push: {}
+            jobs:
+              agent:
+                steps:
+                  - uses: run-minion
+                    with:
+                      instructions-file: ".minion/doc-task.md"
+            """;
+
+        var parsed = WorkflowYamlParser.Parse(yaml);
+        Assert.NotNull(parsed);
+        Assert.Single(parsed.Steps);
+        Assert.Equal(".minion/doc-task.md", parsed.Steps[0].MinionInstructionsFile);
+        Assert.Null(parsed.Steps[0].MinionInstructions);
+    }
+
+    [Fact]
+    public void Parse_RunMinion_BothInstructionsAndFile_Rejected()
+    {
+        var yaml = """
+            name: Minion run
+            on:
+              push: {}
+            jobs:
+              agent:
+                steps:
+                  - uses: run-minion
+                    with:
+                      instructions: "inline"
+                      instructions-file: "file.md"
+            """;
+
+        var ok = WorkflowYamlParser.TryParse(yaml, out var error, out _);
+        Assert.False(ok);
+        Assert.NotNull(error);
+        Assert.Contains("instructions", error, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Parse_RunMinion_NeitherInstructionsNorFile_Rejected()
+    {
+        var yaml = """
+            name: Minion run
+            on:
+              push: {}
+            jobs:
+              agent:
+                steps:
+                  - uses: run-minion
+                    with:
+                      model: "Qwen 3.5"
+            """;
+
+        var ok = WorkflowYamlParser.TryParse(yaml, out var error, out _);
+        Assert.False(ok);
+        Assert.NotNull(error);
+    }
+
+    [Fact]
+    public void RunMinion_ToYaml_Roundtrips()
+    {
+        var workflow = new DaisiGit.Core.Models.GitWorkflow
+        {
+            Name = "Minion",
+            TriggerType = GitTriggerType.PushToRef,
+            Steps =
+            [
+                new DaisiGit.Core.Models.WorkflowStep
+                {
+                    Order = 0,
+                    Name = "Run",
+                    StepType = WorkflowStepType.RunMinion,
+                    MinionInstructions = "hello",
+                    MinionModel = "Qwen 3.5",
+                    MinionMaxIterations = 5,
+                    MinionJsonOutput = true,
+                }
+            ]
+        };
+
+        var yaml = WorkflowYamlParser.ToYaml(workflow);
+        var parsed = WorkflowYamlParser.Parse(yaml);
+
+        Assert.NotNull(parsed);
+        Assert.Single(parsed.Steps);
+        Assert.Equal(WorkflowStepType.RunMinion, parsed.Steps[0].StepType);
+        Assert.Equal("hello", parsed.Steps[0].MinionInstructions);
+        Assert.Equal("Qwen 3.5", parsed.Steps[0].MinionModel);
+        Assert.Equal(5, parsed.Steps[0].MinionMaxIterations);
+        Assert.True(parsed.Steps[0].MinionJsonOutput);
+    }
 }

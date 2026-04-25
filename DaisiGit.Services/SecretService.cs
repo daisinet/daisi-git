@@ -12,6 +12,9 @@ namespace DaisiGit.Services;
 /// </summary>
 public class SecretService(DaisiGitCosmo cosmo, string encryptionKey)
 {
+    /// <summary>Well-known OwnerId for system-scope secrets (engine-owned credentials, not user-managed).</summary>
+    public const string SystemOwnerId = "_system";
+
     // ── Repo-level ──
 
     public async Task SetSecretAsync(string repositoryId, string name, string value)
@@ -94,6 +97,35 @@ public class SecretService(DaisiGitCosmo cosmo, string encryptionKey)
         var secret = await cosmo.GetSecretAsync(repositoryId, name.ToUpperInvariant());
         if (secret == null) return null;
         return Decrypt(secret.EncryptedValue);
+    }
+
+    // ── System-level (engine-owned credentials, not user-managed) ──
+
+    /// <summary>
+    /// Store a system-scope secret. Use for engine-owned credentials like the DaisiGit Workers
+    /// ORC SECRET-KEY. Not surfaced in repo/org UIs.
+    /// </summary>
+    public async Task SetSystemSecretAsync(string name, string value)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+            throw new InvalidOperationException("Secret name is required.");
+
+        await cosmo.UpsertSecretAsync(new RepoSecret
+        {
+            OwnerId = SystemOwnerId,
+            Scope = "system",
+            Name = name.Trim().ToUpperInvariant(),
+            EncryptedValue = Encrypt(value)
+        });
+    }
+
+    /// <summary>Resolve a single system-scope secret by name. Returns null if unset.</summary>
+    public async Task<string?> ResolveSystemSecretAsync(string name)
+    {
+        var secret = await cosmo.GetSecretAsync(SystemOwnerId, name.Trim().ToUpperInvariant());
+        if (secret == null) return null;
+        try { return Decrypt(secret.EncryptedValue); }
+        catch { return null; }
     }
 
     // ── AES-256-CBC encryption ──

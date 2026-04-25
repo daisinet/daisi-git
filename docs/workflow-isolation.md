@@ -158,3 +158,82 @@ go build -o myapp .
 ```
 
 This gives maximum flexibility — pick the closest base image and add what you need.
+
+## `run-minion` action (daisinet-powered AI step)
+
+The `run-minion` step runs a [daisi-minion](https://github.com/daisinet/daisi-minion) autonomously in the workflow's checked-out workspace. The minion can read/write files and run shell commands inside the workspace. Inference is powered by the daisinet ORC — no local GPU required in the container — so this step must run on a runtime that includes the .NET SDK (`dotnet` or `full`).
+
+### Minimal example
+
+```yaml
+name: Auto-doc on PR
+on:
+  pull_request:
+    types: [opened]
+jobs:
+  doc:
+    runtime: dotnet
+    steps:
+      - uses: checkout
+        with: { path: "." }
+      - uses: run-minion
+        with:
+          instructions-file: ".minion/doc-task.md"
+          model: ""                       # empty ⇒ ORC's default text-gen model
+          role: coder
+          max-iterations: "20"
+          json: "true"
+      - uses: add-comment
+        with:
+          body: "Minion said:\n\n{{steps.1.output}}"
+```
+
+### Inputs
+
+| Key | Description |
+|-----|-------------|
+| `instructions` | Inline prompt. **Mutually exclusive with `instructions-file`.** Merge fields supported. |
+| `instructions-file` | Workspace-relative path to a file whose contents become the prompt. Mutually exclusive with `instructions`. |
+| `working-directory` | Workspace-relative subdir the minion runs in. Default = workspace root. |
+| `model` | Daisinet model name (e.g. `Qwen 3.5`). Empty ⇒ ORC's default text-gen model. |
+| `context` | Model context size override. |
+| `max-tokens` | Per-turn token cap. |
+| `max-iterations` | Goal-loop iteration cap. Default `20`. |
+| `role` | Role name (`coder`, `cto`, etc.). |
+| `kv-quant` | KV cache quantization (pass-through to minion). |
+| `json` | `true` ⇒ minion emits structured JSON events on stderr. |
+| `grammar` | `true` ⇒ GBNF-constrained tool calls. |
+| `timeout` | Seconds. Default `1500`, hard-capped at `1800`. |
+| `orc-address` | ORC override as `host:port`. Default = SDK config. |
+
+### Output
+
+The minion's stdout is captured into `{{steps.N.output}}` (or `{{steps.<name>.output}}` if the step has a `name`), the same merge field as `run`. Exit code is surfaced as `{{steps.N.exitCode}}`.
+
+### One-time platform setup
+
+The action authenticates to ORC as a dedicated app called **DaisiGit Workers**. A platform admin must:
+
+1. Register the app on ORC via `DappsRPC.Create` → capture the returned `AppId` and `SecretKey`.
+2. Store the `SecretKey` as a system-scope secret named `DAISIGIT_WORKERS_SECRET_KEY` using `SecretService.SetSystemSecretAsync`. This is **not** a repo/org-scoped secret and is not user-manageable.
+3. Set the worker environment variable `DAISIGIT_MINION_FEED_URL` to the NuGet feed URL where the `Daisi.Minion` tool is published (defaults to nuget.org when that package is on the public registry).
+
+> Client keys on ORC are short-lived (60 minutes for apps). The action never stores or forwards a client key — it passes the `SecretKey` to the minion via `DAISI_SECRET_KEY`, and the minion calls `AuthClientFactory.CreateStaticClientKey()` at startup to exchange for a fresh client key per run.
+
+### Runtime requirements
+
+| Runtime | `run-minion` works? |
+|---------|---------------------|
+| Minimal | No — missing `dotnet` SDK |
+| .NET    | Yes |
+| Node    | No — aspnet runtime only, no SDK |
+| Python  | No — aspnet runtime only, no SDK |
+| Full    | Yes |
+
+The step fails fast with a clear error if you pick an unsupported runtime.
+
+### Security notes
+
+- The minion's `ShellExecuteTool` runs inside the workspace directory with the container's permissions. It cannot access other executions' workspaces (isolation guaranteed by Container Apps Jobs).
+- The SECRET-KEY is injected only into the minion subprocess's environment; it is not written to disk.
+- Output in `{{steps.N.output}}` is truncated to 8000 characters. If you need full output, pipe it to a file in the workspace and upload via a subsequent step.

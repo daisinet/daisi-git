@@ -63,6 +63,36 @@ public class WorkflowStep
 
     // ── ImportFromUrl ──
     public string? ImportUrl { get; set; }
+
+    // ── RunMinion ──
+    /// <summary>Inline prompt. Mutually exclusive with <see cref="MinionInstructionsFile"/>.</summary>
+    public string? MinionInstructions { get; set; }
+
+    /// <summary>Workspace-relative path to a file whose contents become the prompt.</summary>
+    public string? MinionInstructionsFile { get; set; }
+
+    /// <summary>Workspace-relative subdir used as the minion's working directory. Default = workspace root.</summary>
+    public string? MinionWorkingDirectory { get; set; }
+
+    /// <summary>Daisinet model name. Empty/null falls back to the ORC's default text-gen model.</summary>
+    public string? MinionModel { get; set; }
+
+    public int? MinionContextSize { get; set; }
+    public int? MinionMaxTokens { get; set; }
+
+    /// <summary>Goal-mode iteration limit. Null = minion's default (20).</summary>
+    public int? MinionMaxIterations { get; set; }
+
+    public string? MinionRole { get; set; }
+    public string? MinionKvQuant { get; set; }
+    public bool? MinionJsonOutput { get; set; }
+    public bool? MinionGrammar { get; set; }
+
+    /// <summary>Subprocess timeout. Null = 1500 s default. Hard-capped at 1800 s by the engine.</summary>
+    public int? MinionTimeoutSeconds { get; set; }
+
+    /// <summary>Optional ORC address override (host:port). If unset, SDK defaults apply.</summary>
+    public string? MinionOrcAddress { get; set; }
 }
 
 /// <summary>

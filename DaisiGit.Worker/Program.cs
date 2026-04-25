@@ -39,6 +39,7 @@ builder.Services.AddScoped<IssueService>();
 builder.Services.AddScoped<CommentService>();
 builder.Services.AddScoped<MergeService>();
 builder.Services.AddScoped<ReviewService>();
+builder.Services.AddScoped<ImportService>();
 builder.Services.AddScoped(sp => new SecretService(
     sp.GetRequiredService<DaisiGitCosmo>(),
     builder.Configuration["Daisi:SecretKey"] ?? "default-secret-key"));

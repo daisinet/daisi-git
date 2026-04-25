@@ -107,6 +107,9 @@ public class WorkflowEngine(
                         case WorkflowStepType.ImportFromUrl:
                             await ExecuteImportFromUrl(step, stepResult, execution);
                             break;
+                        case WorkflowStepType.RunMinion:
+                            await ExecuteRunMinion(step, stepResult, execution);
+                            break;
                         case WorkflowStepType.Condition:
                             stepResult.Success = true;
                             break;
@@ -624,6 +627,229 @@ public class WorkflowEngine(
 
     private static string Truncate(string s, int max) =>
         s.Length <= max ? s : s[..max] + "\n... (truncated)";
+
+    // ── Run Minion ──
+    //
+    // Installs daisi-minion as a scoped .NET global tool into the workspace, then invokes it in
+    // `--cli --backend daisinet --goal <prompt>` mode. The daisinet backend auth flow is the
+    // caller's problem: we exchange the system-scope DAISIGIT_WORKERS_SECRET_KEY for a short-lived
+    // client key via the SDK (actually, we pass SECRET-KEY via env; minion does the exchange).
+
+    private const string MinionSystemSecretName = "DAISIGIT_WORKERS_SECRET_KEY";
+    private const string MinionFeedUrlEnvVar = "DAISIGIT_MINION_FEED_URL";
+    private const string MinionPackageId = "Daisi.Minion";
+
+    private async Task ExecuteRunMinion(WorkflowStep step, WorkflowStepResult result,
+        WorkflowExecution execution)
+    {
+        var workspace = EnsureWorkspace(execution);
+
+        // 1. Resolve working directory (guarded against escape).
+        var workDir = workspace;
+        if (!string.IsNullOrWhiteSpace(step.MinionWorkingDirectory))
+        {
+            var rel = step.MinionWorkingDirectory.Trim('/').Replace('/', Path.DirectorySeparatorChar);
+            var candidate = Path.GetFullPath(Path.Combine(workspace, rel));
+            var workspaceFull = Path.GetFullPath(workspace);
+            if (!candidate.StartsWith(workspaceFull, StringComparison.Ordinal))
+            {
+                result.Success = false;
+                result.Error = $"Working directory '{step.MinionWorkingDirectory}' escapes the workspace.";
+                return;
+            }
+            if (!Directory.Exists(candidate))
+            {
+                result.Success = false;
+                result.Error = $"Working directory '{step.MinionWorkingDirectory}' does not exist in the workspace.";
+                return;
+            }
+            workDir = candidate;
+        }
+
+        // 2. Resolve instructions (inline or file-in-workspace).
+        string instructions;
+        var hasInline = !string.IsNullOrEmpty(step.MinionInstructions);
+        var hasFile = !string.IsNullOrEmpty(step.MinionInstructionsFile);
+        if (hasInline == hasFile)
+        {
+            result.Success = false;
+            result.Error = "run-minion requires exactly one of `instructions` or `instructions-file`.";
+            return;
+        }
+        if (hasFile)
+        {
+            var rel = step.MinionInstructionsFile!.Trim('/').Replace('/', Path.DirectorySeparatorChar);
+            var full = Path.GetFullPath(Path.Combine(workspace, rel));
+            var workspaceFull = Path.GetFullPath(workspace);
+            if (!full.StartsWith(workspaceFull, StringComparison.Ordinal))
+            {
+                result.Success = false;
+                result.Error = $"Instructions file '{step.MinionInstructionsFile}' escapes the workspace.";
+                return;
+            }
+            if (!File.Exists(full))
+            {
+                result.Success = false;
+                result.Error = $"Instructions file not found in workspace: {step.MinionInstructionsFile}";
+                return;
+            }
+            instructions = await File.ReadAllTextAsync(full);
+        }
+        else
+        {
+            instructions = WorkflowMergeService.Render(step.MinionInstructions ?? "", execution.Context);
+        }
+        if (string.IsNullOrWhiteSpace(instructions))
+        {
+            result.Success = false;
+            result.Error = "Resolved instructions are empty.";
+            return;
+        }
+
+        // 3. Runtime prerequisite: need `dotnet` to install & run the minion tool.
+        var dotnetCheck = await RunCaptureAsync("dotnet", "--version", workDir, env: null, TimeSpan.FromSeconds(10));
+        if (dotnetCheck.ExitCode != 0)
+        {
+            result.Success = false;
+            result.Error = "run-minion requires a runtime with the .NET SDK. Use `runtime: dotnet` or `runtime: full` in your workflow.";
+            return;
+        }
+
+        // 4. System SECRET-KEY for ORC auth.
+        var secretKey = await secretService.ResolveSystemSecretAsync(MinionSystemSecretName);
+        if (string.IsNullOrEmpty(secretKey))
+        {
+            result.Success = false;
+            result.Error = $"System secret '{MinionSystemSecretName}' is not configured. A platform admin must register the DaisiGit Workers App on ORC and store its SECRET-KEY.";
+            return;
+        }
+
+        // 5. Install minion as a workspace-scoped tool (idempotent).
+        var toolPath = Path.Combine(workspace, ".tools");
+        var minionExe = OperatingSystem.IsWindows()
+            ? Path.Combine(toolPath, "daisi-minion.exe")
+            : Path.Combine(toolPath, "daisi-minion");
+
+        if (!File.Exists(minionExe))
+        {
+            var feedUrl = Environment.GetEnvironmentVariable(MinionFeedUrlEnvVar);
+            if (string.IsNullOrWhiteSpace(feedUrl))
+            {
+                result.Success = false;
+                result.Error = $"{MinionFeedUrlEnvVar} is not set. Configure the Daisi.Minion NuGet feed URL in the worker environment.";
+                return;
+            }
+
+            Directory.CreateDirectory(toolPath);
+            var installArgs = $"tool install --tool-path \"{toolPath}\" --add-source \"{feedUrl}\" {MinionPackageId}";
+            var install = await RunCaptureAsync("dotnet", installArgs, workspace, env: null, TimeSpan.FromMinutes(3));
+            if (install.ExitCode != 0)
+            {
+                result.Success = false;
+                result.Error = $"Failed to install {MinionPackageId}: exit {install.ExitCode}\n{Truncate(install.Output, 2000)}";
+                return;
+            }
+        }
+
+        // 6. Build args and child-process env.
+        var args = BuildMinionArgs(step, instructions);
+        var childEnv = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var (key, value) in execution.Context)
+        {
+            if (key.StartsWith("secrets."))
+                childEnv[key.Replace("secrets.", "SECRET_")] = value;
+            else if (key.StartsWith("env."))
+                childEnv[key.Replace("env.", "")] = value;
+        }
+        childEnv["DAISI_SECRET_KEY"] = secretKey;
+        if (!string.IsNullOrWhiteSpace(step.MinionOrcAddress))
+            childEnv["DAISI_ORC_ADDRESS"] = step.MinionOrcAddress;
+
+        // 7. Spawn minion and capture output.
+        var timeoutSeconds = step.MinionTimeoutSeconds ?? 1500;
+        if (timeoutSeconds > 1800) timeoutSeconds = 1800;
+        var run = await RunCaptureAsync(minionExe, args, workDir, childEnv, TimeSpan.FromSeconds(timeoutSeconds));
+
+        result.ExitCode = run.ExitCode;
+        result.ScriptOutput = Truncate(run.Output, 8000);
+        result.Success = run.TimedOut ? false : (run.ExitCode == 0);
+        if (run.TimedOut)
+            result.Error = $"Minion timed out after {timeoutSeconds}s.";
+        else if (!result.Success)
+            result.Error = $"Minion exited with code {run.ExitCode}.";
+    }
+
+    private static string BuildMinionArgs(WorkflowStep step, string instructions)
+    {
+        var sb = new StringBuilder();
+        sb.Append("--cli --backend daisinet");
+        if (!string.IsNullOrWhiteSpace(step.MinionModel))
+            sb.Append(' ').Append("--model ").Append(Quote(step.MinionModel));
+        if (step.MinionContextSize.HasValue)
+            sb.Append(' ').Append("--context ").Append(step.MinionContextSize.Value);
+        if (step.MinionMaxTokens.HasValue)
+            sb.Append(' ').Append("--max-tokens ").Append(step.MinionMaxTokens.Value);
+        if (step.MinionMaxIterations.HasValue)
+            sb.Append(' ').Append("--max-iterations ").Append(step.MinionMaxIterations.Value);
+        if (!string.IsNullOrWhiteSpace(step.MinionRole))
+            sb.Append(' ').Append("--role ").Append(Quote(step.MinionRole));
+        if (!string.IsNullOrWhiteSpace(step.MinionKvQuant))
+            sb.Append(' ').Append("--kv-quant ").Append(Quote(step.MinionKvQuant));
+        if (step.MinionJsonOutput == true) sb.Append(' ').Append("--json");
+        if (step.MinionGrammar == true) sb.Append(' ').Append("--grammar");
+        sb.Append(' ').Append("--goal ").Append(Quote(instructions));
+        return sb.ToString();
+    }
+
+    private static string Quote(string s)
+    {
+        // Escape embedded quotes; surround with quotes if the value contains whitespace or quote chars.
+        var escaped = s.Replace("\"", "\\\"");
+        return $"\"{escaped}\"";
+    }
+
+    private record ProcessResult(int ExitCode, string Output, bool TimedOut);
+
+    private static async Task<ProcessResult> RunCaptureAsync(string fileName, string arguments,
+        string workingDirectory, Dictionary<string, string>? env, TimeSpan timeout)
+    {
+        using var process = new Process();
+        process.StartInfo = new ProcessStartInfo
+        {
+            FileName = fileName,
+            Arguments = arguments,
+            WorkingDirectory = workingDirectory,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+        if (env != null)
+        {
+            foreach (var (k, v) in env)
+                process.StartInfo.Environment[k] = v;
+        }
+
+        var output = new StringBuilder();
+        process.OutputDataReceived += (_, e) => { if (e.Data != null) output.AppendLine(e.Data); };
+        process.ErrorDataReceived += (_, e) => { if (e.Data != null) output.AppendLine(e.Data); };
+
+        process.Start();
+        process.BeginOutputReadLine();
+        process.BeginErrorReadLine();
+
+        using var cts = new CancellationTokenSource(timeout);
+        try
+        {
+            await process.WaitForExitAsync(cts.Token);
+            return new ProcessResult(process.ExitCode, output.ToString(), TimedOut: false);
+        }
+        catch (OperationCanceledException)
+        {
+            try { process.Kill(entireProcessTree: true); } catch { }
+            return new ProcessResult(-1, output.ToString(), TimedOut: true);
+        }
+    }
 
     // ── Send Email ──
 

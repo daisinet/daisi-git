@@ -162,6 +162,7 @@ public static class WorkflowYamlParser
         WorkflowStepType.RunScript => "run",
         WorkflowStepType.SendEmail => "send-email",
         WorkflowStepType.Condition => "condition",
+        WorkflowStepType.RunMinion => "run-minion",
         _ => type.ToString().ToLowerInvariant()
     };
 
@@ -213,6 +214,21 @@ public static class WorkflowYamlParser
                 if (!string.IsNullOrEmpty(step.EmailTo)) with["to"] = step.EmailTo;
                 if (!string.IsNullOrEmpty(step.EmailSubject)) with["subject"] = step.EmailSubject;
                 if (!string.IsNullOrEmpty(step.EmailBody)) with["body"] = step.EmailBody;
+                break;
+            case WorkflowStepType.RunMinion:
+                if (!string.IsNullOrEmpty(step.MinionInstructions)) with["instructions"] = step.MinionInstructions;
+                if (!string.IsNullOrEmpty(step.MinionInstructionsFile)) with["instructions-file"] = step.MinionInstructionsFile;
+                if (!string.IsNullOrEmpty(step.MinionWorkingDirectory)) with["working-directory"] = step.MinionWorkingDirectory;
+                if (!string.IsNullOrEmpty(step.MinionModel)) with["model"] = step.MinionModel;
+                if (step.MinionContextSize.HasValue) with["context"] = step.MinionContextSize.Value.ToString();
+                if (step.MinionMaxTokens.HasValue) with["max-tokens"] = step.MinionMaxTokens.Value.ToString();
+                if (step.MinionMaxIterations.HasValue) with["max-iterations"] = step.MinionMaxIterations.Value.ToString();
+                if (!string.IsNullOrEmpty(step.MinionRole)) with["role"] = step.MinionRole;
+                if (!string.IsNullOrEmpty(step.MinionKvQuant)) with["kv-quant"] = step.MinionKvQuant;
+                if (step.MinionJsonOutput == true) with["json"] = "true";
+                if (step.MinionGrammar == true) with["grammar"] = "true";
+                if (step.MinionTimeoutSeconds.HasValue) with["timeout"] = step.MinionTimeoutSeconds.Value.ToString();
+                if (!string.IsNullOrEmpty(step.MinionOrcAddress)) with["orc-address"] = step.MinionOrcAddress;
                 break;
         }
         return with;
@@ -384,6 +400,30 @@ public static class WorkflowYamlParser
                 step.EmailSubject = with.GetValueOrDefault("subject");
                 step.EmailBody = with.GetValueOrDefault("body");
                 break;
+            case WorkflowStepType.RunMinion:
+                step.MinionInstructions = with.GetValueOrDefault("instructions");
+                step.MinionInstructionsFile = with.GetValueOrDefault("instructions-file");
+                step.MinionWorkingDirectory = with.GetValueOrDefault("working-directory");
+                step.MinionModel = with.GetValueOrDefault("model");
+                if (int.TryParse(with.GetValueOrDefault("context"), out var mctx)) step.MinionContextSize = mctx;
+                if (int.TryParse(with.GetValueOrDefault("max-tokens"), out var mmt)) step.MinionMaxTokens = mmt;
+                if (int.TryParse(with.GetValueOrDefault("max-iterations"), out var mmi)) step.MinionMaxIterations = mmi;
+                step.MinionRole = with.GetValueOrDefault("role");
+                step.MinionKvQuant = with.GetValueOrDefault("kv-quant");
+                if (bool.TryParse(with.GetValueOrDefault("json"), out var mjson)) step.MinionJsonOutput = mjson;
+                if (bool.TryParse(with.GetValueOrDefault("grammar"), out var mgram)) step.MinionGrammar = mgram;
+                if (int.TryParse(with.GetValueOrDefault("timeout"), out var mto)) step.MinionTimeoutSeconds = mto;
+                step.MinionOrcAddress = with.GetValueOrDefault("orc-address");
+
+                var hasInline = !string.IsNullOrEmpty(step.MinionInstructions);
+                var hasFile = !string.IsNullOrEmpty(step.MinionInstructionsFile);
+                if (hasInline && hasFile)
+                    throw new InvalidOperationException(
+                        "run-minion: set either `instructions` or `instructions-file`, not both.");
+                if (!hasInline && !hasFile)
+                    throw new InvalidOperationException(
+                        "run-minion: one of `instructions` or `instructions-file` is required.");
+                break;
         }
 
         // Simple condition from `if:`
@@ -409,6 +449,7 @@ public static class WorkflowYamlParser
         "checkout" or "clone" => WorkflowStepType.Checkout,
         "run" or "script" or "run-script" or "shell" => WorkflowStepType.RunScript,
         "send-email" or "email" => WorkflowStepType.SendEmail,
+        "run-minion" or "minion" => WorkflowStepType.RunMinion,
         _ => null
     };
 

@@ -55,17 +55,27 @@ public class WorkflowTriggerService(DaisiGitCosmo cosmo)
 
         foreach (var (key, value) in filters)
         {
-            // Filter key maps to context key (e.g. "branch" → "push.branch")
-            var contextKey = key switch
+            // A filter key maps to one or more context keys. For "branch", we check the push
+            // branch (push events) AND the PR target branch (pr-* events) so the same
+            // "branch: main" filter works for both trigger families.
+            var contextKeys = key switch
             {
-                "branch" => "push.branch",
-                "tag" => "push.tag",
-                "label" => "issue.label",
-                _ => key
+                "branch" => new[] { "push.branch", "pr.targetBranch", "branch.name" },
+                "tag" => new[] { "push.tag" },
+                "label" => new[] { "issue.label" },
+                _ => new[] { key }
             };
 
-            if (!context.TryGetValue(contextKey, out var contextValue))
-                return false;
+            string? contextValue = null;
+            foreach (var ck in contextKeys)
+            {
+                if (context.TryGetValue(ck, out var v) && !string.IsNullOrEmpty(v))
+                {
+                    contextValue = v;
+                    break;
+                }
+            }
+            if (contextValue == null) return false;
 
             // Support comma-separated values (e.g. "main,dev")
             var allowedValues = value.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);

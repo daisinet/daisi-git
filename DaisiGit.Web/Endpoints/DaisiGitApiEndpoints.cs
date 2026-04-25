@@ -672,6 +672,22 @@ public static class DaisiGitApiEndpoints
                     ["pr.mergeCommitSha"] = result.MergeCommitSha ?? "",
                     ["pr.mergeStrategy"] = strategy.ToString()
                 });
+
+            // A merge writes a new commit to the target branch, so it's also a push event
+            // for that branch — fire PushToRef so push-triggered workflows run.
+            await events.EmitAsync(repo.AccountId, repo.id, GitTriggerType.PushToRef,
+                GetUserId(ctx), userName, new Dictionary<string, string>
+                {
+                    ["push.ref"] = $"refs/heads/{pr.TargetBranch}",
+                    ["push.branch"] = pr.TargetBranch,
+                    ["push.tag"] = "",
+                    ["push.oldSha"] = "", // unknown without a separate query; merge doesn't track previous tip
+                    ["push.newSha"] = result.MergeCommitSha ?? "",
+                    ["push.isCreate"] = "False",
+                    ["push.isDelete"] = "False",
+                    ["push.source"] = "merge",
+                    ["pr.number"] = pr.Number.ToString()
+                });
         }
 
         return result.Success

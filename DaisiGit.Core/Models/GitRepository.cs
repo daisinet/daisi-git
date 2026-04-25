@@ -38,6 +38,16 @@ public class GitRepository
     public int StarCount { get; set; }
     public int ForkCount { get; set; }
 
+    /// <summary>
+    /// Pre-computed commit counts per UTC date ("yyyy-MM-dd"). Maintained incrementally on
+    /// push/merge so the org activity view doesn't have to walk full commit history on every
+    /// load. Empty for legacy repos until backfilled on demand.
+    /// </summary>
+    public Dictionary<string, int> CommitCountsByDate { get; set; } = new();
+
+    /// <summary>UTC date the rollup was last reconciled (used to detect needs-backfill).</summary>
+    public DateTime? CommitRollupBackfilledUtc { get; set; }
+
     /// <summary>Per-repo override for the account's auto-merge default. Null = inherit.</summary>
     public bool? AutoMergeEnabled { get; set; }
 

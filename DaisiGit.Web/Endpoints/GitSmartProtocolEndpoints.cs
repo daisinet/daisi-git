@@ -216,7 +216,8 @@ public static class GitSmartProtocolEndpoints
         GitRefService refService,
         GitObjectStore objectStore,
         PermissionService permissionService,
-        GitEventService events)
+        GitEventService events,
+        RepoActivityRollupService rollupService)
     {
         var repository = await repoService.GetRepositoryBySlugAsync(owner, repo);
         if (repository == null)
@@ -335,6 +336,14 @@ public static class GitSmartProtocolEndpoints
 
             await events.EmitAsync(repository.AccountId, repository.id, eventType,
                 userId, userName, payload);
+
+            // Bump the per-day commit rollup. Only for branch updates (not tags/deletes);
+            // we want the count to reflect commits landing on a branch.
+            if (isBranch && !isDelete && eventType != GitTriggerType.BranchDeleted)
+            {
+                try { await rollupService.ApplyPushAsync(repository, oldSha, newSha); }
+                catch { /* rollup failure should never break a push */ }
+            }
         }
 
         // Send report-status as plain pkt-lines (not sideband)

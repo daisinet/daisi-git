@@ -4,22 +4,17 @@ using DaisiGit.Core.Models;
 namespace DaisiGit.Services;
 
 /// <summary>
-/// Computes a per-repo, per-time-bucket commit-count matrix for an organization,
-/// modeled after GitHub's contributions graph but with repos on rows and dates on
-/// columns. Honors visibility/permission checks for the viewer.
+/// Computes the per-repo, per-time-bucket commit-count matrix for an organization.
+/// Reads pre-aggregated counts from <see cref="GitRepository.CommitCountsByDate"/>, which
+/// is maintained incrementally by <see cref="RepoActivityRollupService"/>. On the first
+/// load for a repo with no rollup yet, it falls back to a one-time backfill.
 /// </summary>
 public class OrgActivityService(
     OrganizationService orgService,
     RepositoryService repoService,
-    BrowseService browseService,
-    PermissionService permissionService)
+    PermissionService permissionService,
+    RepoActivityRollupService rollupService)
 {
-    /// <summary>Maximum commits walked per repo when building the matrix (safety cap).</summary>
-    private const int MaxCommitsPerRepo = 1000;
-
-    /// <summary>Maximum commits returned in the per-repo commits list (UI rendering cap).</summary>
-    private const int MaxCommitsReturnedPerRepo = 300;
-
     public async Task<OrgActivity?> GetActivityAsync(
         string orgSlug, int days, ActivityGranularity granularity,
         bool includePrivate, string? viewerUserId)
@@ -29,7 +24,6 @@ public class OrgActivityService(
 
         var allRepos = await repoService.GetRepositoriesByOwnerAsync(orgSlug);
 
-        // Apply visibility / permission filter.
         var visibleRepos = new List<GitRepository>();
         foreach (var r in allRepos)
         {
@@ -48,10 +42,19 @@ public class OrgActivityService(
         var repoRows = new List<RepoActivity>();
         foreach (var repo in visibleRepos)
         {
-            var row = await BuildRepoRowAsync(repo, buckets, rangeStart);
+            // Backfill once for legacy repos that haven't been hit by an incremental update yet.
+            if (repo.CommitRollupBackfilledUtc == null)
+            {
+                try { await rollupService.BackfillAsync(repo); }
+                catch { /* keep going with whatever rollup we have */ }
+            }
+
+            var counts = BucketCounts(repo.CommitCountsByDate, buckets);
             // Skip repos with zero activity in the window so the grid stays focused.
-            if (row.Counts.Sum() > 0)
-                repoRows.Add(row);
+            if (counts.Sum() == 0) continue;
+
+            repoRows.Add(new RepoActivity(
+                repo.id, repo.OwnerName, repo.Slug, repo.Name, repo.Visibility, counts));
         }
 
         repoRows = repoRows
@@ -61,50 +64,27 @@ public class OrgActivityService(
         return new OrgActivity(buckets, repoRows);
     }
 
-    private async Task<RepoActivity> BuildRepoRowAsync(
-        GitRepository repo, List<ActivityBucket> buckets, DateTime rangeStart)
+    private static int[] BucketCounts(Dictionary<string, int>? rollup, List<ActivityBucket> buckets)
     {
-        var counts = new int[buckets.Count];
-        var commits = new List<RepoActivityCommit>();
+        var result = new int[buckets.Count];
+        if (rollup == null || rollup.Count == 0) return result;
 
-        var headSha = await browseService.ResolveRefAsync(repo.id, repo.DefaultBranch);
-        if (headSha == null)
-            return new RepoActivity(repo.id, repo.OwnerName, repo.Slug, repo.Name, repo.Visibility, counts, commits);
-
-        var log = await browseService.GetCommitLogAsync(repo.id, headSha, MaxCommitsPerRepo);
-
-        foreach (var commit in log)
+        // For day granularity the rollup keys map directly. For week/month, sum the daily
+        // keys that fall inside each bucket. The rollup is small enough to walk per call.
+        foreach (var (key, count) in rollup)
         {
-            var commitDate = commit.AuthorDate.UtcDateTime;
-            if (commitDate < rangeStart) continue;
-
-            var bucketIdx = FindBucket(buckets, commitDate);
-            if (bucketIdx < 0) continue;
-            counts[bucketIdx]++;
-
-            if (commits.Count < MaxCommitsReturnedPerRepo)
+            if (!DateTime.TryParse(key, out var date)) continue;
+            date = DateTime.SpecifyKind(date, DateTimeKind.Utc);
+            for (var i = 0; i < buckets.Count; i++)
             {
-                commits.Add(new RepoActivityCommit(
-                    commit.Sha, commit.ShortSha,
-                    commit.MessageFirstLine,
-                    commit.AuthorName,
-                    commit.AuthorDate.UtcDateTime,
-                    bucketIdx));
+                if (date >= buckets[i].StartUtc && date < buckets[i].EndUtc)
+                {
+                    result[i] += count;
+                    break;
+                }
             }
         }
-
-        return new RepoActivity(repo.id, repo.OwnerName, repo.Slug, repo.Name, repo.Visibility, counts, commits);
-    }
-
-    private static int FindBucket(List<ActivityBucket> buckets, DateTime when)
-    {
-        // Binary search would be nicer; buckets are small (<= ~365) so linear is fine.
-        for (var i = 0; i < buckets.Count; i++)
-        {
-            if (when >= buckets[i].StartUtc && when < buckets[i].EndUtc)
-                return i;
-        }
-        return -1;
+        return result;
     }
 
     private static (List<ActivityBucket>, DateTime rangeStart) BuildBuckets(int days, ActivityGranularity granularity)
@@ -127,9 +107,8 @@ public class OrgActivityService(
         }
         else if (granularity == ActivityGranularity.Week)
         {
-            // ISO week: start on Monday
             var cursor = rangeStart;
-            var dow = (int)cursor.DayOfWeek; // Sunday = 0
+            var dow = (int)cursor.DayOfWeek;
             var deltaToMonday = dow == 0 ? -6 : 1 - dow;
             cursor = cursor.AddDays(deltaToMonday);
             while (cursor < endExclusive)
@@ -168,13 +147,4 @@ public record RepoActivity(
     string Slug,
     string Name,
     GitRepoVisibility Visibility,
-    int[] Counts,
-    List<RepoActivityCommit> Commits);
-
-public record RepoActivityCommit(
-    string Sha,
-    string ShortSha,
-    string MessageFirstLine,
-    string AuthorName,
-    DateTime AuthorDateUtc,
-    int BucketIndex);
+    int[] Counts);

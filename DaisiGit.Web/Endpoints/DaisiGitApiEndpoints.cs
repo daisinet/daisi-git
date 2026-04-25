@@ -101,6 +101,8 @@ public static class DaisiGitApiEndpoints
 
         pub.MapGet("/repos/{owner}/{slug}", GetRepository);
         pub.MapGet("/orgs/{slug}/groups", ListRepoGroups);
+        pub.MapGet("/repos/{owner}/{slug}/pulls/{number:int}/checks", ListPullRequestChecks);
+        pub.MapGet("/repos/{owner}/{slug}/commit/{sha}/checks", ListCommitChecks);
         pub.MapGet("/orgs/{slug}/activity", GetOrgActivity);
         pub.MapGet("/repos/{owner}/{slug}/commits-in-range", GetCommitsInRange);
         pub.MapGet("/repos/{owner}/{slug}/branches", ListBranches);
@@ -1116,6 +1118,28 @@ public static class DaisiGitApiEndpoints
         repo!.GroupId = string.IsNullOrEmpty(req.GroupId) ? null : req.GroupId;
         await repoService.UpdateRepositoryAsync(repo);
         return Results.Ok(new { repo.GroupId });
+    }
+
+    // ── Check runs ──
+
+    private static async Task<IResult> ListPullRequestChecks(
+        HttpContext ctx, string owner, string slug, int number,
+        RepositoryService repoService, PermissionService permissionService,
+        DaisiGit.Data.DaisiGitCosmo cosmo)
+    {
+        var (repo, error) = await RequireRead(ctx, owner, slug, repoService, permissionService);
+        if (error != null) return error;
+        return Results.Ok(await cosmo.GetCheckRunsByPullRequestAsync(repo!.id, number));
+    }
+
+    private static async Task<IResult> ListCommitChecks(
+        HttpContext ctx, string owner, string slug, string sha,
+        RepositoryService repoService, PermissionService permissionService,
+        DaisiGit.Data.DaisiGitCosmo cosmo)
+    {
+        var (repo, error) = await RequireRead(ctx, owner, slug, repoService, permissionService);
+        if (error != null) return error;
+        return Results.Ok(await cosmo.GetCheckRunsByShaAsync(repo!.id, sha));
     }
 
     // ── Vars ──

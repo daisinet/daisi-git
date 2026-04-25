@@ -32,6 +32,11 @@ public class WorkflowEngine(
     public async Task ProcessExecutionAsync(WorkflowExecution execution, List<WorkflowStep> steps,
         Dictionary<string, string>? env = null)
     {
+        // Publish a queued/in_progress check on the relevant commit if this run was
+        // triggered by something we can attach to (a PR or a push). Best-effort —
+        // failures don't affect execution.
+        var checkRun = await StartCheckRunAsync(execution);
+
         try
         {
             // Inject secrets into context (org secrets inherited, repo overrides)
@@ -75,6 +80,20 @@ public class WorkflowEngine(
                     StepType = step.StepType,
                     ExecutedUtc = DateTime.UtcNow
                 };
+
+                // Overlay matrix values for this cell (fanned-out cells were given concrete
+                // MatrixValues in FlattenSteps). Tracked in matrixKeys so we can clean up
+                // after the step finishes — matrix vars never leak to subsequent steps.
+                var matrixKeys = new List<string>();
+                if (step.MatrixValues is { Count: > 0 })
+                {
+                    foreach (var (mk, mv) in step.MatrixValues)
+                    {
+                        var contextKey = $"matrix.{mk}";
+                        execution.Context[contextKey] = mv;
+                        matrixKeys.Add(contextKey);
+                    }
+                }
 
                 try
                 {
@@ -159,6 +178,7 @@ public class WorkflowEngine(
                 execution.StepResults.Add(stepResult);
                 InjectStepOutputs(execution.Context, step, stepResult);
                 execution.CurrentStepIndex++;
+                foreach (var k in matrixKeys) execution.Context.Remove(k);
 
                 // Persist after each step so the UI sees live progress instead of waiting
                 // for the whole workflow to terminate.
@@ -189,8 +209,55 @@ public class WorkflowEngine(
         }
         finally
         {
+            await FinishCheckRunAsync(checkRun, execution);
             CleanupWorkspace(execution);
         }
+    }
+
+    private async Task<CheckRun?> StartCheckRunAsync(WorkflowExecution execution)
+    {
+        try
+        {
+            var prNumber = execution.Context.GetValueOrDefault("pr.number");
+            var headSha = execution.Context.GetValueOrDefault("pr.headSha")
+                ?? execution.Context.GetValueOrDefault("push.newSha")
+                ?? execution.Context.GetValueOrDefault("push.commit", "");
+            // Only publish a check when there's something to attach to.
+            if (string.IsNullOrEmpty(headSha) && string.IsNullOrEmpty(prNumber)) return null;
+
+            var check = new CheckRun
+            {
+                RepositoryId = execution.RepositoryId,
+                HeadSha = headSha,
+                PullRequestNumber = int.TryParse(prNumber, out var n) ? n : 0,
+                Name = string.IsNullOrEmpty(execution.WorkflowName) ? "Workflow" : execution.WorkflowName,
+                Status = "in_progress",
+                ExecutionId = execution.id,
+                WorkflowId = execution.WorkflowId,
+                StartedUtc = DateTime.UtcNow
+            };
+            return await cosmo.UpsertCheckRunAsync(check);
+        }
+        catch { return null; }
+    }
+
+    private async Task FinishCheckRunAsync(CheckRun? check, WorkflowExecution execution)
+    {
+        if (check == null) return;
+        try
+        {
+            check.Status = "completed";
+            check.Conclusion = execution.Status switch
+            {
+                "Completed" => "success",
+                "Cancelled" => "cancelled",
+                _           => "failure"
+            };
+            check.Summary = execution.Error;
+            check.CompletedUtc = DateTime.UtcNow;
+            await cosmo.UpsertCheckRunAsync(check);
+        }
+        catch { }
     }
 
     /// <summary>
@@ -1428,12 +1495,83 @@ public class WorkflowEngine(
                     }
                 }
             }
+            else if (step.Matrix is { Count: > 0 })
+            {
+                // Fan out the cartesian product of every dimension. Each cell becomes its
+                // own copy of the step with MatrixValues populated; the engine main loop
+                // overlays those into the context as matrix.<key> for the duration of the
+                // cell's run.
+                var dims = step.Matrix.Where(kv => kv.Value is { Count: > 0 }).ToList();
+                if (dims.Count == 0) { flat.Add(step); continue; }
+
+                IEnumerable<Dictionary<string, string>> seed = new[] { new Dictionary<string, string>() };
+                foreach (var (dimName, dimValues) in dims)
+                {
+                    seed = seed.SelectMany(prefix =>
+                        dimValues.Select(v =>
+                        {
+                            var next = new Dictionary<string, string>(prefix) { [dimName] = v };
+                            return next;
+                        }));
+                }
+
+                foreach (var values in seed)
+                {
+                    var clone = ClonePlainStep(step);
+                    clone.Matrix = null; // already expanded
+                    clone.MatrixValues = values;
+                    var suffix = string.Join(", ", values.Select(kv => $"{kv.Key}={kv.Value}"));
+                    if (!string.IsNullOrEmpty(step.Name))
+                        clone.Name = $"{step.Name} ({suffix})";
+                    flat.Add(clone);
+                }
+            }
             else
             {
                 flat.Add(step);
             }
         }
         return flat;
+    }
+
+    /// <summary>
+    /// Shallow copy of a step intentionally leaving Matrix/Branches behind. Used for matrix
+    /// fanout where each cell becomes its own concrete step.
+    /// </summary>
+    private static WorkflowStep ClonePlainStep(WorkflowStep src)
+    {
+        return new WorkflowStep
+        {
+            Order = src.Order,
+            Name = src.Name,
+            StepType = src.StepType,
+            HttpUrl = src.HttpUrl, HttpMethod = src.HttpMethod, HttpBody = src.HttpBody,
+            HttpContentType = src.HttpContentType, HttpHeaders = src.HttpHeaders,
+            LabelName = src.LabelName,
+            CommentBody = src.CommentBody,
+            RequiredApprovals = src.RequiredApprovals,
+            WaitDays = src.WaitDays, WaitHours = src.WaitHours, WaitMinutes = src.WaitMinutes,
+            ConditionExpression = src.ConditionExpression,
+            AzureAppName = src.AzureAppName, AzureWorkDir = src.AzureWorkDir,
+            AzureDeployPath = src.AzureDeployPath, AzureUsernameSecret = src.AzureUsernameSecret,
+            AzurePasswordSecret = src.AzurePasswordSecret, AzureScmHost = src.AzureScmHost,
+            CheckoutRepo = src.CheckoutRepo, CheckoutBranch = src.CheckoutBranch, CheckoutPath = src.CheckoutPath,
+            ScriptCommand = src.ScriptCommand, ScriptWorkDir = src.ScriptWorkDir, ScriptTimeoutSeconds = src.ScriptTimeoutSeconds,
+            EmailTo = src.EmailTo, EmailSubject = src.EmailSubject, EmailBody = src.EmailBody,
+            ImportUrl = src.ImportUrl,
+            MinionInstructions = src.MinionInstructions, MinionInstructionsFile = src.MinionInstructionsFile,
+            MinionWorkingDirectory = src.MinionWorkingDirectory, MinionModel = src.MinionModel,
+            MinionContextSize = src.MinionContextSize, MinionMaxTokens = src.MinionMaxTokens,
+            MinionMaxIterations = src.MinionMaxIterations, MinionRole = src.MinionRole,
+            MinionKvQuant = src.MinionKvQuant, MinionJsonOutput = src.MinionJsonOutput,
+            MinionGrammar = src.MinionGrammar, MinionTimeoutSeconds = src.MinionTimeoutSeconds,
+            MinionOrcAddress = src.MinionOrcAddress,
+            AcrRegistry = src.AcrRegistry, AcrImage = src.AcrImage, AcrDockerfile = src.AcrDockerfile,
+            AcrContext = src.AcrContext, AcrBuildArgs = src.AcrBuildArgs,
+            NugetPackagePath = src.NugetPackagePath, NugetSource = src.NugetSource,
+            NugetApiKeySecret = src.NugetApiKeySecret, NugetSkipDuplicate = src.NugetSkipDuplicate,
+            DispatchRepo = src.DispatchRepo, DispatchWorkflow = src.DispatchWorkflow, DispatchInputs = src.DispatchInputs
+        };
     }
 
     /// <summary>

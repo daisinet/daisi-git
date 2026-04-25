@@ -132,6 +132,14 @@ public static class WorkflowYamlParser
 
             rawStep["uses"] = MapStepTypeToUses(step.StepType);
 
+            if (step.Matrix is { Count: > 0 })
+            {
+                rawStep["strategy"] = new Dictionary<string, object?>
+                {
+                    ["matrix"] = step.Matrix.ToDictionary(kv => kv.Key, kv => (object)kv.Value)
+                };
+            }
+
             var with = BuildStepWith(step);
             if (with.Count > 0)
                 rawStep["with"] = with;
@@ -526,6 +534,29 @@ public static class WorkflowYamlParser
             step.ConditionExpression = raw.If;
         }
 
+        // strategy.matrix → step.Matrix (each entry is a dimension and its value list).
+        if (raw.Strategy?.Matrix is { Count: > 0 } matrixMap)
+        {
+            var dims = new Dictionary<string, List<string>>();
+            foreach (var (k, v) in matrixMap)
+            {
+                var key = k?.ToString();
+                if (string.IsNullOrEmpty(key)) continue;
+                var values = new List<string>();
+                if (v is List<object> list)
+                {
+                    foreach (var item in list)
+                        if (item != null) values.Add(item.ToString() ?? "");
+                }
+                else if (v != null)
+                {
+                    values.Add(v.ToString() ?? "");
+                }
+                if (values.Count > 0) dims[key] = values;
+            }
+            if (dims.Count > 0) step.Matrix = dims;
+        }
+
         return step;
     }
 
@@ -585,6 +616,12 @@ public static class WorkflowYamlParser
         public string? Uses { get; set; }
         public string? If { get; set; }
         public Dictionary<string, string>? With { get; set; }
+        public RawStrategy? Strategy { get; set; }
+    }
+
+    private class RawStrategy
+    {
+        public Dictionary<object, object>? Matrix { get; set; }
     }
 }
 

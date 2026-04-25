@@ -54,6 +54,22 @@ resource queueService 'Microsoft.Storage/storageAccounts/queueServices@2023-05-0
   name: 'default'
 }
 
+// File share for cross-execution build caches (NuGet, npm, pip, etc.). Mounted into
+// every per-runtime job at the standard cache locations so successive runs reuse
+// already-downloaded packages.
+resource fileService 'Microsoft.Storage/storageAccounts/fileServices@2023-05-01' = {
+  parent: storageAccount
+  name: 'default'
+}
+
+resource buildCacheShare 'Microsoft.Storage/storageAccounts/fileServices/shares@2023-05-01' = {
+  parent: fileService
+  name: 'build-cache'
+  properties: {
+    shareQuota: 50  // 50 GiB cap; raise if your monorepo restores grow large.
+  }
+}
+
 // One queue per runtime: workflow-executions-<runtime>.
 resource runtimeQueues 'Microsoft.Storage/storageAccounts/queueServices/queues@2023-05-01' = [for runtime in runtimes: {
   parent: queueService
@@ -90,6 +106,20 @@ resource containerAppsEnv 'Microsoft.App/managedEnvironments@2024-03-01' = {
         customerId: logAnalytics.properties.customerId
         sharedKey: logAnalytics.listKeys().primarySharedKey
       }
+    }
+  }
+}
+
+// Register the build-cache share with the environment so per-job volumes can mount it.
+resource buildCacheStorage 'Microsoft.App/managedEnvironments/storages@2024-03-01' = {
+  parent: containerAppsEnv
+  name: 'build-cache'
+  properties: {
+    azureFile: {
+      accountName: storageAccount.name
+      accountKey: storageAccount.listKeys().keys[0].value
+      shareName: buildCacheShare.name
+      accessMode: 'ReadWrite'
     }
   }
 }
@@ -174,7 +204,21 @@ resource workerJobs 'Microsoft.App/jobs@2024-03-01' = [for runtime in runtimes: 
             { name: 'WorkflowQueue__Runtime',           value: runtime }
             { name: 'Daisi__SecretKey',                 secretRef: 'daisi-secret-key' }
             { name: 'AzureBlob__ConnectionString',      secretRef: 'azure-blob-connection' }
+            // Point the popular package managers at our shared cache.
+            { name: 'NUGET_PACKAGES',                   value: '/cache/nuget' }
+            { name: 'NPM_CONFIG_CACHE',                 value: '/cache/npm' }
+            { name: 'PIP_CACHE_DIR',                    value: '/cache/pip' }
           ]
+          volumeMounts: [
+            { volumeName: 'build-cache', mountPath: '/cache' }
+          ]
+        }
+      ]
+      volumes: [
+        {
+          name: 'build-cache'
+          storageType: 'AzureFile'
+          storageName: 'build-cache'
         }
       ]
     }

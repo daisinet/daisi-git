@@ -273,7 +273,17 @@
                         {
                             <div class="alert alert-danger small mt-3 mb-0">@importError</div>
                         }
-                        <button class="btn btn-primary mt-3" @onclick="StartImport" disabled="@startingImport">
+                        @{
+                            var hasActive = importJob != null && !importJob.IsComplete;
+                        }
+                        @if (hasActive)
+                        {
+                            <div class="alert alert-info small mt-3 mb-0">
+                                An import is already running for this org from <strong>@importJob!.GithubOrg</strong>.
+                                Watch its progress below; you can start another once it finishes.
+                            </div>
+                        }
+                        <button class="btn btn-primary mt-3" @onclick="StartImport" disabled="@(startingImport || hasActive)">
                             @if (startingImport) { <span class="spinner-border spinner-border-sm me-1"></span> }
                             <i class="fa-brands fa-github me-1"></i> Start Import
                         </button>
@@ -468,6 +478,16 @@ else if (!loading)
                 await LoadOrgSecrets();
                 await LoadGroups();
                 orgVars = new(org.Vars ?? new());
+
+                // Pick up an in-flight (or recently-finished) bulk-import job so the page
+                // doesn't lose progress on navigation. Polling kicks back in if it's still
+                // running.
+                var existingJob = GitHubImporter.GetMostRecentJobFor(org.id);
+                if (existingJob != null)
+                {
+                    importJob = existingJob;
+                    if (!existingJob.IsComplete) StartPollingImport();
+                }
             }
         }
         catch { }

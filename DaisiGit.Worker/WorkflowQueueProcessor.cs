@@ -105,10 +105,13 @@ public class WorkflowQueueProcessor(
             return;
         }
 
-        // Mark as running (in case it was "Dispatched")
-        if (execution.Status == "Dispatched")
+        // Mark as running (in case it was "Dispatched"). Clear NextRunAt so the Web's
+        // poll loop (which selects Running with NextRunAt <= now) does not re-dispatch
+        // an execution we are actively processing.
+        if (execution.Status == "Dispatched" || execution.NextRunAt != null)
         {
             execution.Status = "Running";
+            execution.NextRunAt = null;
             await cosmo.UpdateWorkflowExecutionAsync(execution);
         }
 

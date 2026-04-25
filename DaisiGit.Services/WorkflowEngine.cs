@@ -1052,8 +1052,12 @@ public class WorkflowEngine(
             zipStream.Position = 0;
         }
 
-        // Deploy via Kudu ZipDeploy API
-        var kuduUrl = $"https://{appName}.scm.azurewebsites.net/api/zipdeploy";
+        // Deploy via Kudu ZipDeploy API. Azure now assigns region-hashed hostnames
+        // (e.g. {app}-{hash}.scm.{region}.azurewebsites.net), so allow scm-host override.
+        var scmHost = !string.IsNullOrWhiteSpace(step.AzureScmHost)
+            ? WorkflowMergeService.Render(step.AzureScmHost, execution.Context).Trim()
+            : $"{appName}.scm.azurewebsites.net";
+        var kuduUrl = $"https://{scmHost}/api/zipdeploy";
         var client = httpClientFactory.CreateClient("WorkflowHttp");
         client.Timeout = TimeSpan.FromMinutes(5);
 

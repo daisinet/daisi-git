@@ -199,6 +199,7 @@ public static class WorkflowYamlParser
                 if (!string.IsNullOrEmpty(step.AzureDeployPath)) with["path"] = step.AzureDeployPath;
                 if (!string.IsNullOrEmpty(step.AzureUsernameSecret)) with["username-secret"] = step.AzureUsernameSecret;
                 if (!string.IsNullOrEmpty(step.AzurePasswordSecret)) with["password-secret"] = step.AzurePasswordSecret;
+                if (!string.IsNullOrEmpty(step.AzureScmHost)) with["scm-host"] = step.AzureScmHost;
                 break;
             case WorkflowStepType.Checkout:
                 if (!string.IsNullOrEmpty(step.CheckoutRepo)) with["repo"] = step.CheckoutRepo;
@@ -380,9 +381,11 @@ public static class WorkflowYamlParser
                 break;
             case WorkflowStepType.DeployAzureWebApp:
                 step.AzureAppName = with.GetValueOrDefault("app-name");
+                step.AzureWorkDir = with.GetValueOrDefault("working-directory");
                 step.AzureDeployPath = with.GetValueOrDefault("path");
                 step.AzureUsernameSecret = with.GetValueOrDefault("username-secret");
                 step.AzurePasswordSecret = with.GetValueOrDefault("password-secret");
+                step.AzureScmHost = with.GetValueOrDefault("scm-host");
                 break;
             case WorkflowStepType.Checkout:
                 step.CheckoutRepo = with.GetValueOrDefault("repo");

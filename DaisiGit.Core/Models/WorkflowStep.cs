@@ -45,6 +45,12 @@ public class WorkflowStep
     public string? AzureDeployPath { get; set; }
     public string? AzureUsernameSecret { get; set; }
     public string? AzurePasswordSecret { get; set; }
+    /// <summary>
+    /// Optional override for the Kudu/SCM host (without scheme). Use when Azure has
+    /// assigned a region-hashed hostname (e.g. "myapp-abc123.scm.centralus-01.azurewebsites.net")
+    /// instead of the legacy "{appName}.scm.azurewebsites.net".
+    /// </summary>
+    public string? AzureScmHost { get; set; }
 
     // ── Checkout ──
     public string? CheckoutRepo { get; set; }

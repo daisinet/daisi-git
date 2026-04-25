@@ -16,6 +16,7 @@ public class ImportService(
     GitObjectStore objectStore,
     GitRefService refService,
     BrowseService browseService,
+    RepoActivityRollupService rollupService,
     DaisiGitCosmo cosmo)
 {
     /// <summary>
@@ -69,6 +70,13 @@ public class ImportService(
             repo.IsEmpty = false;
             repo = await repoService.UpdateRepositoryAsync(repo);
 
+            // Rebuild commit-count rollup from the imported history. Imports bypass the
+            // smart-protocol push pipeline that normally maintains the rollup, so without
+            // this the org activity grid would show zeros for imported repos until the
+            // first native push.
+            onProgress?.Invoke("Indexing commit history...");
+            try { await rollupService.BackfillAsync(repo); } catch { }
+
             onProgress?.Invoke("Import complete.");
         }
         finally
@@ -119,6 +127,11 @@ public class ImportService(
 
             repo.IsEmpty = false;
             repo = await repoService.UpdateRepositoryAsync(repo);
+
+            // Rebuild the rollup from scratch — re-imports can introduce arbitrary new
+            // history that didn't flow through the push pipeline.
+            onProgress?.Invoke("Indexing commit history...");
+            try { await rollupService.BackfillAsync(repo); } catch { }
 
             onProgress?.Invoke("Re-import complete.");
         }

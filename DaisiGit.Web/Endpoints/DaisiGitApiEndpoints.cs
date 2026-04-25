@@ -85,6 +85,7 @@ public static class DaisiGitApiEndpoints
 
         pub.MapGet("/repos/{owner}/{slug}", GetRepository);
         pub.MapGet("/orgs/{slug}/activity", GetOrgActivity);
+        pub.MapGet("/repos/{owner}/{slug}/commits-in-range", GetCommitsInRange);
         pub.MapGet("/repos/{owner}/{slug}/branches", ListBranches);
         pub.MapGet("/repos/{owner}/{slug}/tree/{branch}/{**path}", GetTree);
         pub.MapGet("/repos/{owner}/{slug}/blob/{branch}/{**path}", GetBlob);
@@ -591,7 +592,7 @@ public static class DaisiGitApiEndpoints
         HttpContext ctx, string owner, string slug, CreatePrRequest req,
         RepositoryService repoService, PullRequestService prService,
         MergeService mergeService, GitRefService refService,
-        AccountSettingsService settingsService,
+        AccountSettingsService settingsService, RepoActivityRollupService rollupService,
         PermissionService permissionService, GitEventService events)
     {
         var (repo, error) = await RequireWrite(ctx, owner, slug, repoService, permissionService);
@@ -624,7 +625,7 @@ public static class DaisiGitApiEndpoints
             if (strategy != null)
             {
                 _ = await PerformMergeAsync(pr, repo, GetUserName(ctx), GetUserId(ctx),
-                    strategy.Value, policy, mergeService, refService, events);
+                    strategy.Value, policy, mergeService, refService, events, rollupService);
                 pr = await prService.GetByNumberAsync(repo.id, pr.Number) ?? pr;
             }
         }
@@ -670,6 +671,7 @@ public static class DaisiGitApiEndpoints
         MergePrRequest? req,
         RepositoryService repoService, PullRequestService prService, MergeService mergeService,
         GitRefService refService, AccountSettingsService settingsService,
+        RepoActivityRollupService rollupService,
         PermissionService permissionService, GitEventService events)
     {
         var (repo, error) = await RequireWrite(ctx, owner, slug, repoService, permissionService);
@@ -692,7 +694,7 @@ public static class DaisiGitApiEndpoints
 
         var userName = GetUserName(ctx);
         var result = await PerformMergeAsync(pr, repo, userName, GetUserId(ctx), strategy,
-            policy, mergeService, refService, events);
+            policy, mergeService, refService, events, rollupService);
 
         return result.Success
             ? Results.Ok(result)
@@ -706,7 +708,8 @@ public static class DaisiGitApiEndpoints
     private static async Task<MergeResult> PerformMergeAsync(
         PullRequest pr, GitRepository repo, string userName, string userId,
         MergeStrategy strategy, MergePolicy policy,
-        MergeService mergeService, GitRefService refService, GitEventService events)
+        MergeService mergeService, GitRefService refService, GitEventService events,
+        RepoActivityRollupService rollupService)
     {
         var result = await mergeService.MergeAsync(pr, repo, userName, $"{userName}@daisinet", strategy);
         if (!result.Success) return result;
@@ -735,6 +738,11 @@ public static class DaisiGitApiEndpoints
                 ["push.source"] = "merge",
                 ["pr.number"] = pr.Number.ToString()
             });
+
+        // Bump the per-day commit rollup with just the commits the merge added to the
+        // target branch (merge commit + any source-branch commits not yet present).
+        try { await rollupService.ApplyPushAsync(repo, oldSha: result.PreviousTargetSha, newSha: result.MergeCommitSha); }
+        catch { /* rollup is best-effort */ }
 
         // Delete the source branch when policy says so. Never delete the default branch
         // (a PR sourced from the default branch is unusual but possible — be defensive).
@@ -1064,6 +1072,43 @@ public static class DaisiGitApiEndpoints
 
         var activity = await activityService.GetActivityAsync(slug, d, g, includePriv, viewerId);
         return activity == null ? Results.NotFound() : Results.Ok(activity);
+    }
+
+    private static async Task<IResult> GetCommitsInRange(
+        HttpContext ctx, string owner, string slug,
+        DateTime from, DateTime to, int? limit,
+        RepositoryService repoService, BrowseService browseService,
+        PermissionService permissionService)
+    {
+        var (repo, error) = await RequireRead(ctx, owner, slug, repoService, permissionService);
+        if (error != null) return error;
+
+        var headSha = await browseService.ResolveRefAsync(repo!.id, repo.DefaultBranch);
+        if (headSha == null) return Results.Ok(new List<object>());
+
+        var cap = Math.Clamp(limit ?? 200, 1, 500);
+        var fromUtc = DateTime.SpecifyKind(from, DateTimeKind.Utc);
+        var toUtc = DateTime.SpecifyKind(to, DateTimeKind.Utc);
+
+        // Walk newest-to-oldest, stop when we've gone past the range or hit the cap.
+        var log = await browseService.GetCommitLogAsync(repo.id, headSha, cap * 4);
+        var hits = new List<object>();
+        foreach (var c in log)
+        {
+            var when = c.AuthorDate.UtcDateTime;
+            if (when >= toUtc) continue;
+            if (when < fromUtc) break;
+            hits.Add(new
+            {
+                sha = c.Sha,
+                shortSha = c.ShortSha,
+                messageFirstLine = c.MessageFirstLine,
+                authorName = c.AuthorName,
+                authorDateUtc = when
+            });
+            if (hits.Count >= cap) break;
+        }
+        return Results.Ok(hits);
     }
 
     // ── Account settings endpoints ──

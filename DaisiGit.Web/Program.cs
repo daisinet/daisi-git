@@ -63,6 +63,7 @@ builder.Services.AddScoped<TeamService>();
 builder.Services.AddScoped<PermissionService>();
 builder.Services.AddScoped<ReviewService>();
 builder.Services.AddScoped<AccountSettingsService>();
+builder.Services.AddScoped<RepoActivityRollupService>();
 builder.Services.AddScoped<OrgActivityService>();
 builder.Services.AddScoped<UserProfileService>();
 builder.Services.AddScoped<ApiKeyService>();

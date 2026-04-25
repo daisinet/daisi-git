@@ -99,7 +99,7 @@ public class MergeService(
         pr.MergedUtc = DateTime.UtcNow;
         await cosmo.UpdatePullRequestAsync(pr);
 
-        return new MergeResult { Success = true, MergeCommitSha = mergeCommitSha };
+        return new MergeResult { Success = true, MergeCommitSha = mergeCommitSha, PreviousTargetSha = targetSha };
     }
 
     /// <summary>
@@ -120,5 +120,8 @@ public class MergeResult
 {
     public bool Success { get; set; }
     public string? MergeCommitSha { get; set; }
+
+    /// <summary>Target branch tip immediately before the merge (used by activity rollup).</summary>
+    public string? PreviousTargetSha { get; set; }
     public string? Error { get; set; }
 }

@@ -75,11 +75,11 @@
                     </div>
                 </div>
 
-                @if (IsPushTrigger)
+                @if (ShowsBranchFilter)
                 {
                     <div class="row g-3 mt-1">
                         <div class="col-md-6">
-                            <label class="form-label">Branch filter <span class="text-muted">(optional)</span> <Tip Text="Only trigger when pushed to these branches. Select one or more, or leave empty to trigger on all branches." /></label>
+                            <label class="form-label">@BranchFilterLabel <span class="text-muted">(optional)</span> <Tip Text="@BranchFilterTip" /></label>
                             <MudAutocomplete T="string" @bind-Value="branchFilterInput"
                                              SearchFunc="SearchCurrentRepoBranches"
                                              Placeholder="Type to search branches..."
@@ -898,6 +898,17 @@
     private bool IsPushTrigger => workflow.TriggerType is GitTriggerType.PushToRef
         or GitTriggerType.BranchCreated or GitTriggerType.BranchDeleted
         or GitTriggerType.TagCreated or GitTriggerType.TagDeleted;
+
+    private bool IsPRTrigger => workflow.TriggerType is GitTriggerType.PullRequestCreated
+        or GitTriggerType.PullRequestUpdated or GitTriggerType.PullRequestClosed
+        or GitTriggerType.PullRequestMerged;
+
+    // Push triggers filter on the pushed branch; PR triggers filter on the target branch.
+    private bool ShowsBranchFilter => IsPushTrigger || IsPRTrigger;
+    private string BranchFilterLabel => IsPRTrigger ? "Target branch filter" : "Branch filter";
+    private string BranchFilterTip => IsPRTrigger
+        ? "Only trigger when the PR's target (base) branch matches one of these. Leave empty to trigger for any target branch."
+        : "Only trigger when pushed to these branches. Leave empty to trigger on all branches.";
 
     private bool IsScheduledTrigger => workflow.TriggerType == GitTriggerType.Scheduled;
     private string scheduleExpression = "";

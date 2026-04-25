@@ -184,6 +184,9 @@ public static class WorkflowYamlParser
         WorkflowStepType.SendEmail => "send-email",
         WorkflowStepType.Condition => "condition",
         WorkflowStepType.RunMinion => "run-minion",
+        WorkflowStepType.AcrBuild => "acr-build",
+        WorkflowStepType.NugetPush => "nuget-push",
+        WorkflowStepType.DispatchWorkflow => "dispatch-workflow",
         _ => type.ToString().ToLowerInvariant()
     };
 
@@ -251,6 +254,24 @@ public static class WorkflowYamlParser
                 if (step.MinionGrammar == true) with["grammar"] = "true";
                 if (step.MinionTimeoutSeconds.HasValue) with["timeout"] = step.MinionTimeoutSeconds.Value.ToString();
                 if (!string.IsNullOrEmpty(step.MinionOrcAddress)) with["orc-address"] = step.MinionOrcAddress;
+                break;
+            case WorkflowStepType.AcrBuild:
+                if (!string.IsNullOrEmpty(step.AcrRegistry)) with["registry"] = step.AcrRegistry;
+                if (!string.IsNullOrEmpty(step.AcrImage)) with["image"] = step.AcrImage;
+                if (!string.IsNullOrEmpty(step.AcrDockerfile)) with["dockerfile"] = step.AcrDockerfile;
+                if (!string.IsNullOrEmpty(step.AcrContext)) with["context"] = step.AcrContext;
+                if (!string.IsNullOrEmpty(step.AcrBuildArgs)) with["build-args"] = step.AcrBuildArgs;
+                break;
+            case WorkflowStepType.NugetPush:
+                if (!string.IsNullOrEmpty(step.NugetPackagePath)) with["package"] = step.NugetPackagePath;
+                if (!string.IsNullOrEmpty(step.NugetSource)) with["source"] = step.NugetSource;
+                if (!string.IsNullOrEmpty(step.NugetApiKeySecret)) with["api-key-secret"] = step.NugetApiKeySecret;
+                if (step.NugetSkipDuplicate == true) with["skip-duplicate"] = "true";
+                break;
+            case WorkflowStepType.DispatchWorkflow:
+                if (!string.IsNullOrEmpty(step.DispatchRepo)) with["repo"] = step.DispatchRepo;
+                if (!string.IsNullOrEmpty(step.DispatchWorkflow)) with["workflow"] = step.DispatchWorkflow;
+                if (!string.IsNullOrEmpty(step.DispatchInputs)) with["inputs"] = step.DispatchInputs;
                 break;
         }
         return with;
@@ -479,6 +500,24 @@ public static class WorkflowYamlParser
                     throw new InvalidOperationException(
                         "run-minion: one of `instructions` or `instructions-file` is required.");
                 break;
+            case WorkflowStepType.AcrBuild:
+                step.AcrRegistry = with.GetValueOrDefault("registry");
+                step.AcrImage = with.GetValueOrDefault("image");
+                step.AcrDockerfile = with.GetValueOrDefault("dockerfile");
+                step.AcrContext = with.GetValueOrDefault("context");
+                step.AcrBuildArgs = with.GetValueOrDefault("build-args");
+                break;
+            case WorkflowStepType.NugetPush:
+                step.NugetPackagePath = with.GetValueOrDefault("package");
+                step.NugetSource = with.GetValueOrDefault("source");
+                step.NugetApiKeySecret = with.GetValueOrDefault("api-key-secret");
+                if (bool.TryParse(with.GetValueOrDefault("skip-duplicate"), out var skipDup)) step.NugetSkipDuplicate = skipDup;
+                break;
+            case WorkflowStepType.DispatchWorkflow:
+                step.DispatchRepo = with.GetValueOrDefault("repo");
+                step.DispatchWorkflow = with.GetValueOrDefault("workflow");
+                step.DispatchInputs = with.GetValueOrDefault("inputs");
+                break;
         }
 
         // Simple condition from `if:`
@@ -505,6 +544,9 @@ public static class WorkflowYamlParser
         "run" or "script" or "run-script" or "shell" => WorkflowStepType.RunScript,
         "send-email" or "email" => WorkflowStepType.SendEmail,
         "run-minion" or "minion" => WorkflowStepType.RunMinion,
+        "acr-build" or "docker-build" => WorkflowStepType.AcrBuild,
+        "nuget-push" or "dotnet-nuget-push" => WorkflowStepType.NugetPush,
+        "dispatch-workflow" or "trigger-workflow" => WorkflowStepType.DispatchWorkflow,
         _ => null
     };
 

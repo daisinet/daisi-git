@@ -99,6 +99,36 @@ public class WorkflowStep
 
     /// <summary>Optional ORC address override (host:port). If unset, SDK defaults apply.</summary>
     public string? MinionOrcAddress { get; set; }
+
+    // ── AcrBuild (server-side ACR build, no DinD required) ──
+    /// <summary>ACR registry name without the .azurecr.io suffix (e.g. "daisigitacr").</summary>
+    public string? AcrRegistry { get; set; }
+    /// <summary>Image (with tag, e.g. "myapp:latest"). Multiple comma-separated values allowed for multi-tag pushes.</summary>
+    public string? AcrImage { get; set; }
+    /// <summary>Workspace-relative path to the Dockerfile. Default: ./Dockerfile.</summary>
+    public string? AcrDockerfile { get; set; }
+    /// <summary>Workspace-relative build context (default: workspace root).</summary>
+    public string? AcrContext { get; set; }
+    /// <summary>Optional --build-arg KEY=VALUE comma-separated entries.</summary>
+    public string? AcrBuildArgs { get; set; }
+
+    // ── NugetPush ──
+    /// <summary>Workspace-relative path to the .nupkg (or a glob like "**/*.nupkg" for all packages in a tree).</summary>
+    public string? NugetPackagePath { get; set; }
+    /// <summary>Feed URL. Defaults to nuget.org.</summary>
+    public string? NugetSource { get; set; }
+    /// <summary>Secret name holding the API key (looked up like other secrets).</summary>
+    public string? NugetApiKeySecret { get; set; }
+    /// <summary>If true, ignore "package already exists" errors.</summary>
+    public bool? NugetSkipDuplicate { get; set; }
+
+    // ── DispatchWorkflow (call another workflow in this or another repo) ──
+    /// <summary>Target repo as "owner/slug". Empty = same repo as the current workflow.</summary>
+    public string? DispatchRepo { get; set; }
+    /// <summary>Target workflow id or name in the target repo.</summary>
+    public string? DispatchWorkflow { get; set; }
+    /// <summary>Inputs to pass — comma-separated key=value entries (templates allowed in values).</summary>
+    public string? DispatchInputs { get; set; }
 }
 
 /// <summary>

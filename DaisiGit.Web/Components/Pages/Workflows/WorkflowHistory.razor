@@ -53,6 +53,7 @@
                             </div>
                             <div class="text-muted small mt-1">
                                 Step @exec.CurrentStepIndex / @exec.TotalSteps
+                                <span class="ms-2">Duration: @FormatExecutionDuration(exec)</span>
                                 @if (!string.IsNullOrEmpty(exec.Error))
                                 {
                                     <span class="text-danger ms-2">@exec.Error</span>
@@ -60,8 +61,12 @@
                             </div>
                         </div>
                         <div class="text-muted small text-end">
-                            @exec.CreatedUtc.ToString("yyyy-MM-dd HH:mm")
-                            <button class="btn btn-sm btn-link p-0 ms-2" @onclick="() => ToggleDetail(exec.id)">
+                            <div>Started: @FormatLocal(exec.StartedUtc ?? exec.CreatedUtc)</div>
+                            @if (exec.FinishedUtc != null)
+                            {
+                                <div>Finished: @FormatLocal(exec.FinishedUtc.Value)</div>
+                            }
+                            <button class="btn btn-sm btn-link p-0 ms-2 mt-1" @onclick="() => ToggleDetail(exec.id)">
                                 <i class="fa-duotone fa-chevron-@(expandedId == exec.id ? "up" : "down")"></i>
                             </button>
                         </div>
@@ -79,6 +84,9 @@
                                         <th style="width:3em;">#</th>
                                         <th>Step</th>
                                         <th style="width:5em;">Result</th>
+                                        <th style="width:9em;">Started</th>
+                                        <th style="width:9em;">Finished</th>
+                                        <th style="width:7em;">Duration</th>
                                         <th>Detail</th>
                                     </tr>
                                 </thead>
@@ -89,6 +97,9 @@
                                             <td>@(row.Index + 1)</td>
                                             <td>@row.Label</td>
                                             <td>@StepStatusIcon(row.State)</td>
+                                            <td class="text-muted small font-monospace">@FormatStepStart(row)</td>
+                                            <td class="text-muted small font-monospace">@FormatStepEnd(row)</td>
+                                            <td class="text-muted small font-monospace">@FormatStepDuration(row)</td>
                                             <td class="text-muted small">
                                                 @if (row.Result is { } r)
                                                 {
@@ -277,6 +288,42 @@
 
     private static string Truncate(string s, int max) =>
         s.Length <= max ? s : s[..max] + "...";
+
+    private static string FormatLocal(DateTime utc) => utc.ToLocalTime().ToString("HH:mm:ss");
+
+    private string FormatStepStart(StepRow row)
+        => row.Result is { ExecutedUtc: var t } ? FormatLocal(t) : "-";
+
+    private string FormatStepEnd(StepRow row)
+    {
+        if (row.Result?.FinishedUtc is { } end) return FormatLocal(end);
+        if (row.State == StepState.Running) return "running...";
+        return "-";
+    }
+
+    private string FormatStepDuration(StepRow row)
+    {
+        if (row.Result is null) return "-";
+        var start = row.Result.ExecutedUtc;
+        var end = row.Result.FinishedUtc ?? (row.State == StepState.Running ? DateTime.UtcNow : (DateTime?)null);
+        return end is null ? "-" : FormatDuration(end.Value - start);
+    }
+
+    private static string FormatExecutionDuration(WorkflowExecution exec)
+    {
+        var start = exec.StartedUtc ?? exec.CreatedUtc;
+        var end = exec.FinishedUtc ?? (exec.Status is "Running" or "Dispatched" ? DateTime.UtcNow : (DateTime?)null);
+        return end is null ? "-" : FormatDuration(end.Value - start);
+    }
+
+    private static string FormatDuration(TimeSpan d)
+    {
+        if (d.TotalSeconds < 0) d = TimeSpan.Zero;
+        if (d.TotalSeconds < 1) return $"{(int)d.TotalMilliseconds}ms";
+        if (d.TotalMinutes < 1) return $"{d.TotalSeconds:0.0}s";
+        if (d.TotalHours < 1) return $"{(int)d.TotalMinutes}m {d.Seconds}s";
+        return $"{(int)d.TotalHours}h {d.Minutes}m";
+    }
 
     private enum StepState { Pending, Running, Ok, Failed, Skipped }
 

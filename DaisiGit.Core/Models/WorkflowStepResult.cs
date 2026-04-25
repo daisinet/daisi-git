@@ -17,7 +17,12 @@ public class WorkflowStepResult
 
     public bool Success { get; set; }
     public string? Error { get; set; }
+
+    /// <summary>When the step started running (worker began executing it).</summary>
     public DateTime ExecutedUtc { get; set; } = DateTime.UtcNow;
+
+    /// <summary>When the step finished (success or failure). Null while still running.</summary>
+    public DateTime? FinishedUtc { get; set; }
 
     // ── HttpRequest results ──
     public int? HttpStatusCode { get; set; }

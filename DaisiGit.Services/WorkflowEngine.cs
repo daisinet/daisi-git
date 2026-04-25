@@ -48,6 +48,7 @@ public class WorkflowEngine(
             }
             var flatSteps = FlattenSteps(steps, execution.Context);
             execution.TotalSteps = flatSteps.Count;
+            execution.StartedUtc ??= DateTime.UtcNow;
 
             while (execution.CurrentStepIndex < flatSteps.Count)
             {
@@ -121,22 +122,30 @@ public class WorkflowEngine(
                     var label = string.IsNullOrWhiteSpace(step.Name) ? step.StepType.ToString() : step.Name;
                     stepResult.Success = false;
                     stepResult.Error = ex.Message;
+                    stepResult.FinishedUtc = DateTime.UtcNow;
                     execution.StepResults.Add(stepResult);
                     execution.Status = "Failed";
                     execution.Error = $"Step {execution.CurrentStepIndex + 1} ({label}) failed: {ex.Message}";
+                    execution.FinishedUtc = DateTime.UtcNow;
                     await cosmo.UpdateWorkflowExecutionAsync(execution);
                     return;
                 }
 
+                stepResult.FinishedUtc = DateTime.UtcNow;
                 execution.StepResults.Add(stepResult);
                 InjectStepOutputs(execution.Context, step, stepResult);
                 execution.CurrentStepIndex++;
+
+                // Persist after each step so the UI sees live progress instead of waiting
+                // for the whole workflow to terminate.
+                await cosmo.UpdateWorkflowExecutionAsync(execution);
 
                 if (!stepResult.Success)
                 {
                     var label = string.IsNullOrWhiteSpace(step.Name) ? step.StepType.ToString() : step.Name;
                     execution.Status = "Failed";
                     execution.Error = $"Step {stepResult.StepIndex + 1} ({label}) failed: {stepResult.Error}";
+                    execution.FinishedUtc = DateTime.UtcNow;
                     await cosmo.UpdateWorkflowExecutionAsync(execution);
                     return;
                 }
@@ -144,11 +153,13 @@ public class WorkflowEngine(
 
             execution.Status = "Completed";
             execution.NextRunAt = null;
+            execution.FinishedUtc = DateTime.UtcNow;
             await cosmo.UpdateWorkflowExecutionAsync(execution);
         }
         catch (Exception ex)
         {
             execution.Status = "Failed";
+            execution.FinishedUtc = DateTime.UtcNow;
             execution.Error = ex.Message;
             await cosmo.UpdateWorkflowExecutionAsync(execution);
         }

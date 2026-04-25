@@ -118,11 +118,12 @@ public class WorkflowEngine(
                 }
                 catch (Exception ex)
                 {
+                    var label = string.IsNullOrWhiteSpace(step.Name) ? step.StepType.ToString() : step.Name;
                     stepResult.Success = false;
                     stepResult.Error = ex.Message;
                     execution.StepResults.Add(stepResult);
                     execution.Status = "Failed";
-                    execution.Error = $"Step {execution.CurrentStepIndex} ({step.StepType}) failed: {ex.Message}";
+                    execution.Error = $"Step {execution.CurrentStepIndex + 1} ({label}) failed: {ex.Message}";
                     await cosmo.UpdateWorkflowExecutionAsync(execution);
                     return;
                 }
@@ -130,6 +131,15 @@ public class WorkflowEngine(
                 execution.StepResults.Add(stepResult);
                 InjectStepOutputs(execution.Context, step, stepResult);
                 execution.CurrentStepIndex++;
+
+                if (!stepResult.Success)
+                {
+                    var label = string.IsNullOrWhiteSpace(step.Name) ? step.StepType.ToString() : step.Name;
+                    execution.Status = "Failed";
+                    execution.Error = $"Step {stepResult.StepIndex + 1} ({label}) failed: {stepResult.Error}";
+                    await cosmo.UpdateWorkflowExecutionAsync(execution);
+                    return;
+                }
             }
 
             execution.Status = "Completed";

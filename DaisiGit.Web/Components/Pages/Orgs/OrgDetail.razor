@@ -3,6 +3,7 @@
 @inject OrganizationService OrgService
 @inject RepositoryService RepoService
 @inject TeamService TeamService
+@inject BrowseService BrowseService
 @inject DaisiGit.Web.Services.DaisiUserService UserService
 
 <PageTitle>@(org?.Name ?? "Organization") - Daisi Git</PageTitle>
@@ -20,9 +21,12 @@
                 <p class="text-muted mb-0">@org.Description</p>
             }
         </div>
-        <a href="/@Slug/settings" class="btn btn-sm btn-outline-secondary">
-            <i class="fa-duotone fa-gear me-1"></i> Settings
-        </a>
+        @if (!isAnonymous)
+        {
+            <a href="/@Slug/settings" class="btn btn-sm btn-outline-secondary">
+                <i class="fa-duotone fa-gear me-1"></i> Settings
+            </a>
+        }
     </div>
 
     <!-- Tabs -->
@@ -32,20 +36,43 @@
                 <i class="fa-duotone fa-code-branch me-1"></i> Repositories
             </a>
         </li>
-        <li class="nav-item">
-            <a class="nav-link @(activeTab == "members" ? "active" : "")" href="#" @onclick:preventDefault @onclick="SetTabMembers">
-                <i class="fa-duotone fa-users me-1"></i> Members (@members.Count)
-            </a>
-        </li>
-        <li class="nav-item">
-            <a class="nav-link @(activeTab == "teams" ? "active" : "")" href="#" @onclick:preventDefault @onclick="SetTabTeams">
-                <i class="fa-duotone fa-people-group me-1"></i> Teams (@teams.Count)
-            </a>
-        </li>
+        @if (!isAnonymous)
+        {
+            <li class="nav-item">
+                <a class="nav-link @(activeTab == "members" ? "active" : "")" href="#" @onclick:preventDefault @onclick="SetTabMembers">
+                    <i class="fa-duotone fa-users me-1"></i> Members (@members.Count)
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link @(activeTab == "teams" ? "active" : "")" href="#" @onclick:preventDefault @onclick="SetTabTeams">
+                    <i class="fa-duotone fa-people-group me-1"></i> Teams (@teams.Count)
+                </a>
+            </li>
+        }
     </ul>
 
     @if (activeTab == "repos")
     {
+        @if (!string.IsNullOrEmpty(profileReadme))
+        {
+            <div class="card mb-3">
+                <div class="card-header py-2 d-flex justify-content-between align-items-center">
+                    <span class="text-muted small">
+                        <i class="fa-regular fa-file-lines me-1"></i> @Slug/.daisi/README.md
+                    </span>
+                    @if (!isAnonymous)
+                    {
+                        <a href="/@Slug/.daisi/edit/main/README.md" class="text-muted small text-decoration-none">
+                            <i class="fa-regular fa-pen-to-square"></i>
+                        </a>
+                    }
+                </div>
+                <div class="card-body">
+                    <MarkdownView Content="@profileReadme" />
+                </div>
+            </div>
+        }
+
         @if (repos.Count > 0)
         {
             <div class="list-group">
@@ -228,6 +255,8 @@ else if (!loading)
     private bool showAddMember;
     private GitRole newMemberRole = GitRole.Read;
     private string? memberError;
+    private string? profileReadme;
+    private bool isAnonymous => string.IsNullOrEmpty(UserId);
 
     // User search
     private string userSearchTerm = "";
@@ -243,13 +272,59 @@ else if (!loading)
             org = await OrgService.GetBySlugAsync(Slug);
             if (org == null) { loading = false; return; }
 
-            repos = await RepoService.GetRepositoriesByOwnerAsync(org.Slug);
-            members = await OrgService.GetMembersAsync(org.id);
-            existingMemberIds = members.Select(m => m.UserId).ToHashSet();
-            teams = await TeamService.ListAsync(org.id);
+            var allRepos = await RepoService.GetRepositoriesByOwnerAsync(org.Slug);
+            // Anonymous viewers see only public repos. Authenticated viewers see what they
+            // already had access to (full list — repo-page itself enforces deeper checks).
+            repos = isAnonymous
+                ? allRepos.Where(r => r.Visibility == GitRepoVisibility.Public).ToList()
+                : allRepos;
+
+            // Surface a profile README from the special ".daisi" repo (if it exists and is
+            // public). Modeled after GitHub's `.github` profile-repo convention so users have
+            // a way to update their org page.
+            var profileRepo = allRepos.FirstOrDefault(r => r.Slug == ".daisi");
+            if (profileRepo != null
+                && (profileRepo.Visibility == GitRepoVisibility.Public || !isAnonymous))
+            {
+                profileReadme = await TryReadProfileReadmeAsync(profileRepo);
+            }
+
+            // Member/team management is sign-in only.
+            if (!isAnonymous)
+            {
+                members = await OrgService.GetMembersAsync(org.id);
+                existingMemberIds = members.Select(m => m.UserId).ToHashSet();
+                teams = await TeamService.ListAsync(org.id);
+            }
         }
         catch { }
         loading = false;
+    }
+
+    private async Task<string?> TryReadProfileReadmeAsync(GitRepository profileRepo)
+    {
+        try
+        {
+            var commitSha = await BrowseService.ResolveRefAsync(profileRepo.id, profileRepo.DefaultBranch);
+            if (commitSha == null) return null;
+
+            var rootTree = await BrowseService.GetTreeAtPathAsync(profileRepo.id, commitSha, "");
+            if (rootTree == null || rootTree.Entries == null) return null;
+
+            // Case-insensitive match for README.md, README.markdown, etc.
+            var readmeEntry = rootTree.Entries.FirstOrDefault(e =>
+                !e.IsTree && e.Name.StartsWith("README.", StringComparison.OrdinalIgnoreCase)
+                          && (e.Name.EndsWith(".md", StringComparison.OrdinalIgnoreCase)
+                           || e.Name.EndsWith(".markdown", StringComparison.OrdinalIgnoreCase)));
+            if (readmeEntry == null) return null;
+
+            var blob = await BrowseService.GetFileContentAsync(profileRepo.id, readmeEntry.Sha);
+            return blob?.Text;
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private void ToggleAddMember()

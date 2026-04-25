@@ -54,10 +54,8 @@ public class OrgActivityService(
                 repoRows.Add(row);
         }
 
-        // Sort repos by total commits in window (descending), then alphabetically.
         repoRows = repoRows
-            .OrderByDescending(r => r.Counts.Sum())
-            .ThenBy(r => r.Slug, StringComparer.OrdinalIgnoreCase)
+            .OrderBy(r => r.Slug, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
         return new OrgActivity(buckets, repoRows);

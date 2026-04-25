@@ -4,7 +4,10 @@
 @inject OrganizationService OrgService
 @inject SecretService SecretService
 @inject RepoGroupService RepoGroupService
+@inject GitHubBulkImportService GitHubImporter
 @inject NavigationManager Navigation
+@implements IDisposable
+@using DaisiGit.Core.Enums
 
 <PageTitle>Settings - @(org?.Name ?? "Organization") - Daisi Git</PageTitle>
 
@@ -30,6 +33,10 @@
                 <a class="nav-link @(activeTab == "groups" ? "active" : "")"
                    href="/@Slug/settings/groups">
                     <i class="fa-duotone fa-folder-tree me-1"></i> Repo Groups
+                </a>
+                <a class="nav-link @(activeTab == "import" ? "active" : "")"
+                   href="/@Slug/settings/import">
+                    <i class="fa-brands fa-github me-1"></i> Import from GitHub
                 </a>
             </div>
         </div>
@@ -167,6 +174,108 @@
                     </div>
                 }
             }
+            else if (activeTab == "import")
+            {
+                <h5 class="mb-3">Import from GitHub</h5>
+                <p class="text-muted small">
+                    Pulls every repo from a GitHub organization into <strong>@org.Name</strong>.
+                    Existing repos with the same name are skipped.
+                </p>
+
+                <div class="card mb-3" style="max-width: 700px;">
+                    <div class="card-body">
+                        <div class="mb-3">
+                            <label class="form-label small">GitHub organization</label>
+                            <input type="text" class="form-control form-control-sm" @bind="ghOrg" placeholder="daisinet" />
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label small">Personal access token <span class="text-muted">(optional, required for private repos)</span></label>
+                            <input type="password" class="form-control form-control-sm" @bind="ghToken" placeholder="ghp_..." />
+                            <div class="form-text">Stored in memory for the duration of this import only — never persisted.</div>
+                        </div>
+                        <div class="form-check form-switch mb-3">
+                            <input class="form-check-input" type="checkbox" id="ghPrivate" @bind="ghIncludePrivate" />
+                            <label class="form-check-label small" for="ghPrivate">Include private repos</label>
+                        </div>
+                        <div class="row g-2">
+                            <div class="col-md-6">
+                                <label class="form-label small">Visibility for public source repos</label>
+                                <select class="form-select form-select-sm" @bind="ghPublicVisibility">
+                                    <option value="@GitRepoVisibility.Public">Public</option>
+                                    <option value="@GitRepoVisibility.Internal">Internal</option>
+                                    <option value="@GitRepoVisibility.Private">Private</option>
+                                </select>
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label small">Visibility for private source repos</label>
+                                <select class="form-select form-select-sm" @bind="ghPrivateVisibility">
+                                    <option value="@GitRepoVisibility.Private">Private</option>
+                                    <option value="@GitRepoVisibility.Internal">Internal</option>
+                                    <option value="@GitRepoVisibility.Public">Public</option>
+                                </select>
+                            </div>
+                        </div>
+                        @if (!string.IsNullOrEmpty(importError))
+                        {
+                            <div class="alert alert-danger small mt-3 mb-0">@importError</div>
+                        }
+                        <button class="btn btn-primary mt-3" @onclick="StartImport" disabled="@startingImport">
+                            @if (startingImport) { <span class="spinner-border spinner-border-sm me-1"></span> }
+                            <i class="fa-brands fa-github me-1"></i> Start Import
+                        </button>
+                    </div>
+                </div>
+
+                @if (importJob != null)
+                {
+                    <div class="card" style="max-width: 800px;">
+                        <div class="card-header py-2 d-flex justify-content-between align-items-center">
+                            <span class="fw-semibold">
+                                @if (importJob.IsComplete)
+                                {
+                                    <i class="fa-solid fa-check text-success me-1"></i> <text>Done.</text>
+                                }
+                                else
+                                {
+                                    <span class="spinner-border spinner-border-sm me-1"></span>
+                                    <text>Importing...</text>
+                                }
+                                <span class="ms-1 text-muted small">@importJob.CompletedCount / @importJob.Items.Count</span>
+                            </span>
+                            <span class="text-muted small">@importJob.ImportedCount imported, @importJob.FailedCount failed</span>
+                        </div>
+                        <ul class="list-group list-group-flush" style="max-height: 400px; overflow-y: auto;">
+                            @foreach (var it in importJob.Items)
+                            {
+                                <li class="list-group-item py-2">
+                                    <div class="d-flex justify-content-between align-items-center">
+                                        <div>
+                                            @StatusIcon(it.Status)
+                                            <strong class="ms-1">@it.Name</strong>
+                                            @if (it.IsPrivate)
+                                            {
+                                                <i class="fa-solid fa-lock text-muted ms-1" style="font-size:0.75rem;"></i>
+                                            }
+                                            @if (!string.IsNullOrEmpty(it.LastMessage) && it.Status == "InProgress")
+                                            {
+                                                <span class="text-muted small ms-2">— @it.LastMessage</span>
+                                            }
+                                            @if (!string.IsNullOrEmpty(it.Error))
+                                            {
+                                                <div class="text-danger small">@it.Error</div>
+                                            }
+                                        </div>
+                                        @if (it.Status == "Imported" && !string.IsNullOrEmpty(it.DaisiRepoSlug))
+                                        {
+                                            <a href="/@org.Slug/@it.DaisiRepoSlug" class="btn btn-sm btn-outline-secondary">View</a>
+                                        }
+                                    </div>
+                                </li>
+                            }
+                        </ul>
+                    </div>
+                }
+            }
             else if (activeTab == "secrets")
             {
                 <h5 class="mb-3">Organization Secrets</h5>
@@ -239,6 +348,7 @@ else if (!loading)
     {
         "secrets" => "secrets",
         "groups" => "groups",
+        "import" => "import",
         _ => "general"
     };
 
@@ -251,6 +361,17 @@ else if (!loading)
     private bool loading = true;
     private bool saving;
     private bool saved;
+
+    // GitHub bulk import
+    private string ghOrg = "";
+    private string ghToken = "";
+    private bool ghIncludePrivate;
+    private GitRepoVisibility ghPublicVisibility = GitRepoVisibility.Public;
+    private GitRepoVisibility ghPrivateVisibility = GitRepoVisibility.Private;
+    private bool startingImport;
+    private string? importError;
+    private GitHubImportJob? importJob;
+    private System.Threading.Timer? importPollTimer;
 
     // Repo groups
     private List<RepoGroup> groups = [];
@@ -411,6 +532,70 @@ else if (!loading)
         catch (Exception ex) { orgSecretError = ex.Message; }
         addingOrgSecret = false;
     }
+
+    // ── GitHub bulk import ──
+
+    private async Task StartImport()
+    {
+        if (org == null) return;
+        importError = null;
+        if (string.IsNullOrWhiteSpace(ghOrg)) { importError = "GitHub organization is required."; return; }
+
+        startingImport = true;
+        try
+        {
+            importJob = await GitHubImporter.StartAsync(
+                daisiOrgId: org.id, daisiOrgSlug: org.Slug,
+                accountId: org.AccountId,
+                actorUserId: org.id /* org as actor; user identity not exposed here */,
+                actorUserName: org.Name,
+                githubOrg: ghOrg.Trim(),
+                githubToken: string.IsNullOrWhiteSpace(ghToken) ? null : ghToken.Trim(),
+                includePrivate: ghIncludePrivate,
+                defaultPublicVisibility: ghPublicVisibility,
+                defaultPrivateVisibility: ghPrivateVisibility,
+                storageProvider: null);
+
+            // Don't keep the token in memory longer than necessary.
+            ghToken = "";
+
+            StartPollingImport();
+        }
+        catch (Exception ex) { importError = ex.Message; }
+        startingImport = false;
+    }
+
+    private void StartPollingImport()
+    {
+        importPollTimer?.Dispose();
+        importPollTimer = new System.Threading.Timer(_ =>
+        {
+            if (importJob == null) return;
+            var fresh = GitHubImporter.GetJob(importJob.Id);
+            if (fresh != null) importJob = fresh;
+            InvokeAsync(StateHasChanged);
+            if (importJob?.IsComplete == true)
+            {
+                importPollTimer?.Dispose();
+                importPollTimer = null;
+            }
+        }, null, TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(2));
+    }
+
+    public void Dispose()
+    {
+        importPollTimer?.Dispose();
+    }
+
+    private static MarkupString StatusIcon(string status) => new(status switch
+    {
+        "Pending"    => "<i class='fa-regular fa-hourglass text-muted'></i>",
+        "InProgress" => "<i class='fa-solid fa-spinner fa-spin text-primary'></i>",
+        "Imported"   => "<i class='fa-solid fa-check text-success'></i>",
+        "Skipped"    => "<i class='fa-solid fa-forward text-muted'></i>",
+        "Failed"     => "<i class='fa-solid fa-xmark text-danger'></i>",
+        _            => "<i class='fa-regular fa-circle text-muted'></i>"
+    });
 
     private async Task RemoveOrgSecret(string secretName)
     {

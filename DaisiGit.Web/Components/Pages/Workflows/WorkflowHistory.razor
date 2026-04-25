@@ -1,6 +1,9 @@
 @page "/{Owner}/{RepoSlug}/workflows/{WorkflowId}/history"
 @inject WorkflowService WorkflowService
 @inject RepositoryService RepoService
+@implements IDisposable
+@using DaisiGit.Core.Models
+@using DaisiGit.Core.Enums
 
 <PageTitle>Workflow History - @Owner/@RepoSlug - Daisi Git</PageTitle>
 
@@ -16,6 +19,10 @@
                 <span class="fw-semibold">@workflowName</span>
             }
         </div>
+        @if (anyActive)
+        {
+            <span class="text-muted small"><i class="fa-duotone fa-rotate fa-spin me-1"></i> Live - refreshing every @RefreshSeconds s</span>
+        }
     </div>
 
     <h5 class="mb-3">Execution History</h5>
@@ -60,58 +67,63 @@
                         </div>
                     </div>
 
-                    @if (expandedId == exec.id && exec.StepResults.Count > 0)
+                    @if (expandedId == exec.id)
                     {
                         <div class="mt-2 border-top pt-2">
+                            @{
+                                var rows = BuildStepRows(exec);
+                            }
                             <table class="table table-sm table-borderless mb-0">
                                 <thead>
                                     <tr class="text-muted small">
-                                        <th>#</th>
+                                        <th style="width:3em;">#</th>
                                         <th>Step</th>
-                                        <th>Result</th>
+                                        <th style="width:5em;">Result</th>
                                         <th>Detail</th>
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    @foreach (var result in exec.StepResults)
+                                    @foreach (var row in rows)
                                     {
                                         <tr>
-                                            <td>@(result.StepIndex + 1)</td>
-                                            <td>@(string.IsNullOrWhiteSpace(result.StepName) ? result.StepType.ToString() : result.StepName)</td>
-                                            <td>
-                                                @if (result.Success)
-                                                {
-                                                    <span class="text-success"><i class="fa-solid fa-check"></i></span>
-                                                }
-                                                else
-                                                {
-                                                    <span class="text-danger"><i class="fa-solid fa-xmark"></i></span>
-                                                }
-                                            </td>
+                                            <td>@(row.Index + 1)</td>
+                                            <td>@row.Label</td>
+                                            <td>@StepStatusIcon(row.State)</td>
                                             <td class="text-muted small">
-                                                @if (result.HttpStatusCode.HasValue)
+                                                @if (row.Result is { } r)
                                                 {
-                                                    <span>HTTP @result.HttpStatusCode</span>
+                                                    @if (r.HttpStatusCode.HasValue)
+                                                    {
+                                                        <span>HTTP @r.HttpStatusCode</span>
+                                                    }
+                                                    @if (!string.IsNullOrEmpty(r.Error))
+                                                    {
+                                                        <span class="text-danger">@r.Error</span>
+                                                    }
+                                                    @if (!string.IsNullOrEmpty(r.DeployUrl))
+                                                    {
+                                                        <a href="@r.DeployUrl" target="_blank" class="ms-1">@r.DeployUrl</a>
+                                                    }
+                                                    @if (r.ExitCode.HasValue)
+                                                    {
+                                                        <span class="ms-1">exit @r.ExitCode</span>
+                                                    }
+                                                    @if (!string.IsNullOrEmpty(r.ScriptOutput))
+                                                    {
+                                                        <details class="ms-1 d-inline"><summary class="d-inline small">output</summary><pre class="mt-1 p-2 bg-dark text-light rounded small" style="max-height:200px;overflow:auto;">@r.ScriptOutput</pre></details>
+                                                    }
+                                                    else if (!string.IsNullOrEmpty(r.RenderedBody))
+                                                    {
+                                                        <code class="ms-1">@Truncate(r.RenderedBody, 80)</code>
+                                                    }
                                                 }
-                                                @if (!string.IsNullOrEmpty(result.Error))
+                                                else if (row.State == StepState.Running)
                                                 {
-                                                    <span class="text-danger">@result.Error</span>
+                                                    <span class="text-primary small">running...</span>
                                                 }
-                                                @if (!string.IsNullOrEmpty(result.DeployUrl))
+                                                else if (row.State == StepState.Pending)
                                                 {
-                                                    <a href="@result.DeployUrl" target="_blank" class="ms-1">@result.DeployUrl</a>
-                                                }
-                                                @if (result.ExitCode.HasValue)
-                                                {
-                                                    <span class="ms-1">exit @result.ExitCode</span>
-                                                }
-                                                @if (!string.IsNullOrEmpty(result.ScriptOutput))
-                                                {
-                                                    <details class="ms-1 d-inline"><summary class="d-inline small">output</summary><pre class="mt-1 p-2 bg-dark text-light rounded small" style="max-height:200px;overflow:auto;">@result.ScriptOutput</pre></details>
-                                                }
-                                                else if (!string.IsNullOrEmpty(result.RenderedBody))
-                                                {
-                                                    <code class="ms-1">@Truncate(result.RenderedBody, 80)</code>
+                                                    <span class="text-muted small">queued</span>
                                                 }
                                             </td>
                                         </tr>
@@ -132,10 +144,16 @@
     [Parameter] public string WorkflowId { get; set; } = "";
     [CascadingParameter(Name = "AccountId")] string AccountId { get; set; } = "";
 
+    private const int RefreshSeconds = 3;
+
     private List<WorkflowExecution> executions = [];
+    private List<WorkflowStep> workflowSteps = [];
     private string? workflowName;
+    private string? accountId;
     private bool loading = true;
     private string? expandedId;
+    private System.Threading.Timer? refreshTimer;
+    private bool anyActive;
 
     protected override async Task OnParametersSetAsync()
     {
@@ -145,29 +163,109 @@
             var repo = await RepoService.GetRepositoryBySlugAsync(Owner, RepoSlug);
             if (repo != null)
             {
+                accountId = repo.AccountId;
                 var wf = await WorkflowService.GetAsync(WorkflowId, repo.AccountId);
                 workflowName = wf?.Name;
+                workflowSteps = wf?.Steps ?? [];
                 executions = await WorkflowService.ListExecutionsAsync(repo.AccountId, workflowId: WorkflowId);
             }
         }
         catch { }
         loading = false;
+        UpdateRefreshState();
     }
+
+    private void UpdateRefreshState()
+    {
+        anyActive = executions.Any(e => e.Status is "Running" or "Dispatched");
+        if (anyActive && refreshTimer == null)
+        {
+            refreshTimer = new System.Threading.Timer(_ => InvokeAsync(RefreshExecutions),
+                null, TimeSpan.FromSeconds(RefreshSeconds), TimeSpan.FromSeconds(RefreshSeconds));
+        }
+        else if (!anyActive && refreshTimer != null)
+        {
+            refreshTimer.Dispose();
+            refreshTimer = null;
+        }
+    }
+
+    private async Task RefreshExecutions()
+    {
+        if (string.IsNullOrEmpty(accountId)) return;
+        try
+        {
+            executions = await WorkflowService.ListExecutionsAsync(accountId, workflowId: WorkflowId);
+        }
+        catch { }
+        UpdateRefreshState();
+        StateHasChanged();
+    }
+
+    public void Dispose() => refreshTimer?.Dispose();
 
     private void ToggleDetail(string id)
     {
         expandedId = expandedId == id ? null : id;
     }
 
+    private List<StepRow> BuildStepRows(WorkflowExecution exec)
+    {
+        var rows = new List<StepRow>();
+        var resultsByIndex = exec.StepResults.GroupBy(r => r.StepIndex)
+            .ToDictionary(g => g.Key, g => g.Last());
+
+        // Use the workflow's planned Steps for layout; fall back to whatever results we have if the
+        // definition has changed since the execution started.
+        var planned = workflowSteps.OrderBy(s => s.Order).ToList();
+        var rowCount = Math.Max(planned.Count, exec.StepResults.Count == 0 ? 0 : exec.StepResults.Max(r => r.StepIndex) + 1);
+
+        for (var i = 0; i < rowCount; i++)
+        {
+            var result = resultsByIndex.GetValueOrDefault(i);
+            string label;
+            if (result != null && !string.IsNullOrWhiteSpace(result.StepName))
+                label = result.StepName;
+            else if (i < planned.Count)
+                label = string.IsNullOrWhiteSpace(planned[i].Name) ? planned[i].StepType.ToString() : planned[i].Name;
+            else
+                label = result?.StepType.ToString() ?? "(unknown)";
+
+            StepState state;
+            if (result != null) state = result.Success ? StepState.Ok : StepState.Failed;
+            else if (exec.Status is "Running" && i == exec.CurrentStepIndex) state = StepState.Running;
+            else if (exec.Status is "Failed" or "Cancelled") state = StepState.Skipped;
+            else state = StepState.Pending;
+
+            rows.Add(new StepRow(i, label, state, result));
+        }
+        return rows;
+    }
+
+    private static MarkupString StepStatusIcon(StepState state) => new(state switch
+    {
+        StepState.Ok => "<span class='text-success'><i class='fa-solid fa-check'></i></span>",
+        StepState.Failed => "<span class='text-danger'><i class='fa-solid fa-xmark'></i></span>",
+        StepState.Running => "<span class='text-primary'><i class='fa-solid fa-spinner fa-spin'></i></span>",
+        StepState.Pending => "<span class='text-muted' title='Queued'><i class='fa-regular fa-hourglass'></i></span>",
+        StepState.Skipped => "<span class='text-muted' title='Skipped after earlier failure'><i class='fa-regular fa-circle-minus'></i></span>",
+        _ => ""
+    });
+
     private static MarkupString StatusBadge(string status) => new(status switch
     {
         "Completed" => "<span class='badge bg-success'>Completed</span>",
         "Failed" => "<span class='badge bg-danger'>Failed</span>",
         "Running" => "<span class='badge bg-primary'>Running</span>",
+        "Dispatched" => "<span class='badge bg-info text-dark'>Dispatched</span>",
         "Cancelled" => "<span class='badge bg-secondary'>Cancelled</span>",
         _ => $"<span class='badge bg-secondary'>{status}</span>"
     });
 
     private static string Truncate(string s, int max) =>
         s.Length <= max ? s : s[..max] + "...";
+
+    private enum StepState { Pending, Running, Ok, Failed, Skipped }
+
+    private record StepRow(int Index, string Label, StepState State, WorkflowStepResult? Result);
 }

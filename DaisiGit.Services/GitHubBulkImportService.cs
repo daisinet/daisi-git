@@ -33,6 +33,12 @@ public class GitHubBulkImportService(
         GitRepoVisibility defaultPublicVisibility, GitRepoVisibility defaultPrivateVisibility,
         StorageProvider? storageProvider)
     {
+        // Refuse to start a second job against the same daisi-git org. The caller can use
+        // GetMostRecentJobFor to surface the running one in the UI.
+        if (HasActiveJobFor(daisiOrgId))
+            throw new InvalidOperationException(
+                "An import is already running for this organization. Wait for it to finish before starting another.");
+
         var repos = await ListGitHubReposAsync(githubOrg, githubToken, includePrivate);
         if (repos.Count > MaxReposPerJob)
             repos = repos.Take(MaxReposPerJob).ToList();
@@ -67,6 +73,27 @@ public class GitHubBulkImportService(
     {
         Cleanup();
         return _jobs.TryGetValue(id, out var job) ? job : null;
+    }
+
+    /// <summary>
+    /// Returns the most recent job for an org, or null if none. Includes both running
+    /// and recently-finished jobs (within the retention window) so the import page can
+    /// pick up where the user left off after navigation.
+    /// </summary>
+    public GitHubImportJob? GetMostRecentJobFor(string daisiOrgId)
+    {
+        Cleanup();
+        return _jobs.Values
+            .Where(j => j.DaisiOrgId == daisiOrgId)
+            .OrderByDescending(j => j.StartedUtc)
+            .FirstOrDefault();
+    }
+
+    /// <summary>True if a job is currently running for the org.</summary>
+    public bool HasActiveJobFor(string daisiOrgId)
+    {
+        Cleanup();
+        return _jobs.Values.Any(j => j.DaisiOrgId == daisiOrgId && !j.IsComplete);
     }
 
     private async Task RunJobAsync(

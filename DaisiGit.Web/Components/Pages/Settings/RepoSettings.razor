@@ -3,6 +3,8 @@
 @inject RepositoryService RepoService
 @inject SecretService SecretService
 @inject AccountSettingsService AccountSettingsService
+@inject RepoGroupService RepoGroupService
+@inject OrganizationService OrgService
 @inject NavigationManager Nav
 @inject IHttpClientFactory HttpClientFactory
 
@@ -89,6 +91,23 @@
                                         </ul>
                                     </div>
                                 }
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">Group</label>
+                                <select class="form-select" style="max-width: 300px;" @bind="selectedGroupId">
+                                    <option value="">— None —</option>
+                                    @foreach (var g in availableGroups)
+                                    {
+                                        <option value="@g.id">@g.Name</option>
+                                    }
+                                </select>
+                                <div class="form-text">
+                                    Section this repo appears under on the org profile.
+                                    @if (!string.IsNullOrEmpty(repo?.OwnerName))
+                                    {
+                                        <span>Manage groups in <a href="/@repo.OwnerName/settings/groups">org settings</a>.</span>
+                                    }
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -361,6 +380,10 @@
     private string? secretError;
     private bool secretSaved;
 
+    // Repo group
+    private List<RepoGroup> availableGroups = [];
+    private string selectedGroupId = "";
+
     // Merge policy
     private string autoMergeOverride = "inherit";
     private string deleteBranchOverride = "inherit";
@@ -389,12 +412,27 @@
                 defaultBranch = repo.DefaultBranch;
                 visibility = repo.Visibility;
                 isFork = !string.IsNullOrEmpty(repo.ForkedFromId);
+                selectedGroupId = repo.GroupId ?? "";
                 await LoadSecrets();
                 await LoadMergePolicyState();
+                await LoadAvailableGroupsAsync();
             }
         }
         catch { }
         loading = false;
+    }
+
+    private async Task LoadAvailableGroupsAsync()
+    {
+        if (repo == null) return;
+        try
+        {
+            var owner = await OrgService.GetBySlugAsync(repo.OwnerName);
+            if (owner == null) { availableGroups = []; return; }
+            availableGroups = (await RepoGroupService.ListAsync(owner.id))
+                .OrderBy(g => g.SortOrder).ThenBy(g => g.Name, StringComparer.OrdinalIgnoreCase).ToList();
+        }
+        catch { availableGroups = []; }
     }
 
     private async Task LoadMergePolicyState()
@@ -497,6 +535,7 @@
             repo.Description = description?.Trim();
             repo.DefaultBranch = defaultBranch.Trim();
             repo.Visibility = visibility;
+            repo.GroupId = string.IsNullOrEmpty(selectedGroupId) ? null : selectedGroupId;
             repo = await RepoService.UpdateRepositoryAsync(repo);
             visibilityChanged = false;
             saved = true;

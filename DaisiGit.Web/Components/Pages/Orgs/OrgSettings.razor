@@ -3,6 +3,7 @@
 @page "/org/{Slug}/settings"
 @inject OrganizationService OrgService
 @inject SecretService SecretService
+@inject RepoGroupService RepoGroupService
 @inject NavigationManager Navigation
 
 <PageTitle>Settings - @(org?.Name ?? "Organization") - Daisi Git</PageTitle>
@@ -25,6 +26,10 @@
                 <a class="nav-link @(activeTab == "secrets" ? "active" : "")"
                    href="/@Slug/settings/secrets">
                     <i class="fa-duotone fa-key me-1"></i> Secrets
+                </a>
+                <a class="nav-link @(activeTab == "groups" ? "active" : "")"
+                   href="/@Slug/settings/groups">
+                    <i class="fa-duotone fa-folder-tree me-1"></i> Repo Groups
                 </a>
             </div>
         </div>
@@ -76,6 +81,91 @@
                         </button>
                     </div>
                 </div>
+            }
+            else if (activeTab == "groups")
+            {
+                <h5 class="mb-3">Repo Groups</h5>
+                <p class="text-muted small">
+                    Sections shown on the org profile under <strong>Repositories</strong>.
+                    Assign repos to a group from each repo's <em>Settings → General</em>.
+                </p>
+
+                <div class="card mb-3" style="max-width: 700px;">
+                    <div class="card-body">
+                        <div class="row g-2 align-items-end">
+                            <div class="col-md-4">
+                                <label class="form-label small mb-1">Name</label>
+                                <input type="text" class="form-control form-control-sm" @bind="newGroupName" placeholder="Backend" />
+                            </div>
+                            <div class="col-md-7">
+                                <label class="form-label small mb-1">Description (optional)</label>
+                                <input type="text" class="form-control form-control-sm" @bind="newGroupDescription" placeholder="Services, libraries, ..." />
+                            </div>
+                            <div class="col-md-1 d-grid">
+                                <button class="btn btn-sm btn-success" @onclick="AddGroup" disabled="@addingGroup">
+                                    @if (addingGroup) { <span class="spinner-border spinner-border-sm"></span> } else { <text>Add</text> }
+                                </button>
+                            </div>
+                        </div>
+                        @if (!string.IsNullOrEmpty(groupError))
+                        {
+                            <div class="text-danger small mt-2">@groupError</div>
+                        }
+                    </div>
+                </div>
+
+                @if (groups.Count == 0)
+                {
+                    <div class="text-muted small">No groups yet.</div>
+                }
+                else
+                {
+                    <div class="card" style="max-width: 700px;">
+                        <ul class="list-group list-group-flush">
+                            @foreach (var g in groups)
+                            {
+                                var gid = g.id;
+                                <li class="list-group-item">
+                                    @if (editingGroupId == gid)
+                                    {
+                                        <div class="row g-2 align-items-center">
+                                            <div class="col-md-4">
+                                                <input type="text" class="form-control form-control-sm" @bind="editGroupName" />
+                                            </div>
+                                            <div class="col-md-5">
+                                                <input type="text" class="form-control form-control-sm" @bind="editGroupDescription" />
+                                            </div>
+                                            <div class="col-md-2">
+                                                <input type="number" class="form-control form-control-sm" @bind="editGroupSortOrder" title="Sort order" />
+                                            </div>
+                                            <div class="col-md-1 d-flex gap-1">
+                                                <button class="btn btn-sm btn-primary" @onclick="() => SaveGroup(gid)" title="Save"><i class="fa-solid fa-check"></i></button>
+                                                <button class="btn btn-sm btn-outline-secondary" @onclick="CancelEditGroup" title="Cancel"><i class="fa-solid fa-xmark"></i></button>
+                                            </div>
+                                        </div>
+                                    }
+                                    else
+                                    {
+                                        <div class="d-flex justify-content-between align-items-center">
+                                            <div>
+                                                <strong>@g.Name</strong>
+                                                <span class="text-muted small ms-2">order @g.SortOrder</span>
+                                                @if (!string.IsNullOrEmpty(g.Description))
+                                                {
+                                                    <div class="text-muted small">@g.Description</div>
+                                                }
+                                            </div>
+                                            <div class="d-flex gap-1">
+                                                <button class="btn btn-sm btn-outline-secondary" @onclick="() => StartEditGroup(g)" title="Edit"><i class="fa-solid fa-pen"></i></button>
+                                                <button class="btn btn-sm btn-outline-danger" @onclick="() => DeleteGroup(gid)" title="Delete"><i class="fa-solid fa-trash"></i></button>
+                                            </div>
+                                        </div>
+                                    }
+                                </li>
+                            }
+                        </ul>
+                    </div>
+                }
             }
             else if (activeTab == "secrets")
             {
@@ -148,6 +238,7 @@ else if (!loading)
     private string activeTab => SettingsTab?.ToLowerInvariant() switch
     {
         "secrets" => "secrets",
+        "groups" => "groups",
         _ => "general"
     };
 
@@ -160,6 +251,17 @@ else if (!loading)
     private bool loading = true;
     private bool saving;
     private bool saved;
+
+    // Repo groups
+    private List<RepoGroup> groups = [];
+    private string newGroupName = "";
+    private string? newGroupDescription;
+    private bool addingGroup;
+    private string? groupError;
+    private string? editingGroupId;
+    private string editGroupName = "";
+    private string? editGroupDescription;
+    private int editGroupSortOrder;
 
     // Org secrets
     private List<string> orgSecretNames = [];
@@ -182,10 +284,70 @@ else if (!loading)
                 description = org.Description;
                 orgAvatarUrl = org.AvatarUrl;
                 await LoadOrgSecrets();
+                await LoadGroups();
             }
         }
         catch { }
         loading = false;
+    }
+
+    private async Task LoadGroups()
+    {
+        if (org != null)
+            try { groups = await RepoGroupService.ListAsync(org.id); } catch { }
+    }
+
+    private async Task AddGroup()
+    {
+        if (org == null || string.IsNullOrWhiteSpace(newGroupName))
+        {
+            groupError = "Name is required.";
+            return;
+        }
+        addingGroup = true;
+        groupError = null;
+        try
+        {
+            await RepoGroupService.CreateAsync(org.id, org.AccountId, newGroupName.Trim(), newGroupDescription?.Trim());
+            newGroupName = "";
+            newGroupDescription = null;
+            await LoadGroups();
+        }
+        catch (Exception ex) { groupError = ex.Message; }
+        addingGroup = false;
+    }
+
+    private void StartEditGroup(RepoGroup g)
+    {
+        editingGroupId = g.id;
+        editGroupName = g.Name;
+        editGroupDescription = g.Description;
+        editGroupSortOrder = g.SortOrder;
+    }
+
+    private void CancelEditGroup() => editingGroupId = null;
+
+    private async Task SaveGroup(string id)
+    {
+        if (org == null) return;
+        try
+        {
+            await RepoGroupService.UpdateAsync(id, org.id, editGroupName, editGroupDescription, editGroupSortOrder);
+            editingGroupId = null;
+            await LoadGroups();
+        }
+        catch (Exception ex) { groupError = ex.Message; }
+    }
+
+    private async Task DeleteGroup(string id)
+    {
+        if (org == null) return;
+        try
+        {
+            await RepoGroupService.DeleteAsync(id, org.id);
+            await LoadGroups();
+        }
+        catch (Exception ex) { groupError = ex.Message; }
     }
 
     private async Task Save()

@@ -65,6 +65,12 @@ public static class DaisiGitApiEndpoints
         api.MapGet("/orgs", ListOrgs);
         api.MapDelete("/orgs/{slug}", DeleteOrg);
 
+        // Repo groups (org-level repo organizing)
+        api.MapPost("/orgs/{slug}/groups", CreateRepoGroup);
+        api.MapPut("/orgs/{slug}/groups/{id}", UpdateRepoGroup);
+        api.MapDelete("/orgs/{slug}/groups/{id}", DeleteRepoGroup);
+        api.MapPut("/repos/{owner}/{slug}/group", SetRepoGroup);
+
         // Org activity is intentionally on the public group — anonymous viewers see
         // only public-repo data, authenticated viewers can opt into private repos.
 
@@ -84,6 +90,7 @@ public static class DaisiGitApiEndpoints
         var pub = app.MapGroup("/api/git");
 
         pub.MapGet("/repos/{owner}/{slug}", GetRepository);
+        pub.MapGet("/orgs/{slug}/groups", ListRepoGroups);
         pub.MapGet("/orgs/{slug}/activity", GetOrgActivity);
         pub.MapGet("/repos/{owner}/{slug}/commits-in-range", GetCommitsInRange);
         pub.MapGet("/repos/{owner}/{slug}/branches", ListBranches);
@@ -1049,6 +1056,58 @@ public static class DaisiGitApiEndpoints
         return Results.NoContent();
     }
 
+    // ── Repo groups ──
+
+    private static async Task<IResult> ListRepoGroups(
+        string slug, OrganizationService orgService, RepoGroupService groupService)
+    {
+        var org = await orgService.GetBySlugAsync(slug);
+        if (org == null) return Results.NotFound();
+        return Results.Ok(await groupService.ListAsync(org.id));
+    }
+
+    private static async Task<IResult> CreateRepoGroup(
+        HttpContext ctx, string slug, RepoGroupRequest req,
+        OrganizationService orgService, RepoGroupService groupService)
+    {
+        var org = await orgService.GetBySlugAsync(slug);
+        if (org == null) return Results.NotFound();
+        var created = await groupService.CreateAsync(org.id, GetAccountId(ctx), req.Name ?? "", req.Description);
+        return Results.Created($"/api/git/orgs/{slug}/groups/{created.id}", created);
+    }
+
+    private static async Task<IResult> UpdateRepoGroup(
+        HttpContext ctx, string slug, string id, RepoGroupRequest req,
+        OrganizationService orgService, RepoGroupService groupService)
+    {
+        var org = await orgService.GetBySlugAsync(slug);
+        if (org == null) return Results.NotFound();
+        var updated = await groupService.UpdateAsync(id, org.id, req.Name, req.Description, req.SortOrder);
+        return Results.Ok(updated);
+    }
+
+    private static async Task<IResult> DeleteRepoGroup(
+        HttpContext ctx, string slug, string id,
+        OrganizationService orgService, RepoGroupService groupService)
+    {
+        var org = await orgService.GetBySlugAsync(slug);
+        if (org == null) return Results.NotFound();
+        await groupService.DeleteAsync(id, org.id);
+        return Results.NoContent();
+    }
+
+    private static async Task<IResult> SetRepoGroup(
+        HttpContext ctx, string owner, string slug, SetRepoGroupRequest req,
+        RepositoryService repoService, PermissionService permissionService)
+    {
+        var (repo, error) = await RequireWrite(ctx, owner, slug, repoService, permissionService);
+        if (error != null) return error;
+
+        repo!.GroupId = string.IsNullOrEmpty(req.GroupId) ? null : req.GroupId;
+        await repoService.UpdateRepositoryAsync(repo);
+        return Results.Ok(new { repo.GroupId });
+    }
+
     // ── Org activity ──
 
     private static async Task<IResult> GetOrgActivity(
@@ -1427,6 +1486,10 @@ public static class DaisiGitApiEndpoints
 
 public record CreateRepoRequest(string Name, string? Description, string? Owner = null, GitRepoVisibility Visibility = GitRepoVisibility.Private, StorageProvider? StorageProvider = null);
 public record SetStorageProviderRequest(StorageProvider Provider);
+
+public record RepoGroupRequest(string? Name, string? Description, int? SortOrder);
+
+public record SetRepoGroupRequest(string? GroupId);
 
 public record SetMergePolicyRequest(
     bool AutoMergeEnabled,

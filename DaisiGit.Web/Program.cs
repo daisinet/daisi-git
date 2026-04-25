@@ -60,6 +60,7 @@ builder.Services.AddScoped<CommentService>();
 builder.Services.AddScoped<MergeService>();
 builder.Services.AddScoped<OrganizationService>();
 builder.Services.AddScoped<TeamService>();
+builder.Services.AddScoped<RepoGroupService>();
 builder.Services.AddScoped<PermissionService>();
 builder.Services.AddScoped<ReviewService>();
 builder.Services.AddScoped<AccountSettingsService>();

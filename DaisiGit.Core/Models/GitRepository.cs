@@ -60,6 +60,9 @@ public class GitRepository
     /// <summary>Per-repo override for the account's allow-squash-merge default. Null = inherit.</summary>
     public bool? AllowSquashMerge { get; set; }
 
+    /// <summary>Optional repo group on the org profile (id of a RepoGroup). Null = ungrouped.</summary>
+    public string? GroupId { get; set; }
+
     public DateTime CreatedUtc { get; set; } = DateTime.UtcNow;
     public DateTime? UpdatedUtc { get; set; }
 }

@@ -40,6 +40,21 @@ public class WorkflowEngine(
             foreach (var (key, value) in secrets)
                 execution.Context[key] = value;
 
+            // Inject vars (non-secret config) — same precedence as secrets.
+            try
+            {
+                var repo = await repoService.GetRepositoryAsync(execution.RepositoryId, execution.AccountId);
+                if (repo != null)
+                {
+                    var org = await cosmo.GetOrganizationBySlugAsync(repo.OwnerName);
+                    if (org?.Vars is { Count: > 0 })
+                        foreach (var (k, v) in org.Vars) execution.Context[$"vars.{k}"] = v;
+                    if (repo.Vars is { Count: > 0 })
+                        foreach (var (k, v) in repo.Vars) execution.Context[$"vars.{k}"] = v;
+                }
+            }
+            catch { /* vars are best-effort — don't fail the workflow if lookup throws */ }
+
             // Inject env variables
             if (env != null)
             {

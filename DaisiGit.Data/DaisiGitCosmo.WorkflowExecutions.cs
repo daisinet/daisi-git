@@ -47,7 +47,9 @@ public partial class DaisiGitCosmo
     }
 
     /// <summary>
-    /// Gets pending executions: Running with NextRunAt in the past (or null).
+    /// Gets pending executions: Running with NextRunAt set and in the past.
+    /// Worker clears NextRunAt when it picks an execution up, which is what excludes
+    /// it from this query while it is actively being processed.
     /// Cross-partition query since the background worker processes all accounts.
     /// </summary>
     public async Task<List<WorkflowExecution>> GetPendingWorkflowExecutionsAsync(int limit = 50)
@@ -55,7 +57,7 @@ public partial class DaisiGitCosmo
         var container = await GetContainerAsync(WorkflowExecutionsContainerName);
         var now = DateTime.UtcNow;
         var query = new QueryDefinition(
-            "SELECT TOP @limit * FROM c WHERE c.Type = 'WorkflowExecution' AND c.Status = 'Running' AND (c.NextRunAt = null OR c.NextRunAt <= @now)")
+            "SELECT TOP @limit * FROM c WHERE c.Type = 'WorkflowExecution' AND c.Status = 'Running' AND c.NextRunAt <= @now")
             .WithParameter("@limit", limit)
             .WithParameter("@now", now);
 

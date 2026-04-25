@@ -969,14 +969,21 @@ public class WorkflowEngine(
             return;
         }
 
-        var username = execution.Context.GetValueOrDefault($"secrets.{usernameKey}", "");
-        var password = execution.Context.GetValueOrDefault($"secrets.{passwordKey}", "");
+        var username = execution.Context.GetValueOrDefault($"secrets.{usernameKey}", "").Trim();
+        var password = execution.Context.GetValueOrDefault($"secrets.{passwordKey}", "").Trim();
         if (string.IsNullOrEmpty(username) || string.IsNullOrEmpty(password))
         {
             result.Success = false;
             result.Error = $"Could not resolve secrets '{usernameKey}' and/or '{passwordKey}'. Add them in Settings > Secrets.";
             return;
         }
+
+        // Azure's portal shows the FTPS-protocol username as "{sitename}\{user}" or
+        // "{sitename}\${appname}", but Kudu /api/zipdeploy uses HTTP Basic Auth which
+        // does not accept the site prefix. Strip it so users can paste the portal value
+        // verbatim into the secret.
+        var backslashIdx = username.IndexOf('\\');
+        if (backslashIdx >= 0) username = username[(backslashIdx + 1)..];
 
         // Build ZIP — from workspace (if Checkout+Build ran) or from git objects
         using var zipStream = new MemoryStream();

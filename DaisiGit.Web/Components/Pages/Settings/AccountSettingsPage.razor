@@ -8,7 +8,7 @@
     <span class="text-muted">/</span> Account
 </h4>
 
-<div class="card" style="max-width: 600px;">
+<div class="card mb-3" style="max-width: 600px;">
     <div class="card-header fw-semibold">Default Storage Provider</div>
     <div class="card-body">
         <p class="text-muted small">
@@ -18,22 +18,63 @@
             <option value="DaisiDrive">Daisi Drive</option>
             <option value="AzureBlob">Azure Blob Storage</option>
         </select>
-
-        @if (!string.IsNullOrEmpty(error))
-        {
-            <div class="alert alert-danger mt-3">@error</div>
-        }
-        @if (saved)
-        {
-            <div class="alert alert-success mt-3">Settings saved.</div>
-        }
     </div>
 </div>
+
+<div class="card mb-3" style="max-width: 600px;">
+    <div class="card-header fw-semibold">Pull Request Merge Policy</div>
+    <div class="card-body">
+        <p class="text-muted small">
+            Defaults for every repo in this account. Each repo can override these in its Settings → Merge policy tab.
+        </p>
+
+        <div class="form-check form-switch mb-2">
+            <input class="form-check-input" type="checkbox" id="autoMerge" checked="@autoMerge" @onchange="@(e => { autoMerge = (bool)(e.Value ?? false); SaveMergePolicy(); })" />
+            <label class="form-check-label" for="autoMerge">
+                <span class="fw-semibold">Allow auto-merge</span><br/>
+                <span class="text-muted small">PRs created via the API or CLI merge as soon as they're mergeable, no separate <code>gh pr merge</code> needed.</span>
+            </label>
+        </div>
+
+        <div class="form-check form-switch mb-2">
+            <input class="form-check-input" type="checkbox" id="deleteBranch" checked="@deleteBranch" @onchange="@(e => { deleteBranch = (bool)(e.Value ?? false); SaveMergePolicy(); })" />
+            <label class="form-check-label" for="deleteBranch">
+                <span class="fw-semibold">Automatically delete head branches</span><br/>
+                <span class="text-muted small">After a PR is merged, delete the source branch (default branch is always kept).</span>
+            </label>
+        </div>
+
+        <hr class="my-3" />
+
+        <div class="text-muted small mb-2">Allowed merge strategies</div>
+        <div class="form-check">
+            <input class="form-check-input" type="checkbox" id="allowMerge" checked="@allowMerge" @onchange="@(e => { allowMerge = (bool)(e.Value ?? false); SaveMergePolicy(); })" />
+            <label class="form-check-label" for="allowMerge">Merge commits</label>
+        </div>
+        <div class="form-check">
+            <input class="form-check-input" type="checkbox" id="allowSquash" checked="@allowSquash" @onchange="@(e => { allowSquash = (bool)(e.Value ?? false); SaveMergePolicy(); })" />
+            <label class="form-check-label" for="allowSquash">Squash merging</label>
+        </div>
+    </div>
+</div>
+
+@if (!string.IsNullOrEmpty(error))
+{
+    <div class="alert alert-danger" style="max-width: 600px;">@error</div>
+}
+@if (saved)
+{
+    <div class="alert alert-success" style="max-width: 600px;">Settings saved.</div>
+}
 
 @code {
     [CascadingParameter(Name = "AccountId")] string AccountId { get; set; } = "";
 
     private string storageProvider = "DaisiDrive";
+    private bool autoMerge;
+    private bool deleteBranch;
+    private bool allowMerge = true;
+    private bool allowSquash = true;
     private string? error;
     private bool saved;
     private bool loaded;
@@ -46,6 +87,10 @@
         {
             var settings = await SettingsService.GetSettingsAsync(AccountId);
             storageProvider = settings.DefaultStorageProvider.ToString();
+            autoMerge = settings.AutoMergeEnabled;
+            deleteBranch = settings.DeleteBranchOnMerge;
+            allowMerge = settings.AllowMergeCommit;
+            allowSquash = settings.AllowSquashMerge;
         }
         catch { }
     }
@@ -53,8 +98,7 @@
     private async Task OnStorageChange(ChangeEventArgs e)
     {
         var value = e.Value?.ToString() ?? "DaisiDrive";
-        error = null;
-        saved = false;
+        error = null; saved = false;
         try
         {
             var provider = Enum.Parse<StorageProvider>(value);
@@ -62,9 +106,24 @@
             storageProvider = value;
             saved = true;
         }
-        catch (Exception ex)
+        catch (Exception ex) { error = ex.Message; }
+    }
+
+    private async Task SaveMergePolicy()
+    {
+        error = null; saved = false;
+        if (!allowMerge && !allowSquash)
         {
-            error = ex.Message;
+            error = "At least one merge strategy must be allowed.";
+            // revert the box that was just unticked — easiest fix is to flip both back on
+            allowMerge = true;
+            return;
         }
+        try
+        {
+            await SettingsService.SetMergePolicyAsync(AccountId, autoMerge, deleteBranch, allowMerge, allowSquash);
+            saved = true;
+        }
+        catch (Exception ex) { error = ex.Message; }
     }
 }

@@ -68,6 +68,8 @@ public static class DaisiGitApiEndpoints
         // Account settings (require auth)
         api.MapGet("/account/settings", GetAccountSettings);
         api.MapPut("/account/settings/storage", SetDefaultStorageProvider);
+        api.MapPut("/account/settings/merge-policy", SetAccountMergePolicy);
+        api.MapPut("/repos/{owner}/{slug}/merge-policy", SetRepoMergePolicy);
 
 #if DEBUG
         // Debug endpoints (auth required, dev only)
@@ -583,8 +585,10 @@ public static class DaisiGitApiEndpoints
 
     private static async Task<IResult> CreatePullRequest(
         HttpContext ctx, string owner, string slug, CreatePrRequest req,
-        RepositoryService repoService, PullRequestService prService, PermissionService permissionService,
-        GitEventService events)
+        RepositoryService repoService, PullRequestService prService,
+        MergeService mergeService, GitRefService refService,
+        AccountSettingsService settingsService,
+        PermissionService permissionService, GitEventService events)
     {
         var (repo, error) = await RequireWrite(ctx, owner, slug, repoService, permissionService);
         if (error != null) return error;
@@ -602,6 +606,24 @@ public static class DaisiGitApiEndpoints
                 ["pr.sourceBranch"] = pr.SourceBranch,
                 ["pr.targetBranch"] = pr.TargetBranch
             });
+
+        // Auto-merge: if the effective policy says so, try to merge immediately. Failures
+        // (e.g. branch protections, non-fast-forward) are silent — the PR is still created
+        // and the user can merge manually. Strategy preference: merge-commit, fall back to
+        // squash if merge-commit is disabled.
+        var policy = await settingsService.GetMergePolicyAsync(repo);
+        if (policy.AutoMergeEnabled)
+        {
+            var strategy = policy.AllowMergeCommit ? MergeStrategy.Merge
+                : policy.AllowSquashMerge ? MergeStrategy.Squash
+                : (MergeStrategy?)null;
+            if (strategy != null)
+            {
+                _ = await PerformMergeAsync(pr, repo, GetUserName(ctx), GetUserId(ctx),
+                    strategy.Value, policy, mergeService, refService, events);
+                pr = await prService.GetByNumberAsync(repo.id, pr.Number) ?? pr;
+            }
+        }
 
         return Results.Created($"/api/git/repos/{owner}/{slug}/pulls/{pr.Number}", pr);
     }
@@ -643,6 +665,7 @@ public static class DaisiGitApiEndpoints
         HttpContext ctx, string owner, string slug, int number,
         MergePrRequest? req,
         RepositoryService repoService, PullRequestService prService, MergeService mergeService,
+        GitRefService refService, AccountSettingsService settingsService,
         PermissionService permissionService, GitEventService events)
     {
         var (repo, error) = await RequireWrite(ctx, owner, slug, repoService, permissionService);
@@ -657,42 +680,68 @@ public static class DaisiGitApiEndpoints
             _ => MergeStrategy.Merge
         };
 
+        var policy = await settingsService.GetMergePolicyAsync(repo);
+        if (strategy == MergeStrategy.Merge && !policy.AllowMergeCommit)
+            return Results.Conflict(new MergeResult { Success = false, Error = "Merge commits are disabled for this repository." });
+        if (strategy == MergeStrategy.Squash && !policy.AllowSquashMerge)
+            return Results.Conflict(new MergeResult { Success = false, Error = "Squash merges are disabled for this repository." });
+
         var userName = GetUserName(ctx);
-        var result = await mergeService.MergeAsync(pr, repo, userName, $"{userName}@daisinet", strategy);
-
-        if (result.Success)
-        {
-            await events.EmitAsync(repo.AccountId, repo.id, GitTriggerType.PullRequestMerged,
-                GetUserId(ctx), userName, new Dictionary<string, string>
-                {
-                    ["pr.number"] = pr.Number.ToString(),
-                    ["pr.title"] = pr.Title,
-                    ["pr.sourceBranch"] = pr.SourceBranch,
-                    ["pr.targetBranch"] = pr.TargetBranch,
-                    ["pr.mergeCommitSha"] = result.MergeCommitSha ?? "",
-                    ["pr.mergeStrategy"] = strategy.ToString()
-                });
-
-            // A merge writes a new commit to the target branch, so it's also a push event
-            // for that branch — fire PushToRef so push-triggered workflows run.
-            await events.EmitAsync(repo.AccountId, repo.id, GitTriggerType.PushToRef,
-                GetUserId(ctx), userName, new Dictionary<string, string>
-                {
-                    ["push.ref"] = $"refs/heads/{pr.TargetBranch}",
-                    ["push.branch"] = pr.TargetBranch,
-                    ["push.tag"] = "",
-                    ["push.oldSha"] = "", // unknown without a separate query; merge doesn't track previous tip
-                    ["push.newSha"] = result.MergeCommitSha ?? "",
-                    ["push.isCreate"] = "False",
-                    ["push.isDelete"] = "False",
-                    ["push.source"] = "merge",
-                    ["pr.number"] = pr.Number.ToString()
-                });
-        }
+        var result = await PerformMergeAsync(pr, repo, userName, GetUserId(ctx), strategy,
+            policy, mergeService, refService, events);
 
         return result.Success
             ? Results.Ok(result)
             : Results.Conflict(result);
+    }
+
+    /// <summary>
+    /// Performs the merge, fires the PullRequestMerged + PushToRef events, and applies the
+    /// delete-branch-on-merge policy. Shared by the explicit merge endpoint and auto-merge.
+    /// </summary>
+    private static async Task<MergeResult> PerformMergeAsync(
+        PullRequest pr, GitRepository repo, string userName, string userId,
+        MergeStrategy strategy, MergePolicy policy,
+        MergeService mergeService, GitRefService refService, GitEventService events)
+    {
+        var result = await mergeService.MergeAsync(pr, repo, userName, $"{userName}@daisinet", strategy);
+        if (!result.Success) return result;
+
+        await events.EmitAsync(repo.AccountId, repo.id, GitTriggerType.PullRequestMerged,
+            userId, userName, new Dictionary<string, string>
+            {
+                ["pr.number"] = pr.Number.ToString(),
+                ["pr.title"] = pr.Title,
+                ["pr.sourceBranch"] = pr.SourceBranch,
+                ["pr.targetBranch"] = pr.TargetBranch,
+                ["pr.mergeCommitSha"] = result.MergeCommitSha ?? "",
+                ["pr.mergeStrategy"] = strategy.ToString()
+            });
+
+        await events.EmitAsync(repo.AccountId, repo.id, GitTriggerType.PushToRef,
+            userId, userName, new Dictionary<string, string>
+            {
+                ["push.ref"] = $"refs/heads/{pr.TargetBranch}",
+                ["push.branch"] = pr.TargetBranch,
+                ["push.tag"] = "",
+                ["push.oldSha"] = "",
+                ["push.newSha"] = result.MergeCommitSha ?? "",
+                ["push.isCreate"] = "False",
+                ["push.isDelete"] = "False",
+                ["push.source"] = "merge",
+                ["pr.number"] = pr.Number.ToString()
+            });
+
+        // Delete the source branch when policy says so. Never delete the default branch
+        // (a PR sourced from the default branch is unusual but possible — be defensive).
+        if (policy.DeleteBranchOnMerge
+            && !string.Equals(pr.SourceBranch, repo.DefaultBranch, StringComparison.OrdinalIgnoreCase))
+        {
+            try { await refService.DeleteRefAsync(repo.id, $"refs/heads/{pr.SourceBranch}"); }
+            catch { /* best-effort; the merge already succeeded */ }
+        }
+
+        return result;
     }
 
     // ── Comment endpoints ──
@@ -997,6 +1046,10 @@ public static class DaisiGitApiEndpoints
         return Results.Ok(new
         {
             settings.DefaultStorageProvider,
+            settings.AutoMergeEnabled,
+            settings.DeleteBranchOnMerge,
+            settings.AllowMergeCommit,
+            settings.AllowSquashMerge,
             settings.CreatedUtc,
             settings.UpdatedUtc
         });
@@ -1011,6 +1064,51 @@ public static class DaisiGitApiEndpoints
         {
             settings.DefaultStorageProvider,
             settings.UpdatedUtc
+        });
+    }
+
+    private static async Task<IResult> SetAccountMergePolicy(
+        HttpContext ctx, SetMergePolicyRequest req, AccountSettingsService settingsService)
+    {
+        if (!req.AllowMergeCommit && !req.AllowSquashMerge)
+            return Results.BadRequest(new { error = "At least one merge strategy must be allowed." });
+
+        var settings = await settingsService.SetMergePolicyAsync(
+            GetAccountId(ctx),
+            req.AutoMergeEnabled, req.DeleteBranchOnMerge,
+            req.AllowMergeCommit, req.AllowSquashMerge);
+        return Results.Ok(new
+        {
+            settings.AutoMergeEnabled,
+            settings.DeleteBranchOnMerge,
+            settings.AllowMergeCommit,
+            settings.AllowSquashMerge,
+            settings.UpdatedUtc
+        });
+    }
+
+    private static async Task<IResult> SetRepoMergePolicy(
+        HttpContext ctx, string owner, string slug, SetRepoMergePolicyRequest req,
+        RepositoryService repoService, PermissionService permissionService)
+    {
+        var (repo, error) = await RequireWrite(ctx, owner, slug, repoService, permissionService);
+        if (error != null) return error;
+
+        // If both strategies are explicitly disabled, refuse — would brick merging.
+        if (req.AllowMergeCommit == false && req.AllowSquashMerge == false)
+            return Results.BadRequest(new { error = "At least one merge strategy must be allowed." });
+
+        repo!.AutoMergeEnabled = req.AutoMergeEnabled;
+        repo.DeleteBranchOnMerge = req.DeleteBranchOnMerge;
+        repo.AllowMergeCommit = req.AllowMergeCommit;
+        repo.AllowSquashMerge = req.AllowSquashMerge;
+        await repoService.UpdateRepositoryAsync(repo);
+        return Results.Ok(new
+        {
+            repo.AutoMergeEnabled,
+            repo.DeleteBranchOnMerge,
+            repo.AllowMergeCommit,
+            repo.AllowSquashMerge
         });
     }
 
@@ -1255,6 +1353,18 @@ public static class DaisiGitApiEndpoints
 
 public record CreateRepoRequest(string Name, string? Description, string? Owner = null, GitRepoVisibility Visibility = GitRepoVisibility.Private, StorageProvider? StorageProvider = null);
 public record SetStorageProviderRequest(StorageProvider Provider);
+
+public record SetMergePolicyRequest(
+    bool AutoMergeEnabled,
+    bool DeleteBranchOnMerge,
+    bool AllowMergeCommit,
+    bool AllowSquashMerge);
+
+public record SetRepoMergePolicyRequest(
+    bool? AutoMergeEnabled,
+    bool? DeleteBranchOnMerge,
+    bool? AllowMergeCommit,
+    bool? AllowSquashMerge);
 public record CreateIssueRequest(string Title, string? Description, List<string>? Labels = null);
 public record UpdateIssueRequest(string? Title = null, string? Description = null, string? Action = null);
 public record CreatePrRequest(string Title, string? Description, string SourceBranch, string TargetBranch, List<string>? Labels = null);

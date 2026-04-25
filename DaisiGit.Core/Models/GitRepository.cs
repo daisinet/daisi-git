@@ -37,6 +37,19 @@ public class GitRepository
     public string? ForkedFromSlug { get; set; }
     public int StarCount { get; set; }
     public int ForkCount { get; set; }
+
+    /// <summary>Per-repo override for the account's auto-merge default. Null = inherit.</summary>
+    public bool? AutoMergeEnabled { get; set; }
+
+    /// <summary>Per-repo override for the account's delete-branch-on-merge default. Null = inherit.</summary>
+    public bool? DeleteBranchOnMerge { get; set; }
+
+    /// <summary>Per-repo override for the account's allow-merge-commit default. Null = inherit.</summary>
+    public bool? AllowMergeCommit { get; set; }
+
+    /// <summary>Per-repo override for the account's allow-squash-merge default. Null = inherit.</summary>
+    public bool? AllowSquashMerge { get; set; }
+
     public DateTime CreatedUtc { get; set; } = DateTime.UtcNow;
     public DateTime? UpdatedUtc { get; set; }
 }

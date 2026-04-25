@@ -3,6 +3,7 @@
 @inject OrganizationService OrgService
 @inject WorkflowService WorkflowService
 @inject BrowseService BrowseService
+@using DaisiGit.Core.Git
 
 <PageTitle>Dashboard - Daisi Git</PageTitle>
 
@@ -50,8 +51,8 @@ else
         <div class="col-md-3">
             <div class="card text-center">
                 <div class="card-body py-3">
-                    <div class="text-muted small">Events (30d)</div>
-                    <div class="fs-3 fw-bold">@recentEvents.Count</div>
+                    <div class="text-muted small">Commits (30d)</div>
+                    <div class="fs-3 fw-bold">@dailyCounts.Sum()</div>
                 </div>
             </div>
         </div>
@@ -62,7 +63,7 @@ else
         <div class="col-md-8">
             <div class="card">
                 <div class="card-header">
-                    <i class="fa-duotone fa-chart-bar me-1"></i> Activity (last 30 days)
+                    <i class="fa-duotone fa-chart-bar me-1"></i> Commits (last 30 days)
                 </div>
                 <div class="card-body">
                     @if (dailyCounts.Length > 0 && dailyCounts.Any(c => c > 0))
@@ -76,7 +77,7 @@ else
                                 var y = 110 - barHeight;
                                 <rect x="@x" y="@y" width="16" height="@barHeight" rx="2"
                                       fill="var(--bs-primary)" opacity="0.7">
-                                    <title>@chartDates[i].ToString("MMM d"): @dailyCounts[i] event(s)</title>
+                                    <title>@chartDates[i].ToString("MMM d"): @dailyCounts[i] commit(s)</title>
                                 </rect>
                             }
                             <!-- X-axis labels (rendered as foreignObject to avoid Razor <text> conflict) -->
@@ -90,48 +91,38 @@ else
                     }
                     else
                     {
-                        <div class="text-center text-muted py-4">No activity in the last 30 days</div>
+                        <div class="text-center text-muted py-4">No commit activity in the last 30 days</div>
                     }
                 </div>
             </div>
 
-            <!-- Recent activity -->
+            <!-- Recent commits across all repos -->
             <div class="card mt-3">
                 <div class="card-header">
-                    <i class="fa-duotone fa-bolt me-1"></i> Recent Activity
+                    <i class="fa-duotone fa-code-commit me-1"></i> Recent Commits
                 </div>
                 <div class="card-body p-0">
-                    @if (recentEvents.Count == 0)
+                    @if (recentCommits.Count == 0)
                     {
-                        <div class="text-center text-muted py-4">No recent activity</div>
+                        <div class="text-center text-muted py-4">No recent commits</div>
                     }
                     else
                     {
                         <div class="list-group list-group-flush">
-                            @foreach (var evt in recentEvents.Take(15))
+                            @foreach (var c in recentCommits)
                             {
-                                <div class="list-group-item py-2">
+                                <a href="/@c.Owner/@c.RepoSlug/commit/@c.Sha" class="list-group-item list-group-item-action py-2 text-decoration-none">
                                     <div class="d-flex align-items-center gap-2">
-                                        <span class="badge bg-@EventColor(evt.EventType)">@EventIcon(evt.EventType)</span>
-                                        <div>
-                                            <span class="fw-semibold small">@evt.ActorName</span>
-                                            <span class="text-muted small">@EventVerb(evt.EventType)</span>
-                                            @if (evt.Payload.TryGetValue("pr.title", out var prTitle))
-                                            {
-                                                <span class="small">@prTitle</span>
-                                            }
-                                            else if (evt.Payload.TryGetValue("issue.title", out var issueTitle))
-                                            {
-                                                <span class="small">@issueTitle</span>
-                                            }
-                                            else if (evt.Payload.TryGetValue("push.branch", out var branch))
-                                            {
-                                                <code class="small">@branch</code>
-                                            }
+                                        <code class="text-muted small" style="min-width:5em;">@c.ShortSha</code>
+                                        <div class="flex-grow-1">
+                                            <div class="small fw-semibold">@c.MessageFirstLine</div>
+                                            <div class="text-muted small">
+                                                @c.Owner/@c.RepoSlug · @c.AuthorName
+                                            </div>
                                         </div>
-                                        <span class="text-muted small ms-auto">@FormatRelative(evt.CreatedUtc)</span>
+                                        <span class="text-muted small ms-auto">@FormatRelative(c.AuthorDateUtc)</span>
                                     </div>
-                                </div>
+                                </a>
                             }
                         </div>
                     }
@@ -212,11 +203,14 @@ else
     private List<GitRepository> repositories = [];
     private List<GitOrganization> orgs = [];
     private List<OrgMember> members = [];
-    private List<GitEvent> recentEvents = [];
+    private List<RecentCommit> recentCommits = [];
     private int totalMembers;
     private int[] dailyCounts = [];
     private DateTime[] chartDates = [];
     private bool loading = true;
+
+    private record RecentCommit(string Owner, string RepoSlug, string Sha, string ShortSha,
+        string MessageFirstLine, string AuthorName, DateTime AuthorDateUtc);
 
     protected override async Task OnParametersSetAsync()
     {
@@ -241,21 +235,13 @@ else
             }
             totalMembers = members.Count;
 
-            // Collect recent events across all repos
-            recentEvents = [];
-            foreach (var repo in repositories.Take(20))
-            {
-                try
-                {
-                    var events = await WorkflowService.ListEventsAsync(repo.id, 50);
-                    recentEvents.AddRange(events);
-                }
-                catch { }
-            }
-            recentEvents = recentEvents.OrderByDescending(e => e.CreatedUtc).Take(50).ToList();
-
-            // Build 30-day activity chart
+            // 30-day commit chart from per-repo rollups (no log walk required).
             BuildActivityChart();
+
+            // Recent commits: walk the default branch of each repo that had a commit in the
+            // window, take a few most recent each, then merge across repos. Bounded by
+            // taking only repos that had any activity in the window.
+            await BuildRecentCommitsAsync();
         }
         catch { }
         loading = false;
@@ -268,12 +254,53 @@ else
         chartDates = Enumerable.Range(0, days).Select(i => today.AddDays(-days + 1 + i)).ToArray();
         dailyCounts = new int[days];
 
-        foreach (var evt in recentEvents)
+        foreach (var repo in repositories)
         {
-            var dayIndex = (evt.CreatedUtc.Date - chartDates[0]).Days;
-            if (dayIndex >= 0 && dayIndex < days)
-                dailyCounts[dayIndex]++;
+            if (repo.CommitCountsByDate is not { Count: > 0 } map) continue;
+            foreach (var (dateKey, count) in map)
+            {
+                if (!DateTime.TryParse(dateKey, out var d)) continue;
+                var idx = (d.Date - chartDates[0]).Days;
+                if (idx >= 0 && idx < days)
+                    dailyCounts[idx] += count;
+            }
         }
+    }
+
+    private async Task BuildRecentCommitsAsync()
+    {
+        var cutoff = DateTime.UtcNow.AddDays(-30);
+        var recent = repositories
+            .Where(r => r.CommitCountsByDate is { Count: > 0 } &&
+                        r.CommitCountsByDate.Any(kv =>
+                            DateTime.TryParse(kv.Key, out var d) && d >= cutoff))
+            .OrderByDescending(r => r.UpdatedUtc ?? r.CreatedUtc)
+            .Take(15)
+            .ToList();
+
+        var collected = new List<RecentCommit>();
+        foreach (var repo in recent)
+        {
+            try
+            {
+                var headSha = await BrowseService.ResolveRefAsync(repo.id, repo.DefaultBranch);
+                if (headSha == null) continue;
+                var log = await BrowseService.GetCommitLogAsync(repo.id, headSha, 5);
+                foreach (var c in log)
+                {
+                    collected.Add(new RecentCommit(
+                        repo.OwnerName, repo.Slug,
+                        c.Sha, c.ShortSha, c.MessageFirstLine,
+                        c.AuthorName, c.AuthorDate.UtcDateTime));
+                }
+            }
+            catch { }
+        }
+
+        recentCommits = collected
+            .OrderByDescending(c => c.AuthorDateUtc)
+            .Take(15)
+            .ToList();
     }
 
     private static string EventColor(GitTriggerType t) => t switch

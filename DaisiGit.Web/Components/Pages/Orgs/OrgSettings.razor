@@ -240,7 +240,7 @@
                     <div class="card-body">
                         <div class="mb-3">
                             <label class="form-label small">GitHub organization</label>
-                            <input type="text" class="form-control form-control-sm" @bind="ghOrg" placeholder="daisinet" />
+                            <input type="text" class="form-control form-control-sm" @bind="ghOrg" />
                         </div>
                         <div class="mb-3">
                             <label class="form-label small">Personal access token <span class="text-muted">(optional, required for private repos)</span></label>
@@ -482,7 +482,7 @@ else if (!loading)
                 // Pick up an in-flight (or recently-finished) bulk-import job so the page
                 // doesn't lose progress on navigation. Polling kicks back in if it's still
                 // running.
-                var existingJob = GitHubImporter.GetMostRecentJobFor(org.id);
+                var existingJob = await GitHubImporter.GetMostRecentJobForAsync(org.id);
                 if (existingJob != null)
                 {
                     importJob = existingJob;

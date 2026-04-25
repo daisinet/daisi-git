@@ -17,25 +17,104 @@ namespace DaisiGit.Services;
 public class GitHubBulkImportService(
     IHttpClientFactory httpFactory,
     IServiceScopeFactory scopeFactory,
+    DaisiGit.Data.DaisiGitCosmo cosmo,
     ILogger<GitHubBulkImportService> logger)
 {
     private static readonly TimeSpan JobRetention = TimeSpan.FromHours(1);
     private const int MaxReposPerJob = 200;
 
     private readonly ConcurrentDictionary<string, GitHubImportJob> _jobs = new();
+    private bool _orphanScanDone;
+    private readonly SemaphoreSlim _orphanScanLock = new(1, 1);
+
+    /// <summary>
+    /// On the first call after process start, marks any persisted job that's still in
+    /// "running" state as orphaned. The actual import work runs in Task.Run and dies with
+    /// the process, so a not-finished job in Cosmos after a restart is by definition dead.
+    /// We don't auto-resume because the GitHub PAT was never persisted.
+    /// </summary>
+    private async Task EnsureOrphanScanAsync()
+    {
+        if (_orphanScanDone) return;
+        await _orphanScanLock.WaitAsync();
+        try
+        {
+            if (_orphanScanDone) return;
+            try
+            {
+                var incomplete = await cosmo.GetIncompleteGitHubImportJobsAsync();
+                foreach (var job in incomplete)
+                {
+                    job.FinishedUtc = DateTime.UtcNow;
+                    foreach (var item in job.Items)
+                    {
+                        if (item.Status is "Pending" or "InProgress")
+                        {
+                            item.Status = "Failed";
+                            item.Error = "Server restarted before this import finished. Re-run the import to resume.";
+                        }
+                    }
+                    await cosmo.UpsertGitHubImportJobAsync(job);
+                }
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Orphan scan for GitHub import jobs failed");
+            }
+            _orphanScanDone = true;
+        }
+        finally { _orphanScanLock.Release(); }
+    }
+
+    private async Task PersistAsync(GitHubImportJob job)
+    {
+        try { await cosmo.UpsertGitHubImportJobAsync(job); }
+        catch (Exception ex) { logger.LogWarning(ex, "Persist of import job {JobId} failed", job.Id); }
+    }
 
     /// <summary>
     /// Starts a job. Returns a job id that can be polled via <see cref="GetJob"/>.
     /// </summary>
+    /// <summary>
+    /// GitHub source orgs whose name is reserved — only members of the matching daisi-git
+    /// org can use them as a source. Prevents a stranger creating a new daisi-git org and
+    /// bulk-cloning every public daisinet repo into it.
+    /// </summary>
+    private static readonly HashSet<string> ProtectedSourceOrgs = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "daisinet"
+    };
+
     public async Task<GitHubImportJob> StartAsync(
         string daisiOrgId, string daisiOrgSlug, string accountId, string actorUserId, string actorUserName,
         string githubOrg, string? githubToken, bool includePrivate,
         GitRepoVisibility defaultPublicVisibility, GitRepoVisibility defaultPrivateVisibility,
         StorageProvider? storageProvider)
     {
+        await EnsureOrphanScanAsync();
+
+        // Restrict imports from a protected source org to admins of the matching daisi-git
+        // org. Anyone else (or anyone trying to land it in a different daisi-git org) is
+        // refused. Prevents a stranger creating a new daisi-git org and bulk-cloning every
+        // public daisinet repo into it.
+        if (ProtectedSourceOrgs.Contains(githubOrg))
+        {
+            if (!string.Equals(daisiOrgSlug, githubOrg, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException(
+                    $"Importing from GitHub org '{githubOrg}' is reserved for the matching daisi-git org.");
+
+            using var scope = scopeFactory.CreateScope();
+            var orgService = scope.ServiceProvider.GetRequiredService<OrganizationService>();
+            var members = await orgService.GetMembersAsync(daisiOrgId);
+            var actor = members.FirstOrDefault(m => m.UserId == actorUserId);
+            if (actor == null || (actor.Role != GitRole.Admin && actor.Role != GitRole.Owner))
+                throw new InvalidOperationException(
+                    $"Only admins of the '{githubOrg}' org may import from GitHub org '{githubOrg}'.");
+        }
+
         // Refuse to start a second job against the same daisi-git org. The caller can use
         // GetMostRecentJobFor to surface the running one in the UI.
-        if (HasActiveJobFor(daisiOrgId))
+        if (await HasActiveJobForAsync(daisiOrgId))
             throw new InvalidOperationException(
                 "An import is already running for this organization. Wait for it to finish before starting another.");
 
@@ -60,6 +139,7 @@ public class GitHubBulkImportService(
             }).ToList()
         };
         _jobs[job.Id] = job;
+        await PersistAsync(job);
 
         // Run in background; the request returns immediately with the job's planned items.
         _ = Task.Run(() => RunJobAsync(job, accountId, actorUserId, actorUserName,
@@ -76,24 +156,28 @@ public class GitHubBulkImportService(
     }
 
     /// <summary>
-    /// Returns the most recent job for an org, or null if none. Includes both running
-    /// and recently-finished jobs (within the retention window) so the import page can
-    /// pick up where the user left off after navigation.
+    /// Returns the most recent job for an org. Checks the in-memory cache first, then
+    /// Cosmos so jobs from before a process restart are still visible (read-only, since
+    /// orphans get marked Failed by EnsureOrphanScanAsync).
     /// </summary>
-    public GitHubImportJob? GetMostRecentJobFor(string daisiOrgId)
+    public async Task<GitHubImportJob?> GetMostRecentJobForAsync(string daisiOrgId)
     {
+        await EnsureOrphanScanAsync();
         Cleanup();
-        return _jobs.Values
+        var inMem = _jobs.Values
             .Where(j => j.DaisiOrgId == daisiOrgId)
             .OrderByDescending(j => j.StartedUtc)
             .FirstOrDefault();
+        if (inMem != null) return inMem;
+        try { return await cosmo.GetMostRecentGitHubImportJobAsync(daisiOrgId); }
+        catch { return null; }
     }
 
     /// <summary>True if a job is currently running for the org.</summary>
-    public bool HasActiveJobFor(string daisiOrgId)
+    public async Task<bool> HasActiveJobForAsync(string daisiOrgId)
     {
-        Cleanup();
-        return _jobs.Values.Any(j => j.DaisiOrgId == daisiOrgId && !j.IsComplete);
+        var most = await GetMostRecentJobForAsync(daisiOrgId);
+        return most != null && !most.IsComplete;
     }
 
     private async Task RunJobAsync(
@@ -164,10 +248,14 @@ public class GitHubBulkImportService(
                 item.Error = ex.Message;
                 job.UpdatedUtc = DateTime.UtcNow;
             }
+
+            // Persist after every item so progress survives a Web restart in read-only form.
+            await PersistAsync(job);
         }
 
         job.FinishedUtc = DateTime.UtcNow;
         job.UpdatedUtc = DateTime.UtcNow;
+        await PersistAsync(job);
     }
 
     private async Task<List<GitHubRepoSummary>> ListGitHubReposAsync(string org, string? token, bool includePrivate)
@@ -249,32 +337,5 @@ public class GitHubBulkImportService(
     }
 }
 
-public class GitHubImportJob
-{
-    public string Id { get; set; } = "";
-    public string DaisiOrgId { get; set; } = "";
-    public string DaisiOrgSlug { get; set; } = "";
-    public string GithubOrg { get; set; } = "";
-    public DateTime StartedUtc { get; set; }
-    public DateTime UpdatedUtc { get; set; } = DateTime.UtcNow;
-    public DateTime? FinishedUtc { get; set; }
-    public List<GitHubImportItem> Items { get; set; } = [];
-
-    public int CompletedCount => Items.Count(i => i.Status is "Imported" or "Updated" or "Skipped" or "Failed");
-    public int FailedCount => Items.Count(i => i.Status == "Failed");
-    public int ImportedCount => Items.Count(i => i.Status == "Imported");
-    public int UpdatedCount => Items.Count(i => i.Status == "Updated");
-    public bool IsComplete => FinishedUtc.HasValue;
-}
-
-public class GitHubImportItem
-{
-    public string Name { get; set; } = "";
-    public string SourceUrl { get; set; } = "";
-    public bool IsPrivate { get; set; }
-    public string? Description { get; set; }
-    public string Status { get; set; } = "Pending";
-    public string? Error { get; set; }
-    public string? LastMessage { get; set; }
-    public string? DaisiRepoSlug { get; set; }
-}
+// GitHubImportJob and GitHubImportItem live in DaisiGit.Core.Models so the data layer
+// can persist them without taking a dependency on this service.

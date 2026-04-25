@@ -71,6 +71,10 @@ public static class DaisiGitApiEndpoints
         api.MapDelete("/orgs/{slug}/groups/{id}", DeleteRepoGroup);
         api.MapPut("/repos/{owner}/{slug}/group", SetRepoGroup);
 
+        // GitHub bulk import (org-scoped)
+        api.MapPost("/orgs/{slug}/import-from-github", StartGitHubImport);
+        api.MapGet("/orgs/{slug}/import-from-github/{jobId}", GetGitHubImportJob);
+
         // Org activity is intentionally on the public group — anonymous viewers see
         // only public-repo data, authenticated viewers can opt into private repos.
 
@@ -1108,6 +1112,49 @@ public static class DaisiGitApiEndpoints
         return Results.Ok(new { repo.GroupId });
     }
 
+    // ── GitHub bulk import ──
+
+    private static async Task<IResult> StartGitHubImport(
+        HttpContext ctx, string slug, GitHubImportRequest req,
+        OrganizationService orgService, GitHubBulkImportService importer)
+    {
+        if (string.IsNullOrWhiteSpace(req.GithubOrg))
+            return Results.BadRequest(new { error = "githubOrg is required." });
+
+        var org = await orgService.GetBySlugAsync(slug);
+        if (org == null) return Results.NotFound();
+
+        try
+        {
+            var job = await importer.StartAsync(
+                daisiOrgId: org.id,
+                daisiOrgSlug: org.Slug,
+                accountId: GetAccountId(ctx),
+                actorUserId: GetUserId(ctx),
+                actorUserName: GetUserName(ctx),
+                githubOrg: req.GithubOrg.Trim(),
+                githubToken: string.IsNullOrWhiteSpace(req.GithubToken) ? null : req.GithubToken.Trim(),
+                includePrivate: req.IncludePrivate,
+                defaultPublicVisibility: req.PublicVisibility ?? GitRepoVisibility.Public,
+                defaultPrivateVisibility: req.PrivateVisibility ?? GitRepoVisibility.Private,
+                storageProvider: req.StorageProvider);
+            return Results.Ok(job);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Results.BadRequest(new { error = ex.Message });
+        }
+    }
+
+    private static IResult GetGitHubImportJob(string slug, string jobId, GitHubBulkImportService importer)
+    {
+        var job = importer.GetJob(jobId);
+        if (job == null) return Results.NotFound();
+        if (!string.Equals(job.DaisiOrgSlug, slug, StringComparison.OrdinalIgnoreCase))
+            return Results.NotFound();
+        return Results.Ok(job);
+    }
+
     // ── Org activity ──
 
     private static async Task<IResult> GetOrgActivity(
@@ -1490,6 +1537,14 @@ public record SetStorageProviderRequest(StorageProvider Provider);
 public record RepoGroupRequest(string? Name, string? Description, int? SortOrder);
 
 public record SetRepoGroupRequest(string? GroupId);
+
+public record GitHubImportRequest(
+    string? GithubOrg,
+    string? GithubToken,
+    bool IncludePrivate,
+    GitRepoVisibility? PublicVisibility,
+    GitRepoVisibility? PrivateVisibility,
+    StorageProvider? StorageProvider);
 
 public record SetMergePolicyRequest(
     bool AutoMergeEnabled,

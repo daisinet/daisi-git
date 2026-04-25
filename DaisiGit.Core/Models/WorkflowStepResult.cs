@@ -10,6 +10,8 @@ public class WorkflowStepResult
 {
     public int StepIndex { get; set; }
 
+    public string StepName { get; set; } = "";
+
     [JsonConverter(typeof(JsonStringEnumConverter))]
     public WorkflowStepType StepType { get; set; }
 

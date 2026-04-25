@@ -67,7 +67,7 @@
                                 <thead>
                                     <tr class="text-muted small">
                                         <th>#</th>
-                                        <th>Type</th>
+                                        <th>Step</th>
                                         <th>Result</th>
                                         <th>Detail</th>
                                     </tr>
@@ -77,7 +77,7 @@
                                     {
                                         <tr>
                                             <td>@(result.StepIndex + 1)</td>
-                                            <td>@result.StepType</td>
+                                            <td>@(string.IsNullOrWhiteSpace(result.StepName) ? result.StepType.ToString() : result.StepName)</td>
                                             <td>
                                                 @if (result.Success)
                                                 {

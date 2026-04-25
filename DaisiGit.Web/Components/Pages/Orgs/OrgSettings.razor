@@ -136,18 +136,22 @@
                             @foreach (var g in groups)
                             {
                                 var gid = g.id;
-                                <li class="list-group-item">
+                                <li class="list-group-item @(dragOverGroupId == gid ? "border-primary" : "")"
+                                    draggable="true"
+                                    @ondragstart="() => OnDragStart(gid)"
+                                    @ondragover="e => OnDragOver(gid, e)"
+                                    @ondragover:preventDefault="true"
+                                    @ondragleave="() => OnDragLeave(gid)"
+                                    @ondrop="() => OnDrop(gid)"
+                                    @ondrop:preventDefault="true">
                                     @if (editingGroupId == gid)
                                     {
                                         <div class="row g-2 align-items-center">
-                                            <div class="col-md-4">
+                                            <div class="col-md-5">
                                                 <input type="text" class="form-control form-control-sm" @bind="editGroupName" />
                                             </div>
-                                            <div class="col-md-5">
+                                            <div class="col-md-6">
                                                 <input type="text" class="form-control form-control-sm" @bind="editGroupDescription" />
-                                            </div>
-                                            <div class="col-md-2">
-                                                <input type="number" class="form-control form-control-sm" @bind="editGroupSortOrder" title="Sort order" />
                                             </div>
                                             <div class="col-md-1 d-flex gap-1">
                                                 <button class="btn btn-sm btn-primary" @onclick="() => SaveGroup(gid)" title="Save"><i class="fa-solid fa-check"></i></button>
@@ -158,13 +162,15 @@
                                     else
                                     {
                                         <div class="d-flex justify-content-between align-items-center">
-                                            <div>
-                                                <strong>@g.Name</strong>
-                                                <span class="text-muted small ms-2">order @g.SortOrder</span>
-                                                @if (!string.IsNullOrEmpty(g.Description))
-                                                {
-                                                    <div class="text-muted small">@g.Description</div>
-                                                }
+                                            <div class="d-flex align-items-center gap-2">
+                                                <i class="fa-solid fa-grip-vertical text-muted" style="cursor:grab;" title="Drag to reorder"></i>
+                                                <div>
+                                                    <strong>@g.Name</strong>
+                                                    @if (!string.IsNullOrEmpty(g.Description))
+                                                    {
+                                                        <div class="text-muted small">@g.Description</div>
+                                                    }
+                                                </div>
                                             </div>
                                             <div class="d-flex gap-1">
                                                 <button class="btn btn-sm btn-outline-secondary" @onclick="() => StartEditGroup(g)" title="Edit"><i class="fa-solid fa-pen"></i></button>
@@ -453,7 +459,8 @@ else if (!loading)
     private string? editingGroupId;
     private string editGroupName = "";
     private string? editGroupDescription;
-    private int editGroupSortOrder;
+    private string? draggingGroupId;
+    private string? dragOverGroupId;
 
     // Org secrets
     private List<string> orgSecretNames = [];
@@ -525,7 +532,6 @@ else if (!loading)
         editingGroupId = g.id;
         editGroupName = g.Name;
         editGroupDescription = g.Description;
-        editGroupSortOrder = g.SortOrder;
     }
 
     private void CancelEditGroup() => editingGroupId = null;
@@ -535,11 +541,55 @@ else if (!loading)
         if (org == null) return;
         try
         {
-            await RepoGroupService.UpdateAsync(id, org.id, editGroupName, editGroupDescription, editGroupSortOrder);
+            await RepoGroupService.UpdateAsync(id, org.id, editGroupName, editGroupDescription, sortOrder: null);
             editingGroupId = null;
             await LoadGroups();
         }
         catch (Exception ex) { groupError = ex.Message; }
+    }
+
+    // ── Drag-and-drop reorder ──
+
+    private void OnDragStart(string id)
+    {
+        draggingGroupId = id;
+    }
+
+    private void OnDragOver(string overId, Microsoft.AspNetCore.Components.Web.DragEventArgs _)
+    {
+        // Highlight the slot under the cursor; preventDefault on the element makes it a
+        // valid drop target.
+        if (draggingGroupId != null && draggingGroupId != overId)
+            dragOverGroupId = overId;
+    }
+
+    private void OnDragLeave(string overId)
+    {
+        if (dragOverGroupId == overId) dragOverGroupId = null;
+    }
+
+    private async Task OnDrop(string overId)
+    {
+        var srcId = draggingGroupId;
+        draggingGroupId = null;
+        dragOverGroupId = null;
+        if (srcId == null || srcId == overId || org == null) return;
+
+        var srcIdx = groups.FindIndex(g => g.id == srcId);
+        var dstIdx = groups.FindIndex(g => g.id == overId);
+        if (srcIdx < 0 || dstIdx < 0) return;
+
+        var moved = groups[srcIdx];
+        groups.RemoveAt(srcIdx);
+        groups.Insert(dstIdx, moved);
+
+        // Persist via the bulk reorder endpoint — single round-trip, atomic from the
+        // caller's perspective.
+        try
+        {
+            groups = await RepoGroupService.ReorderAsync(org.id, groups.Select(g => g.id).ToList());
+        }
+        catch (Exception ex) { groupError = ex.Message; await LoadGroups(); }
     }
 
     private async Task AddVar()

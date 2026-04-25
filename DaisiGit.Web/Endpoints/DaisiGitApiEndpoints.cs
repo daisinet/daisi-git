@@ -68,6 +68,7 @@ public static class DaisiGitApiEndpoints
         // Repo groups (org-level repo organizing)
         api.MapPost("/orgs/{slug}/groups", CreateRepoGroup);
         api.MapPut("/orgs/{slug}/groups/{id}", UpdateRepoGroup);
+        api.MapPut("/orgs/{slug}/groups/reorder", ReorderRepoGroups);
         api.MapDelete("/orgs/{slug}/groups/{id}", DeleteRepoGroup);
         api.MapPut("/repos/{owner}/{slug}/group", SetRepoGroup);
 
@@ -1100,6 +1101,18 @@ public static class DaisiGitApiEndpoints
         return Results.Ok(updated);
     }
 
+    private static async Task<IResult> ReorderRepoGroups(
+        HttpContext ctx, string slug, ReorderGroupsRequest req,
+        OrganizationService orgService, RepoGroupService groupService)
+    {
+        var org = await orgService.GetBySlugAsync(slug);
+        if (org == null) return Results.NotFound();
+        if (req.Ids == null || req.Ids.Count == 0)
+            return Results.BadRequest(new { error = "ids list is required." });
+        var ordered = await groupService.ReorderAsync(org.id, req.Ids);
+        return Results.Ok(ordered);
+    }
+
     private static async Task<IResult> DeleteRepoGroup(
         HttpContext ctx, string slug, string id,
         OrganizationService orgService, RepoGroupService groupService)
@@ -1680,6 +1693,8 @@ public record CreateRepoRequest(string Name, string? Description, string? Owner 
 public record SetStorageProviderRequest(StorageProvider Provider);
 
 public record RepoGroupRequest(string? Name, string? Description, int? SortOrder);
+
+public record ReorderGroupsRequest(List<string>? Ids);
 
 public record SetRepoGroupRequest(string? GroupId);
 

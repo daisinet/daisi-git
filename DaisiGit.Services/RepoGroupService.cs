@@ -58,6 +58,25 @@ public class RepoGroupService(DaisiGitCosmo cosmo)
     public Task DeleteAsync(string id, string organizationId)
         => cosmo.DeleteRepoGroupAsync(id, organizationId);
 
+    /// <summary>
+    /// Sets <see cref="RepoGroup.SortOrder"/> on each group in the order supplied (first id
+    /// becomes order 0). Groups not in the list keep their existing order. Returns the new
+    /// list in display order.
+    /// </summary>
+    public async Task<List<RepoGroup>> ReorderAsync(string organizationId, List<string> orderedIds)
+    {
+        var existing = await cosmo.GetRepoGroupsAsync(organizationId);
+        var byId = existing.ToDictionary(g => g.id);
+        for (var i = 0; i < orderedIds.Count; i++)
+        {
+            if (!byId.TryGetValue(orderedIds[i], out var group)) continue;
+            if (group.SortOrder == i) continue;
+            group.SortOrder = i;
+            await cosmo.UpdateRepoGroupAsync(group);
+        }
+        return await cosmo.GetRepoGroupsAsync(organizationId);
+    }
+
     private async Task<string> GenerateUniqueSlugAsync(string organizationId, string name, string? excludeGroupId = null)
     {
         var baseSlug = Slugify(name);

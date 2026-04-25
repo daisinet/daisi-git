@@ -55,6 +55,7 @@ public class WorkflowEngine(
                 var stepResult = new WorkflowStepResult
                 {
                     StepIndex = execution.CurrentStepIndex,
+                    StepName = step.Name,
                     StepType = step.StepType,
                     ExecutedUtc = DateTime.UtcNow
                 };
@@ -569,22 +570,25 @@ public class WorkflowEngine(
         var timeout = TimeSpan.FromSeconds(step.ScriptTimeoutSeconds ?? 300);
         if (timeout > TimeSpan.FromMinutes(30)) timeout = TimeSpan.FromMinutes(30);
 
-        // Determine shell
+        // Determine shell. Use ArgumentList so the entire command stays as a single argv
+        // element; passing it via Arguments would word-split it, and bash -c only takes the
+        // first positional as the script (the rest become $0, $1, ...).
         var isWindows = OperatingSystem.IsWindows();
         var shell = isWindows ? "cmd.exe" : "/bin/bash";
-        var shellArg = isWindows ? $"/c {command}" : $"-c {command}";
+        var shellFlag = isWindows ? "/c" : "-c";
 
         using var process = new Process();
         process.StartInfo = new ProcessStartInfo
         {
             FileName = shell,
-            Arguments = shellArg,
             WorkingDirectory = workDir,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
             CreateNoWindow = true
         };
+        process.StartInfo.ArgumentList.Add(shellFlag);
+        process.StartInfo.ArgumentList.Add(command);
 
         // Pass workflow secrets as environment variables
         foreach (var (key, value) in execution.Context)

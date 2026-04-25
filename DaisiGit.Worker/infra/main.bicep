@@ -12,6 +12,10 @@ param cosmoConnectionString string
 @secure()
 param daisiSecretKey string
 
+@description('Azure Blob Storage connection string used by repos with Provider=AzureBlob (matches the web app value)')
+@secure()
+param azureBlobConnectionString string
+
 // ── Azure Container Registry ──
 
 resource acr 'Microsoft.ContainerRegistry/registries@2023-07-01' = {
@@ -126,6 +130,10 @@ resource workerJob 'Microsoft.App/jobs@2024-03-01' = {
           name: 'daisi-secret-key'
           value: daisiSecretKey
         }
+        {
+          name: 'azure-blob-connection'
+          value: azureBlobConnectionString
+        }
       ]
       registries: [
         {
@@ -156,6 +164,10 @@ resource workerJob 'Microsoft.App/jobs@2024-03-01' = {
             {
               name: 'Daisi__SecretKey'
               secretRef: 'daisi-secret-key'
+            }
+            {
+              name: 'AzureBlob__ConnectionString'
+              secretRef: 'azure-blob-connection'
             }
           ]
         }

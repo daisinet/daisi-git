@@ -65,6 +65,9 @@ public static class DaisiGitApiEndpoints
         api.MapGet("/orgs", ListOrgs);
         api.MapDelete("/orgs/{slug}", DeleteOrg);
 
+        // Org activity is intentionally on the public group — anonymous viewers see
+        // only public-repo data, authenticated viewers can opt into private repos.
+
         // Account settings (require auth)
         api.MapGet("/account/settings", GetAccountSettings);
         api.MapPut("/account/settings/storage", SetDefaultStorageProvider);
@@ -81,6 +84,7 @@ public static class DaisiGitApiEndpoints
         var pub = app.MapGroup("/api/git");
 
         pub.MapGet("/repos/{owner}/{slug}", GetRepository);
+        pub.MapGet("/orgs/{slug}/activity", GetOrgActivity);
         pub.MapGet("/repos/{owner}/{slug}/branches", ListBranches);
         pub.MapGet("/repos/{owner}/{slug}/tree/{branch}/{**path}", GetTree);
         pub.MapGet("/repos/{owner}/{slug}/blob/{branch}/{**path}", GetBlob);
@@ -1035,6 +1039,31 @@ public static class DaisiGitApiEndpoints
         await orgService.DeleteAsync(org, repoService);
         try { await avatarService.DeleteAvatarAsync("org", org.id); } catch { }
         return Results.NoContent();
+    }
+
+    // ── Org activity ──
+
+    private static async Task<IResult> GetOrgActivity(
+        HttpContext ctx, string slug,
+        int? days, string? granularity, string? type, bool? includePrivate,
+        OrgActivityService activityService)
+    {
+        var d = Math.Clamp(days ?? 30, 1, 365);
+        var g = granularity?.ToLowerInvariant() switch
+        {
+            "month" => ActivityGranularity.Month,
+            "week" => ActivityGranularity.Week,
+            _ => ActivityGranularity.Day
+        };
+        var t = type?.ToLowerInvariant();
+        if (!string.IsNullOrEmpty(t) && t != "commits")
+            return Results.BadRequest(new { error = $"Unsupported activity type '{t}'. Currently supported: commits." });
+
+        var viewerId = ctx.Items["userId"] as string;
+        var includePriv = (includePrivate ?? false) && !string.IsNullOrEmpty(viewerId);
+
+        var activity = await activityService.GetActivityAsync(slug, d, g, includePriv, viewerId);
+        return activity == null ? Results.NotFound() : Results.Ok(activity);
     }
 
     // ── Account settings endpoints ──

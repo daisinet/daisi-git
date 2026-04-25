@@ -88,18 +88,6 @@ public class GitHubBulkImportService(
                     ? ".daisi"
                     : item.Name;
 
-                // Skip if a repo with this slug already exists under the daisi org.
-                var existing = await repoService.GetRepositoryBySlugAsync(job.DaisiOrgSlug, Slugify(targetName));
-                if (existing != null)
-                {
-                    item.Status = "Skipped";
-                    item.Error = string.Equals(targetName, item.Name, StringComparison.OrdinalIgnoreCase)
-                        ? "A repo with this name already exists in the org."
-                        : $"A repo named '{targetName}' already exists in the org (mapped from '{item.Name}').";
-                    job.UpdatedUtc = DateTime.UtcNow;
-                    continue;
-                }
-
                 item.Status = "InProgress";
                 if (!string.Equals(targetName, item.Name, StringComparison.OrdinalIgnoreCase))
                     item.LastMessage = $"Importing as '{targetName}'...";
@@ -113,18 +101,31 @@ public class GitHubBulkImportService(
 
                 var visibility = item.IsPrivate ? defaultPrivateVisibility : defaultPublicVisibility;
 
-                // Owner of the imported repo is the daisi-git org itself, identified by its
-                // SLUG (URL handle, e.g. "daisinet"). The actor's id/name is not used for
-                // ownership — the org is the owner regardless of who kicked off the import.
-                var imported = await importService.ImportAsync(
-                    cloneUrl, accountId,
-                    ownerId: job.DaisiOrgId,
-                    ownerName: job.DaisiOrgSlug,
-                    repoName: targetName, description: item.Description,
-                    visibility: visibility, storageProvider: storageProvider,
-                    onProgress: msg => { item.LastMessage = msg; job.UpdatedUtc = DateTime.UtcNow; });
+                var existing = await repoService.GetRepositoryBySlugAsync(job.DaisiOrgSlug, Slugify(targetName));
 
-                item.Status = "Imported";
+                GitRepository imported;
+                if (existing != null)
+                {
+                    // Already in daisi-git (could be a real repo or the empty shell left by
+                    // a previous failed import) — merge GitHub history in rather than skipping.
+                    imported = await importService.MergeFromUrlAsync(existing, cloneUrl,
+                        onProgress: msg => { item.LastMessage = msg; job.UpdatedUtc = DateTime.UtcNow; });
+                    item.Status = "Updated";
+                }
+                else
+                {
+                    // Owner of the new repo is the daisi-git org itself (slug). The actor's
+                    // id/name is not used for ownership — the org owns it regardless of who
+                    // kicked off the import.
+                    imported = await importService.ImportAsync(
+                        cloneUrl, accountId,
+                        ownerId: job.DaisiOrgId,
+                        ownerName: job.DaisiOrgSlug,
+                        repoName: targetName, description: item.Description,
+                        visibility: visibility, storageProvider: storageProvider,
+                        onProgress: msg => { item.LastMessage = msg; job.UpdatedUtc = DateTime.UtcNow; });
+                    item.Status = "Imported";
+                }
                 item.DaisiRepoSlug = imported.Slug;
                 item.LastMessage = null;
                 job.UpdatedUtc = DateTime.UtcNow;
@@ -232,9 +233,10 @@ public class GitHubImportJob
     public DateTime? FinishedUtc { get; set; }
     public List<GitHubImportItem> Items { get; set; } = [];
 
-    public int CompletedCount => Items.Count(i => i.Status is "Imported" or "Skipped" or "Failed");
+    public int CompletedCount => Items.Count(i => i.Status is "Imported" or "Updated" or "Skipped" or "Failed");
     public int FailedCount => Items.Count(i => i.Status == "Failed");
     public int ImportedCount => Items.Count(i => i.Status == "Imported");
+    public int UpdatedCount => Items.Count(i => i.Status == "Updated");
     public bool IsComplete => FinishedUtc.HasValue;
 }
 

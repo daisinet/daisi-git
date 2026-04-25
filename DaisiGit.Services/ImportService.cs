@@ -52,7 +52,9 @@ public class ImportService(
         {
             onProgress?.Invoke($"Cloning {sourceUrl}...");
 
-            var cloneResult = await RunGitAsync($"clone --bare \"{sourceUrl}\" \"{tempDir}\"");
+            // 10 minute cap — large repos with deep history routinely take 1-3 min over the
+            // public internet, and 60 s (the RunGitAsync default) was timing out silently.
+            var cloneResult = await RunGitAsync($"clone --bare \"{sourceUrl}\" \"{tempDir}\"", timeoutMs: 600000);
             if (cloneResult.ExitCode != 0)
                 throw new InvalidOperationException($"Git clone failed: {cloneResult.Error}");
 
@@ -100,20 +102,38 @@ public class ImportService(
     /// <summary>
     /// Re-imports (pulls latest changes) from the original source URL into an existing repository.
     /// </summary>
-    public async Task<GitRepository> ReimportAsync(
+    public Task<GitRepository> ReimportAsync(
         GitRepository repo,
         Action<string>? onProgress = null)
     {
-        var sourceUrl = repo.ImportedFromUrl;
-        if (string.IsNullOrEmpty(sourceUrl))
+        if (string.IsNullOrEmpty(repo.ImportedFromUrl))
             throw new InvalidOperationException("This repository was not imported from an external URL.");
+        return MergeFromUrlAsync(repo, repo.ImportedFromUrl, onProgress);
+    }
+
+    /// <summary>
+    /// Merges objects + refs from an external git URL into an existing repository. Used by
+    /// re-import and by the GitHub bulk-import flow when the target repo already exists.
+    /// Idempotent: existing objects are not duplicated; refs point at whatever the source
+    /// has now. Stamps <see cref="GitRepository.ImportedFromUrl"/> if it wasn't already set
+    /// so future re-imports can find the source again.
+    /// </summary>
+    public async Task<GitRepository> MergeFromUrlAsync(
+        GitRepository repo,
+        string sourceUrl,
+        Action<string>? onProgress = null)
+    {
+        if (string.IsNullOrWhiteSpace(sourceUrl))
+            throw new ArgumentException("Source URL is required.", nameof(sourceUrl));
 
         var tempDir = Path.Combine(Path.GetTempPath(), $"daisigit-reimport-{Guid.NewGuid():N}");
         try
         {
             onProgress?.Invoke($"Cloning latest from {sourceUrl}...");
 
-            var cloneResult = await RunGitAsync($"clone --bare \"{sourceUrl}\" \"{tempDir}\"");
+            // 10 minute cap — large repos with deep history routinely take 1-3 min over the
+            // public internet, and 60 s (the RunGitAsync default) was timing out silently.
+            var cloneResult = await RunGitAsync($"clone --bare \"{sourceUrl}\" \"{tempDir}\"", timeoutMs: 600000);
             if (cloneResult.ExitCode != 0)
                 throw new InvalidOperationException($"Git clone failed: {cloneResult.Error}");
 
@@ -126,14 +146,16 @@ public class ImportService(
             await ImportRefsAsync(tempDir, repo);
 
             repo.IsEmpty = false;
+            if (string.IsNullOrEmpty(repo.ImportedFromUrl))
+                repo.ImportedFromUrl = NormalizeImportUrl(sourceUrl);
             repo = await repoService.UpdateRepositoryAsync(repo);
 
-            // Rebuild the rollup from scratch — re-imports can introduce arbitrary new
+            // Rebuild the rollup from scratch — merges can introduce arbitrary new
             // history that didn't flow through the push pipeline.
             onProgress?.Invoke("Indexing commit history...");
             try { await rollupService.BackfillAsync(repo); } catch { }
 
-            onProgress?.Invoke("Re-import complete.");
+            onProgress?.Invoke("Merge complete.");
         }
         finally
         {
@@ -144,12 +166,21 @@ public class ImportService(
     }
 
     /// <summary>
-    /// Normalizes a git URL for consistent comparison.
-    /// Trims whitespace/trailing slashes, removes trailing .git suffix.
+    /// Normalizes a git URL for consistent comparison and persistence. Strips embedded
+    /// credentials (https://user:token@host/...) so we never store a token in Cosmos.
+    /// Trims whitespace/trailing slashes and the trailing .git suffix.
     /// </summary>
     private static string NormalizeImportUrl(string url)
     {
         var normalized = url.Trim().TrimEnd('/');
+
+        // Strip userinfo (token) from HTTPS clone URLs so secrets never reach storage.
+        if (Uri.TryCreate(normalized, UriKind.Absolute, out var uri) && !string.IsNullOrEmpty(uri.UserInfo))
+        {
+            var builder = new UriBuilder(uri) { UserName = "", Password = "" };
+            normalized = builder.Uri.ToString().TrimEnd('/');
+        }
+
         if (normalized.EndsWith(".git", StringComparison.OrdinalIgnoreCase))
             normalized = normalized[..^4];
         return normalized;

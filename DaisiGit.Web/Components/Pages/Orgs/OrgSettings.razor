@@ -296,7 +296,7 @@
                                 }
                                 <span class="ms-1 text-muted small">@importJob.CompletedCount / @importJob.Items.Count</span>
                             </span>
-                            <span class="text-muted small">@importJob.ImportedCount imported, @importJob.FailedCount failed</span>
+                            <span class="text-muted small">@importJob.ImportedCount imported, @importJob.UpdatedCount updated, @importJob.FailedCount failed</span>
                         </div>
                         <ul class="list-group list-group-flush" style="max-height: 400px; overflow-y: auto;">
                             @foreach (var it in importJob.Items)
@@ -688,6 +688,7 @@ else if (!loading)
         "Pending"    => "<i class='fa-regular fa-hourglass text-muted'></i>",
         "InProgress" => "<i class='fa-solid fa-spinner fa-spin text-primary'></i>",
         "Imported"   => "<i class='fa-solid fa-check text-success'></i>",
+        "Updated"    => "<i class='fa-solid fa-rotate text-info'></i>",
         "Skipped"    => "<i class='fa-solid fa-forward text-muted'></i>",
         "Failed"     => "<i class='fa-solid fa-xmark text-danger'></i>",
         _            => "<i class='fa-regular fa-circle text-muted'></i>"

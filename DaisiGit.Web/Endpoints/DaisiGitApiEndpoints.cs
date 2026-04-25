@@ -81,6 +81,7 @@ public static class DaisiGitApiEndpoints
         api.MapPost("/orgs/{slug}/import-from-github", StartGitHubImport);
         api.MapGet("/orgs/{slug}/import-from-github/{jobId}", GetGitHubImportJob);
         api.MapPost("/orgs/{slug}/repair-owner", RepairOrgRepoOwner);
+        api.MapPost("/orgs/{slug}/scrub-import-urls", ScrubImportUrls);
 
         // Org activity is intentionally on the public group — anonymous viewers see
         // only public-repo data, authenticated viewers can opt into private repos.
@@ -1223,6 +1224,37 @@ public static class DaisiGitApiEndpoints
             fixedNames.Add(repo.Slug);
         }
         return Results.Ok(new { fromOwnerName = req.FromOwnerName, toOwnerName = org.Slug, repaired = fixedNames });
+    }
+
+    /// <summary>
+    /// Scrubs embedded credentials (https://user:token@host/...) from every repo's
+    /// ImportedFromUrl in this org. One-shot cleanup for data already saved before the
+    /// import flow started normalizing on save.
+    /// </summary>
+    private static async Task<IResult> ScrubImportUrls(
+        HttpContext ctx, string slug,
+        OrganizationService orgService, RepositoryService repoService,
+        DaisiGit.Data.DaisiGitCosmo cosmo)
+    {
+        var org = await orgService.GetBySlugAsync(slug);
+        if (org == null) return Results.NotFound();
+
+        var repos = await cosmo.GetRepositoriesByOwnerAsync(org.Slug);
+        var scrubbed = new List<string>();
+        foreach (var repo in repos)
+        {
+            if (string.IsNullOrEmpty(repo.ImportedFromUrl)) continue;
+            if (!Uri.TryCreate(repo.ImportedFromUrl, UriKind.Absolute, out var uri)) continue;
+            if (string.IsNullOrEmpty(uri.UserInfo)) continue;
+
+            var clean = new UriBuilder(uri) { UserName = "", Password = "" }.Uri.ToString().TrimEnd('/');
+            if (clean.EndsWith(".git", StringComparison.OrdinalIgnoreCase))
+                clean = clean[..^4];
+            repo.ImportedFromUrl = clean;
+            await repoService.UpdateRepositoryAsync(repo);
+            scrubbed.Add(repo.Slug);
+        }
+        return Results.Ok(new { org = org.Slug, scrubbed });
     }
 
     // ── GitHub bulk import ──

@@ -1,0 +1,162 @@
+@page "/{Owner}/{RepoSlug}/releases/{Tag}"
+@inject RepositoryService RepoService
+@inject DaisiGit.Data.DaisiGitCosmo Cosmo
+@inject NavigationManager Nav
+@inject IHttpClientFactory HttpClientFactory
+
+<PageTitle>@Tag - @Owner/@RepoSlug - Daisi Git</PageTitle>
+
+<RepositoryLayout Owner="@Owner" RepoSlug="@RepoSlug" ActiveTab="releases">
+    @if (loading)
+    {
+        <div class="text-center py-4"><div class="spinner-border spinner-border-sm text-primary"></div></div>
+    }
+    else if (release == null)
+    {
+        <div class="text-center py-5 text-muted">
+            <p>Release not found.</p>
+            <a href="/@Owner/@RepoSlug/releases" class="btn btn-sm btn-outline-secondary">Back to releases</a>
+        </div>
+    }
+    else
+    {
+        <div class="d-flex justify-content-between align-items-start mb-3">
+            <div>
+                <a href="/@Owner/@RepoSlug/releases" class="text-muted text-decoration-none small">
+                    <i class="fa-duotone fa-arrow-left me-1"></i> Releases
+                </a>
+                <h3 class="mb-1 mt-1">
+                    <i class="fa-duotone fa-tag me-1 text-muted"></i>
+                    @(string.IsNullOrEmpty(release.Name) ? release.Tag : release.Name)
+                    @if (release.Prerelease)
+                    {
+                        <span class="badge bg-warning text-dark ms-2 align-middle">prerelease</span>
+                    }
+                </h3>
+                <div class="text-muted small">
+                    <code>@release.Tag</code>
+                    · @release.AuthorName · @release.CreatedUtc.ToLocalTime().ToString("MMM d, yyyy HH:mm")
+                </div>
+            </div>
+            @if (canWrite)
+            {
+                <button class="btn btn-sm btn-outline-danger" @onclick="ConfirmDelete">
+                    <i class="fa-duotone fa-trash me-1"></i> Delete
+                </button>
+            }
+        </div>
+
+        @if (!string.IsNullOrEmpty(release.Body))
+        {
+            <div class="card mb-3">
+                <div class="card-body">
+                    <MarkdownView Content="@release.Body" />
+                </div>
+            </div>
+        }
+
+        @if (release.Assets.Count > 0)
+        {
+            <div class="card">
+                <div class="card-header py-2 fw-semibold">
+                    <i class="fa-duotone fa-download me-1"></i> Assets (@release.Assets.Count)
+                </div>
+                <ul class="list-group list-group-flush">
+                    @foreach (var asset in release.Assets)
+                    {
+                        <li class="list-group-item d-flex justify-content-between align-items-center py-2">
+                            <div>
+                                <a href="/api/git/repos/@Owner/@RepoSlug/releases/@release.Tag/assets/@asset.Name"
+                                   class="text-decoration-none">
+                                    <i class="fa-regular fa-file me-1 text-muted"></i>
+                                    @asset.Name
+                                </a>
+                            </div>
+                            <span class="text-muted small">@FormatSize(asset.SizeBytes)</span>
+                        </li>
+                    }
+                </ul>
+            </div>
+        }
+
+        @if (showDeleteConfirm)
+        {
+            <div class="modal d-block" tabindex="-1" style="background:rgba(0,0,0,0.4);" @onclick="() => showDeleteConfirm = false">
+                <div class="modal-dialog modal-dialog-centered modal-sm" @onclick:stopPropagation>
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <h5 class="modal-title">Delete release</h5>
+                        </div>
+                        <div class="modal-body">
+                            Delete release <strong>@release.Tag</strong> and its @release.Assets.Count asset(s)? This cannot be undone.
+                        </div>
+                        <div class="modal-footer">
+                            <button class="btn btn-sm btn-outline-secondary" @onclick="() => showDeleteConfirm = false">Cancel</button>
+                            <button class="btn btn-sm btn-danger" @onclick="DeleteRelease" disabled="@deleting">
+                                @if (deleting) { <span class="spinner-border spinner-border-sm me-1"></span> }
+                                Delete
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        }
+    }
+</RepositoryLayout>
+
+@code {
+    [Parameter] public string Owner { get; set; } = "";
+    [Parameter] public string RepoSlug { get; set; } = "";
+    [Parameter] public string Tag { get; set; } = "";
+    [CascadingParameter(Name = "UserId")] string? UserId { get; set; }
+
+    private GitRepository? repo;
+    private Release? release;
+    private bool loading = true;
+    private bool canWrite;
+    private bool showDeleteConfirm;
+    private bool deleting;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        loading = true;
+        try
+        {
+            repo = await RepoService.GetRepositoryBySlugAsync(Owner, RepoSlug);
+            if (repo != null)
+            {
+                release = await Cosmo.GetReleaseByTagAsync(repo.id, Tag);
+                canWrite = !string.IsNullOrEmpty(UserId) && repo.OwnerId == UserId; // simple gate; PermissionService is the canonical
+            }
+        }
+        catch { }
+        loading = false;
+    }
+
+    private void ConfirmDelete() => showDeleteConfirm = true;
+
+    private async Task DeleteRelease()
+    {
+        if (release == null) return;
+        deleting = true;
+        try
+        {
+            var http = HttpClientFactory.CreateClient();
+            http.BaseAddress = new Uri(Nav.BaseUri);
+            var resp = await http.DeleteAsync($"api/git/repos/{Owner}/{RepoSlug}/releases/{release.Tag}");
+            if (resp.IsSuccessStatusCode)
+                Nav.NavigateTo($"/{Owner}/{RepoSlug}/releases");
+        }
+        catch { }
+        deleting = false;
+        showDeleteConfirm = false;
+    }
+
+    private static string FormatSize(long bytes)
+    {
+        if (bytes < 1024) return $"{bytes} B";
+        if (bytes < 1024 * 1024) return $"{bytes / 1024.0:0.#} KB";
+        if (bytes < 1024L * 1024 * 1024) return $"{bytes / 1024.0 / 1024:0.##} MB";
+        return $"{bytes / 1024.0 / 1024 / 1024:0.##} GB";
+    }
+}

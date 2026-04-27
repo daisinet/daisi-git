@@ -1,0 +1,69 @@
+@page "/{Owner}/{RepoSlug}/releases"
+@inject RepositoryService RepoService
+@inject DaisiGit.Data.DaisiGitCosmo Cosmo
+
+<PageTitle>Releases - @Owner/@RepoSlug - Daisi Git</PageTitle>
+
+<RepositoryLayout Owner="@Owner" RepoSlug="@RepoSlug" ActiveTab="releases">
+    @if (loading)
+    {
+        <div class="text-center py-4"><div class="spinner-border spinner-border-sm text-primary"></div></div>
+    }
+    else if (releases.Count == 0)
+    {
+        <div class="text-center py-5 text-muted">
+            <i class="fa-duotone fa-tag fa-2x mb-2 d-block"></i>
+            <p>No releases yet.</p>
+            <p class="small">Create one with a <code>create-release</code> step in a workflow, or via the API.</p>
+        </div>
+    }
+    else
+    {
+        <div class="list-group">
+            @foreach (var rel in releases)
+            {
+                <a href="/@Owner/@RepoSlug/releases/@rel.Tag" class="list-group-item list-group-item-action">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <div>
+                            <div class="fw-semibold">
+                                <i class="fa-duotone fa-tag me-1 text-muted"></i>
+                                @(string.IsNullOrEmpty(rel.Name) ? rel.Tag : rel.Name)
+                                @if (rel.Prerelease)
+                                {
+                                    <span class="badge bg-warning text-dark ms-2">prerelease</span>
+                                }
+                            </div>
+                            <div class="text-muted small">
+                                <code>@rel.Tag</code>
+                                · @rel.AuthorName · @rel.CreatedUtc.ToLocalTime().ToString("MMM d, yyyy")
+                                · @rel.Assets.Count asset@(rel.Assets.Count == 1 ? "" : "s")
+                            </div>
+                        </div>
+                        <i class="fa-solid fa-chevron-right text-muted"></i>
+                    </div>
+                </a>
+            }
+        </div>
+    }
+</RepositoryLayout>
+
+@code {
+    [Parameter] public string Owner { get; set; } = "";
+    [Parameter] public string RepoSlug { get; set; } = "";
+
+    private List<Release> releases = [];
+    private bool loading = true;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        loading = true;
+        try
+        {
+            var repo = await RepoService.GetRepositoryBySlugAsync(Owner, RepoSlug);
+            if (repo != null)
+                releases = await Cosmo.GetReleasesAsync(repo.id);
+        }
+        catch { }
+        loading = false;
+    }
+}

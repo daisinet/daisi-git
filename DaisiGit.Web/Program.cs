@@ -246,6 +246,7 @@ app.MapGitSmartProtocolEndpoints();
 app.MapDaisiGitApiEndpoints();
 app.MapWorkflowApiEndpoints();
 app.MapDaisinetApiEndpoints();
+app.MapRawFileEndpoints();
 
 // CLI install and download endpoints (public, no auth required)
 app.MapCliEndpoints();

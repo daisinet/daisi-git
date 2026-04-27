@@ -40,6 +40,14 @@ public class GitWorkflow
     public List<WorkflowInput> Inputs { get; set; } = [];
 
     public List<WorkflowStep> Steps { get; set; } = [];
+
+    /// <summary>
+    /// Multi-job definition. When non-empty this takes precedence over <see cref="Steps"/>;
+    /// when null/empty the engine falls back to running <see cref="Steps"/> as a single
+    /// implicit job named "default". Allows incremental migration of legacy workflows.
+    /// </summary>
+    public List<WorkflowJob>? Jobs { get; set; }
+
     public bool IsEnabled { get; set; } = true;
     public string Status { get; set; } = "Active";
 
@@ -48,6 +56,16 @@ public class GitWorkflow
     /// Set when the workflow is created/updated/fires. Null for non-scheduled triggers.
     /// </summary>
     public DateTime? NextScheduledRunUtc { get; set; }
+
+    /// <summary>
+    /// Concurrency group key. When set, the engine ensures at most one execution per
+    /// (group, trigger-context) is running at a time; if <see cref="ConcurrencyCancelInProgress"/>
+    /// is true, a new dispatch cancels any earlier execution in the same group.
+    /// </summary>
+    public string? ConcurrencyGroup { get; set; }
+
+    /// <summary>If true, dispatching cancels any earlier execution in the same group.</summary>
+    public bool ConcurrencyCancelInProgress { get; set; }
 
     public DateTime CreatedUtc { get; set; } = DateTime.UtcNow;
     public DateTime? UpdatedUtc { get; set; }

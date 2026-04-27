@@ -155,7 +155,7 @@ public class GitWorkflowBackgroundWorker(
                 return;
             }
 
-            await engine.ProcessExecutionAsync(execution, workflow.Steps, workflow.Env);
+            await engine.ProcessExecutionAsync(execution, workflow, workflow.Env);
         }
     }
 

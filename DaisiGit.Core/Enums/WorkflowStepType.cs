@@ -22,5 +22,6 @@ public enum WorkflowStepType
     RunMinion,
     AcrBuild,
     NugetPush,
-    DispatchWorkflow
+    DispatchWorkflow,
+    WaitForApproval
 }

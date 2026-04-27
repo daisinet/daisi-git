@@ -72,6 +72,29 @@ public partial class DaisiGitCosmo
     }
 
     /// <summary>
+    /// Gets every non-terminal execution sharing the given concurrency group key.
+    /// Used by the engine to cancel peers on a new dispatch when cancel-in-progress is set.
+    /// </summary>
+    public async Task<List<WorkflowExecution>> GetActiveExecutionsByConcurrencyGroupAsync(string accountId, string group)
+    {
+        var container = await GetContainerAsync(WorkflowExecutionsContainerName);
+        var query = new QueryDefinition(
+            "SELECT * FROM c WHERE c.AccountId = @accountId AND c.Type = 'WorkflowExecution' AND c.ConcurrencyGroup = @grp AND (c.Status = 'Running' OR c.Status = 'Dispatched')")
+            .WithParameter("@accountId", accountId)
+            .WithParameter("@grp", group);
+
+        var results = new List<WorkflowExecution>();
+        using var iterator = container.GetItemQueryIterator<WorkflowExecution>(query,
+            requestOptions: new QueryRequestOptions { PartitionKey = GetWorkflowExecutionPartitionKey(accountId) });
+        while (iterator.HasMoreResults)
+        {
+            var response = await iterator.ReadNextAsync();
+            results.AddRange(response);
+        }
+        return results;
+    }
+
+    /// <summary>
     /// Gets executions stuck in "Dispatched" status for longer than the specified timeout.
     /// Used by the watchdog to fail stuck executions.
     /// </summary>

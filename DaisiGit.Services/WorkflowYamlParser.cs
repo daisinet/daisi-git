@@ -54,13 +54,14 @@ public static class WorkflowYamlParser
 
             var triggers = ParseTriggers(raw.On);
             var inputs = ParseInputs(raw.On);
-            var steps = ParseJobs(raw.Jobs);
+            var (jobs, flatSteps) = ParseJobsAndSteps(raw.Jobs);
 
             result = new ParsedFileWorkflow
             {
                 Name = raw.Name ?? "Unnamed workflow",
                 Triggers = triggers,
-                Steps = steps,
+                Steps = flatSteps,
+                Jobs = jobs,
                 Env = raw.Env,
                 Inputs = inputs
             };
@@ -122,16 +123,49 @@ public static class WorkflowYamlParser
         if (workflow.Env is { Count: > 0 })
             doc["env"] = workflow.Env;
 
-        // jobs
-        var steps = new List<Dictionary<string, object?>>();
-        foreach (var step in workflow.Steps.OrderBy(s => s.Order))
+        // Jobs: when the workflow uses the multi-job model, emit one entry per job with
+        // needs/strategy/outputs/steps. Otherwise emit a single "build" job from the
+        // legacy flat Steps so existing consumers keep working.
+        if (workflow.Jobs is { Count: > 0 })
+        {
+            var jobsMap = new Dictionary<string, object?>();
+            foreach (var job in workflow.Jobs)
+            {
+                var jobDoc = new Dictionary<string, object?>();
+                if (!string.IsNullOrEmpty(job.Name)) jobDoc["name"] = job.Name;
+                if (job.Needs is { Count: > 0 }) jobDoc["needs"] = job.Needs;
+                if (job.Matrix is { Count: > 0 })
+                {
+                    jobDoc["strategy"] = new Dictionary<string, object?>
+                    {
+                        ["matrix"] = job.Matrix.ToDictionary(kv => kv.Key, kv => (object)kv.Value)
+                    };
+                }
+                if (job.Outputs is { Count: > 0 }) jobDoc["outputs"] = job.Outputs;
+                jobDoc["steps"] = SerializeSteps(job.Steps);
+                jobsMap[job.Id] = jobDoc;
+            }
+            doc["jobs"] = jobsMap;
+        }
+        else
+        {
+            doc["jobs"] = new Dictionary<string, object>
+            {
+                ["build"] = new Dictionary<string, object> { ["steps"] = SerializeSteps(workflow.Steps) }
+            };
+        }
+
+        return YamlSerializer.Serialize(doc);
+    }
+
+    private static List<Dictionary<string, object?>> SerializeSteps(List<WorkflowStep> steps)
+    {
+        var result = new List<Dictionary<string, object?>>();
+        foreach (var step in steps.OrderBy(s => s.Order))
         {
             var rawStep = new Dictionary<string, object?>();
-            if (!string.IsNullOrEmpty(step.Name))
-                rawStep["name"] = step.Name;
-
+            if (!string.IsNullOrEmpty(step.Name)) rawStep["name"] = step.Name;
             rawStep["uses"] = MapStepTypeToUses(step.StepType);
-
             if (step.Matrix is { Count: > 0 })
             {
                 rawStep["strategy"] = new Dictionary<string, object?>
@@ -139,20 +173,11 @@ public static class WorkflowYamlParser
                     ["matrix"] = step.Matrix.ToDictionary(kv => kv.Key, kv => (object)kv.Value)
                 };
             }
-
             var with = BuildStepWith(step);
-            if (with.Count > 0)
-                rawStep["with"] = with;
-
-            steps.Add(rawStep);
+            if (with.Count > 0) rawStep["with"] = with;
+            result.Add(rawStep);
         }
-
-        doc["jobs"] = new Dictionary<string, object>
-        {
-            ["build"] = new Dictionary<string, object> { ["steps"] = steps }
-        };
-
-        return YamlSerializer.Serialize(doc);
+        return result;
     }
 
     private static string MapTriggerToEventName(GitTriggerType type) => type switch
@@ -195,6 +220,7 @@ public static class WorkflowYamlParser
         WorkflowStepType.AcrBuild => "acr-build",
         WorkflowStepType.NugetPush => "nuget-push",
         WorkflowStepType.DispatchWorkflow => "dispatch-workflow",
+        WorkflowStepType.WaitForApproval => "wait-for-approval",
         _ => type.ToString().ToLowerInvariant()
     };
 
@@ -232,6 +258,7 @@ public static class WorkflowYamlParser
                 if (!string.IsNullOrEmpty(step.AzureUsernameSecret)) with["username-secret"] = step.AzureUsernameSecret;
                 if (!string.IsNullOrEmpty(step.AzurePasswordSecret)) with["password-secret"] = step.AzurePasswordSecret;
                 if (!string.IsNullOrEmpty(step.AzureScmHost)) with["scm-host"] = step.AzureScmHost;
+                if (!string.IsNullOrEmpty(step.AzureAuthMode)) with["auth-mode"] = step.AzureAuthMode;
                 break;
             case WorkflowStepType.Checkout:
                 if (!string.IsNullOrEmpty(step.CheckoutRepo)) with["repo"] = step.CheckoutRepo;
@@ -280,6 +307,11 @@ public static class WorkflowYamlParser
                 if (!string.IsNullOrEmpty(step.DispatchRepo)) with["repo"] = step.DispatchRepo;
                 if (!string.IsNullOrEmpty(step.DispatchWorkflow)) with["workflow"] = step.DispatchWorkflow;
                 if (!string.IsNullOrEmpty(step.DispatchInputs)) with["inputs"] = step.DispatchInputs;
+                break;
+            case WorkflowStepType.WaitForApproval:
+                if (!string.IsNullOrEmpty(step.ApprovalEnvironment)) with["environment"] = step.ApprovalEnvironment;
+                if (!string.IsNullOrEmpty(step.ApprovalApprovers)) with["approvers"] = step.ApprovalApprovers;
+                if (!string.IsNullOrEmpty(step.ApprovalMessage)) with["message"] = step.ApprovalMessage;
                 break;
         }
         return with;
@@ -400,23 +432,73 @@ public static class WorkflowYamlParser
         _ => []
     };
 
-    private static List<WorkflowStep> ParseJobs(Dictionary<string, RawJob>? jobs)
+    /// <summary>
+    /// Parses the jobs map into both a List&lt;WorkflowJob&gt; (multi-job model) and a
+    /// flat List&lt;WorkflowStep&gt; (legacy field still maintained for back-compat with
+    /// older readers). Single-job workflows produce one WorkflowJob with Id="default";
+    /// multi-job workflows produce one WorkflowJob per declared key.
+    /// </summary>
+    private static (List<WorkflowJob> Jobs, List<WorkflowStep> FlatSteps) ParseJobsAndSteps(Dictionary<string, RawJob>? jobs)
     {
-        var steps = new List<WorkflowStep>();
-        if (jobs == null) return steps;
+        var resultJobs = new List<WorkflowJob>();
+        var flatSteps = new List<WorkflowStep>();
+        if (jobs == null || jobs.Count == 0) return (resultJobs, flatSteps);
 
         var order = 0;
-        foreach (var (_, job) in jobs)
+        foreach (var (jobId, job) in jobs)
         {
-            if (job.Steps == null) continue;
-            foreach (var rawStep in job.Steps)
+            var stepsForJob = new List<WorkflowStep>();
+            if (job.Steps != null)
             {
-                var step = ParseStep(rawStep, order++);
-                if (step != null)
-                    steps.Add(step);
+                foreach (var rawStep in job.Steps)
+                {
+                    var step = ParseStep(rawStep, order++);
+                    if (step != null)
+                    {
+                        stepsForJob.Add(step);
+                        flatSteps.Add(step);
+                    }
+                }
             }
+
+            var needs = job.Needs switch
+            {
+                string s when !string.IsNullOrWhiteSpace(s) => new List<string> { s },
+                List<object> list => list.Select(o => o?.ToString() ?? "").Where(s => s.Length > 0).ToList(),
+                _ => new List<string>()
+            };
+
+            Dictionary<string, List<string>>? matrix = null;
+            if (job.Strategy?.Matrix is { Count: > 0 } matrixMap)
+            {
+                matrix = new Dictionary<string, List<string>>();
+                foreach (var (k, v) in matrixMap)
+                {
+                    var key = k?.ToString();
+                    if (string.IsNullOrEmpty(key)) continue;
+                    var values = v switch
+                    {
+                        List<object> list => list.Select(o => o?.ToString() ?? "").Where(s => s.Length > 0).ToList(),
+                        not null => new List<string> { v.ToString() ?? "" },
+                        _ => new List<string>()
+                    };
+                    if (values.Count > 0) matrix[key] = values;
+                }
+                if (matrix.Count == 0) matrix = null;
+            }
+
+            resultJobs.Add(new WorkflowJob
+            {
+                Id = jobId,
+                Name = job.Name ?? "",
+                Needs = needs,
+                Matrix = matrix,
+                Outputs = job.Outputs,
+                Steps = stepsForJob
+            });
         }
-        return steps;
+
+        return (resultJobs, flatSteps);
     }
 
     private static WorkflowStep? ParseStep(RawStep raw, int order)
@@ -467,6 +549,7 @@ public static class WorkflowYamlParser
                 step.AzureUsernameSecret = with.GetValueOrDefault("username-secret");
                 step.AzurePasswordSecret = with.GetValueOrDefault("password-secret");
                 step.AzureScmHost = with.GetValueOrDefault("scm-host");
+                step.AzureAuthMode = with.GetValueOrDefault("auth-mode");
                 break;
             case WorkflowStepType.Checkout:
                 step.CheckoutRepo = with.GetValueOrDefault("repo");
@@ -526,6 +609,11 @@ public static class WorkflowYamlParser
                 step.DispatchWorkflow = with.GetValueOrDefault("workflow");
                 step.DispatchInputs = with.GetValueOrDefault("inputs");
                 break;
+            case WorkflowStepType.WaitForApproval:
+                step.ApprovalEnvironment = with.GetValueOrDefault("environment");
+                step.ApprovalApprovers = with.GetValueOrDefault("approvers");
+                step.ApprovalMessage = with.GetValueOrDefault("message");
+                break;
         }
 
         // Simple condition from `if:`
@@ -578,6 +666,7 @@ public static class WorkflowYamlParser
         "acr-build" or "docker-build" => WorkflowStepType.AcrBuild,
         "nuget-push" or "dotnet-nuget-push" => WorkflowStepType.NugetPush,
         "dispatch-workflow" or "trigger-workflow" => WorkflowStepType.DispatchWorkflow,
+        "wait-for-approval" or "approval" or "manual-approval" => WorkflowStepType.WaitForApproval,
         _ => null
     };
 
@@ -607,6 +696,10 @@ public static class WorkflowYamlParser
 
     private class RawJob
     {
+        public string? Name { get; set; }
+        public object? Needs { get; set; } // string or list<string>
+        public RawStrategy? Strategy { get; set; }
+        public Dictionary<string, string>? Outputs { get; set; }
         public List<RawStep>? Steps { get; set; }
     }
 
@@ -633,6 +726,7 @@ public class ParsedFileWorkflow
     public string Name { get; set; } = "";
     public List<WorkflowTrigger> Triggers { get; set; } = [];
     public List<WorkflowStep> Steps { get; set; } = [];
+    public List<WorkflowJob> Jobs { get; set; } = [];
     public Dictionary<string, string>? Env { get; set; }
     public List<WorkflowInput> Inputs { get; set; } = [];
 }

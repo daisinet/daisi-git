@@ -40,10 +40,20 @@ public class WorkflowExecution
 
     public string? Error { get; set; }
 
+    /// <summary>Concurrency group this execution participates in (copied from the workflow).</summary>
+    public string? ConcurrencyGroup { get; set; }
+
     /// <summary>When to next process this execution (for Wait steps).</summary>
     public DateTime? NextRunAt { get; set; }
 
     public List<WorkflowStepResult> StepResults { get; set; } = [];
+
+    /// <summary>
+    /// Outputs emitted by completed jobs, keyed by job id (matrix cells use
+    /// "&lt;jobId&gt;[k=v;k=v]"). Available to downstream jobs as
+    /// {{needs.&lt;jobId&gt;.outputs.&lt;name&gt;}}.
+    /// </summary>
+    public Dictionary<string, Dictionary<string, string>> JobOutputs { get; set; } = new();
 
     /// <summary>When the execution record was created (queue start).</summary>
     public DateTime CreatedUtc { get; set; } = DateTime.UtcNow;

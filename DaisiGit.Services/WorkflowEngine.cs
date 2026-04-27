@@ -29,9 +29,21 @@ public class WorkflowEngine(
     /// <summary>
     /// Processes an execution, injecting secrets and env into the context.
     /// </summary>
-    public async Task ProcessExecutionAsync(WorkflowExecution execution, List<WorkflowStep> steps,
+    /// <summary>
+    /// Legacy entry point used by tests and any older callers — wraps the supplied steps
+    /// in a single implicit job and forwards.
+    /// </summary>
+    public Task ProcessExecutionAsync(WorkflowExecution execution, List<WorkflowStep> steps,
+        Dictionary<string, string>? env = null)
+        => ProcessExecutionAsync(execution, new GitWorkflow { Steps = steps, Env = env }, env);
+
+    public async Task ProcessExecutionAsync(WorkflowExecution execution, GitWorkflow workflow,
         Dictionary<string, string>? env = null)
     {
+        // Local alias so the existing body continues to read smoothly.
+        var steps = workflow.Steps;
+        env ??= workflow.Env;
+
         // Publish a queued/in_progress check on the relevant commit if this run was
         // triggered by something we can attach to (a PR or a push). Best-effort —
         // failures don't affect execution.
@@ -66,16 +78,48 @@ public class WorkflowEngine(
                 foreach (var (key, value) in env)
                     execution.Context[$"env.{key}"] = value;
             }
-            var flatSteps = FlattenSteps(steps, execution.Context);
+            // Build the multi-job execution plan. Workflows with no Jobs collection are
+            // treated as a single implicit job named "default" so legacy flat-steps
+            // workflows keep working unchanged.
+            var jobs = (workflow?.Jobs is { Count: > 0 })
+                ? workflow.Jobs
+                : new List<WorkflowJob> { new() { Id = "default", Name = "", Steps = steps } };
+
+            var planned = BuildExecutionPlan(jobs, execution.Context);
+            var flatSteps = planned.Steps;
+            var cellByIndex = planned.CellByIndex;
+
             execution.TotalSteps = flatSteps.Count;
             execution.StartedUtc ??= DateTime.UtcNow;
 
             while (execution.CurrentStepIndex < flatSteps.Count)
             {
+                // Honor concurrency-cancellation between steps: if a newer dispatch flipped
+                // this execution to Cancelled, stop right here without running the next step.
+                var liveStatus = await cosmo.GetWorkflowExecutionAsync(execution.id, execution.AccountId);
+                if (liveStatus?.Status == "Cancelled")
+                {
+                    execution.Status = "Cancelled";
+                    execution.Error = liveStatus.Error;
+                    execution.FinishedUtc = DateTime.UtcNow;
+                    await cosmo.UpdateWorkflowExecutionAsync(execution);
+                    return;
+                }
+
                 var step = flatSteps[execution.CurrentStepIndex];
+                var currentCell = planned.Cells[cellByIndex[execution.CurrentStepIndex]];
+
+                // Cell entry: inject needs.<X>.outputs.<Y> context once per cell so steps
+                // can reference upstream job outputs via merge fields.
+                var prevIdx = execution.CurrentStepIndex - 1;
+                var enteringCell = prevIdx < 0 || cellByIndex[prevIdx] != cellByIndex[execution.CurrentStepIndex];
+                if (enteringCell) OverlayNeedsContext(execution, currentCell);
+
                 var stepResult = new WorkflowStepResult
                 {
                     StepIndex = execution.CurrentStepIndex,
+                    JobId = currentCell.Id,
+                    JobLabel = currentCell.Label,
                     StepName = step.Name,
                     StepType = step.StepType,
                     ExecutedUtc = DateTime.UtcNow
@@ -155,6 +199,23 @@ public class WorkflowEngine(
                         case WorkflowStepType.DispatchWorkflow:
                             await ExecuteDispatchWorkflow(step, stepResult, execution);
                             break;
+                        case WorkflowStepType.WaitForApproval:
+                            // Mark this step's result as a pending pause and exit the loop;
+                            // the execution stays paused with Status=PendingApproval until a
+                            // reviewer hits the approve endpoint, which flips it back to
+                            // Running with NextRunAt=now so the background worker re-dispatches.
+                            stepResult.Success = true;
+                            stepResult.RenderedBody = string.IsNullOrEmpty(step.ApprovalMessage)
+                                ? $"Waiting for approval ({step.ApprovalEnvironment ?? "manual"})"
+                                : step.ApprovalMessage;
+                            stepResult.FinishedUtc = DateTime.UtcNow;
+                            execution.StepResults.Add(stepResult);
+                            execution.CurrentStepIndex++;
+                            execution.Status = "PendingApproval";
+                            execution.Error = null;
+                            execution.NextRunAt = null;
+                            await cosmo.UpdateWorkflowExecutionAsync(execution);
+                            return;
                         case WorkflowStepType.Condition:
                             stepResult.Success = true;
                             break;
@@ -179,6 +240,13 @@ public class WorkflowEngine(
                 InjectStepOutputs(execution.Context, step, stepResult);
                 execution.CurrentStepIndex++;
                 foreach (var k in matrixKeys) execution.Context.Remove(k);
+
+                // Cell exit: if we just finished the last step of the cell, evaluate its
+                // declared outputs and stash them on the execution for downstream cells.
+                var nextIdx = execution.CurrentStepIndex;
+                var leavingCell = nextIdx >= flatSteps.Count
+                    || cellByIndex[nextIdx] != cellByIndex[nextIdx - 1];
+                if (leavingCell) CaptureCellOutputs(execution, currentCell);
 
                 // Persist after each step so the UI sees live progress instead of waiting
                 // for the whole workflow to terminate.
@@ -1062,30 +1130,60 @@ public class WorkflowEngine(
             return;
         }
 
-        var usernameKey = step.AzureUsernameSecret;
-        var passwordKey = step.AzurePasswordSecret;
-        if (string.IsNullOrEmpty(usernameKey) || string.IsNullOrEmpty(passwordKey))
-        {
-            result.Success = false;
-            result.Error = "Deploy username and password secrets must be configured";
-            return;
-        }
+        // Pick auth mode early so we know whether secrets or a managed-identity token
+        // will authenticate the deploy. Defaults to "basic" for back-compat.
+        var authMode = (step.AzureAuthMode ?? "basic").Trim().ToLowerInvariant();
+        string? username = null;
+        string? password = null;
+        string? bearerToken = null;
 
-        var username = execution.Context.GetValueOrDefault($"secrets.{usernameKey}", "").Trim();
-        var password = execution.Context.GetValueOrDefault($"secrets.{passwordKey}", "").Trim();
-        if (string.IsNullOrEmpty(username) || string.IsNullOrEmpty(password))
+        if (authMode == "oidc" || authMode == "identity")
         {
-            result.Success = false;
-            result.Error = $"Could not resolve secrets '{usernameKey}' and/or '{passwordKey}'. Add them in Settings > Secrets.";
-            return;
+            try
+            {
+                // Acquires an ARM token via the worker's managed identity. Locally this
+                // falls through to dev creds (Azure CLI / VS / env). The Kudu /api/zipdeploy
+                // endpoint accepts ARM bearer tokens when the principal has Website
+                // Contributor (or equivalent) on the target App Service.
+                var credential = new Azure.Identity.DefaultAzureCredential();
+                var tokenRequest = new Azure.Core.TokenRequestContext(
+                    new[] { "https://management.azure.com/.default" });
+                var token = await credential.GetTokenAsync(tokenRequest, CancellationToken.None);
+                bearerToken = token.Token;
+            }
+            catch (Exception ex)
+            {
+                result.Success = false;
+                result.Error = $"Could not acquire Azure token via managed identity: {ex.Message}. " +
+                               "Confirm the worker has a system-assigned identity and the Website " +
+                               "Contributor role on the target App Service.";
+                return;
+            }
         }
+        else
+        {
+            var usernameKey = step.AzureUsernameSecret;
+            var passwordKey = step.AzurePasswordSecret;
+            if (string.IsNullOrEmpty(usernameKey) || string.IsNullOrEmpty(passwordKey))
+            {
+                result.Success = false;
+                result.Error = "Deploy username and password secrets must be configured (or set auth-mode: oidc to use managed identity).";
+                return;
+            }
 
-        // Azure's portal shows the FTPS-protocol username as "{sitename}\{user}" or
-        // "{sitename}\${appname}", but Kudu /api/zipdeploy uses HTTP Basic Auth which
-        // does not accept the site prefix. Strip it so users can paste the portal value
-        // verbatim into the secret.
-        var backslashIdx = username.IndexOf('\\');
-        if (backslashIdx >= 0) username = username[(backslashIdx + 1)..];
+            username = execution.Context.GetValueOrDefault($"secrets.{usernameKey}", "").Trim();
+            password = execution.Context.GetValueOrDefault($"secrets.{passwordKey}", "").Trim();
+            if (string.IsNullOrEmpty(username) || string.IsNullOrEmpty(password))
+            {
+                result.Success = false;
+                result.Error = $"Could not resolve secrets '{usernameKey}' and/or '{passwordKey}'. Add them in Settings > Secrets.";
+                return;
+            }
+
+            // Strip Azure's "{sitename}\" FTPS prefix so users can paste the portal value verbatim.
+            var backslashIdx = username.IndexOf('\\');
+            if (backslashIdx >= 0) username = username[(backslashIdx + 1)..];
+        }
 
         // Build ZIP — from workspace (if Checkout+Build ran) or from git objects
         using var zipStream = new MemoryStream();
@@ -1171,8 +1269,15 @@ public class WorkflowEngine(
         client.Timeout = TimeSpan.FromMinutes(5);
 
         using var request = new HttpRequestMessage(HttpMethod.Post, kuduUrl);
-        var authBytes = Encoding.ASCII.GetBytes($"{username}:{password}");
-        request.Headers.Authorization = new AuthenticationHeaderValue("Basic", Convert.ToBase64String(authBytes));
+        if (bearerToken != null)
+        {
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearerToken);
+        }
+        else
+        {
+            var authBytes = Encoding.ASCII.GetBytes($"{username}:{password}");
+            request.Headers.Authorization = new AuthenticationHeaderValue("Basic", Convert.ToBase64String(authBytes));
+        }
         request.Content = new StreamContent(zipStream);
         request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/zip");
 
@@ -1470,6 +1575,142 @@ public class WorkflowEngine(
             stepResult.Error = $"Command exited with code {process.ExitCode}";
         else
             stepResult.RenderedBody = successMessage;
+    }
+
+    // ── Multi-job plan builder ──
+
+    private record JobCell(string Id, string Label, Dictionary<string, string> MatrixValues,
+        Dictionary<string, string>? Outputs, List<string> Needs);
+
+    private record ExecutionPlan(List<WorkflowStep> Steps, List<JobCell> Cells, int[] CellByIndex);
+
+    /// <summary>
+    /// Topo-sorts jobs by Needs, expands matrix dimensions into separate cells, then
+    /// flattens each cell's steps. The result is a flat step list that the existing main
+    /// loop can iterate, plus a parallel index map of step → owning cell so the loop can
+    /// inject per-cell context (needs.X.outputs.Y, matrix.K) and emit job outputs at cell
+    /// boundaries.
+    /// </summary>
+    private static ExecutionPlan BuildExecutionPlan(List<WorkflowJob> jobs, Dictionary<string, string> baseContext)
+    {
+        var sorted = TopoSortJobs(jobs);
+        var cells = new List<JobCell>();
+        var flat = new List<WorkflowStep>();
+        var cellByIndex = new List<int>();
+
+        foreach (var job in sorted)
+        {
+            var matrixCells = ExpandJobMatrix(job);
+            foreach (var (label, matrixValues) in matrixCells)
+            {
+                var cellId = matrixValues.Count == 0
+                    ? job.Id
+                    : $"{job.Id}[{string.Join(";", matrixValues.Select(kv => $"{kv.Key}={kv.Value}"))}]";
+
+                var cell = new JobCell(cellId, label, matrixValues, job.Outputs, job.Needs ?? []);
+                var cellIndex = cells.Count;
+                cells.Add(cell);
+
+                // Build per-cell context for condition flattening (so {{matrix.X}} resolves
+                // inside Condition expressions). The same matrix overlay happens at engine
+                // step time too — this is just for Condition.
+                var cellContext = new Dictionary<string, string>(baseContext);
+                foreach (var (k, v) in matrixValues) cellContext[$"matrix.{k}"] = v;
+
+                var stepsForCell = FlattenSteps(job.Steps, cellContext);
+                foreach (var s in stepsForCell)
+                {
+                    // Tag matrix values so the engine main loop overlays them on each step.
+                    if (matrixValues.Count > 0 && (s.MatrixValues == null || s.MatrixValues.Count == 0))
+                        s.MatrixValues = new Dictionary<string, string>(matrixValues);
+                    flat.Add(s);
+                    cellByIndex.Add(cellIndex);
+                }
+            }
+        }
+
+        return new ExecutionPlan(flat, cells, cellByIndex.ToArray());
+    }
+
+    /// <summary>
+    /// Expands a job's matrix into cells: each cell carries a label suffix and a
+    /// concrete value per dimension. Returns one empty-matrix cell for non-matrix jobs.
+    /// </summary>
+    private static List<(string Label, Dictionary<string, string> Values)> ExpandJobMatrix(WorkflowJob job)
+    {
+        var name = string.IsNullOrEmpty(job.Name) ? job.Id : job.Name;
+        if (job.Matrix is not { Count: > 0 } dims)
+            return new() { (name, new Dictionary<string, string>()) };
+
+        IEnumerable<Dictionary<string, string>> seed = new[] { new Dictionary<string, string>() };
+        foreach (var (key, values) in dims.Where(kv => kv.Value is { Count: > 0 }))
+        {
+            seed = seed.SelectMany(prefix =>
+                values.Select(v => new Dictionary<string, string>(prefix) { [key] = v }));
+        }
+
+        return seed.Select(values =>
+            (Label: $"{name} ({string.Join(", ", values.Select(kv => $"{kv.Key}={kv.Value}"))})",
+             Values: values)).ToList();
+    }
+
+    /// <summary>
+    /// Kahn-style topological sort. Throws on cycles or missing dependencies.
+    /// </summary>
+    private static List<WorkflowJob> TopoSortJobs(List<WorkflowJob> jobs)
+    {
+        var byId = jobs.ToDictionary(j => j.Id);
+        var inDegree = jobs.ToDictionary(j => j.Id, j => (j.Needs ?? new List<string>()).Count(n => byId.ContainsKey(n)));
+        var ready = new Queue<WorkflowJob>(jobs.Where(j => inDegree[j.Id] == 0));
+        var result = new List<WorkflowJob>();
+
+        while (ready.Count > 0)
+        {
+            var job = ready.Dequeue();
+            result.Add(job);
+            foreach (var other in jobs)
+            {
+                if (other.Needs != null && other.Needs.Contains(job.Id))
+                {
+                    inDegree[other.Id]--;
+                    if (inDegree[other.Id] == 0) ready.Enqueue(other);
+                }
+            }
+        }
+
+        if (result.Count != jobs.Count)
+            throw new InvalidOperationException("Workflow has a cycle in 'needs:' or references an undefined job.");
+
+        return result;
+    }
+
+    /// <summary>
+    /// Injects {{needs.&lt;jobId&gt;.outputs.&lt;name&gt;}} context entries from finished cells
+    /// into the live execution context, so steps in later cells can resolve them via
+    /// the merge renderer.
+    /// </summary>
+    private static void OverlayNeedsContext(WorkflowExecution execution, JobCell cell)
+    {
+        if (cell.Needs == null || cell.Needs.Count == 0) return;
+        foreach (var need in cell.Needs)
+        {
+            if (!execution.JobOutputs.TryGetValue(need, out var outputs)) continue;
+            foreach (var (k, v) in outputs)
+                execution.Context[$"needs.{need}.outputs.{k}"] = v;
+        }
+    }
+
+    /// <summary>
+    /// Evaluates a cell's declared outputs against the current context and stashes them
+    /// on the execution. Called when the engine reaches the last step of a cell.
+    /// </summary>
+    private static void CaptureCellOutputs(WorkflowExecution execution, JobCell cell)
+    {
+        if (cell.Outputs == null || cell.Outputs.Count == 0) return;
+        var resolved = new Dictionary<string, string>();
+        foreach (var (key, template) in cell.Outputs)
+            resolved[key] = WorkflowMergeService.Render(template, execution.Context);
+        execution.JobOutputs[cell.Id] = resolved;
     }
 
     // ── Condition flattening ──

@@ -23,6 +23,9 @@ public static class WorkflowApiEndpoints
         api.MapPut("/repos/{owner}/{slug}/workflows/{id}/yaml", UpdateWorkflowYaml);
         api.MapPost("/repos/{owner}/{slug}/workflows/yaml", CreateWorkflowYaml);
         api.MapPost("/repos/{owner}/{slug}/workflows/{id}/run", RunWorkflowNow);
+        api.MapPost("/repos/{owner}/{slug}/runs/{execId}/approve", ApproveRun);
+        api.MapPost("/repos/{owner}/{slug}/runs/{execId}/reject", RejectRun);
+        api.MapGet("/repos/{owner}/{slug}/runs/pending-approval", ListPendingApprovals);
         api.MapGet("/repos/{owner}/{slug}/workflows/{id}/runs", ListWorkflowRuns);
         api.MapGet("/repos/{owner}/{slug}/runs", ListRepoRuns);
         api.MapGet("/repos/{owner}/{slug}/runs/{execId}", GetRun);
@@ -160,6 +163,65 @@ public static class WorkflowApiEndpoints
         }
     }
 
+    private static async Task<IResult> ApproveRun(
+        HttpContext ctx, string owner, string slug, string execId,
+        RepositoryService repoService, PermissionService permissionService,
+        DaisiGit.Data.DaisiGitCosmo cosmo)
+    {
+        var repo = await repoService.GetRepositoryBySlugAsync(owner, slug);
+        if (repo == null) return Results.NotFound();
+        if (!await permissionService.CanWriteAsync(GetUserId(ctx), repo)) return Results.Forbid();
+
+        var execution = await cosmo.GetWorkflowExecutionAsync(execId, repo.AccountId);
+        if (execution == null || execution.RepositoryId != repo.id) return Results.NotFound();
+        if (execution.Status != "PendingApproval")
+            return Results.BadRequest(new { error = $"Execution is not awaiting approval (status: {execution.Status})." });
+
+        // Resume the execution. The background worker picks it up via NextRunAt <= now and
+        // dispatches it back to the queue starting from CurrentStepIndex.
+        execution.Status = "Running";
+        execution.NextRunAt = DateTime.UtcNow;
+        execution.Context["approval.by"] = GetUserName(ctx);
+        execution.Context["approval.at"] = DateTime.UtcNow.ToString("o");
+        await cosmo.UpdateWorkflowExecutionAsync(execution);
+        return Results.Ok(execution);
+    }
+
+    private static async Task<IResult> RejectRun(
+        HttpContext ctx, string owner, string slug, string execId,
+        RepositoryService repoService, PermissionService permissionService,
+        DaisiGit.Data.DaisiGitCosmo cosmo)
+    {
+        var repo = await repoService.GetRepositoryBySlugAsync(owner, slug);
+        if (repo == null) return Results.NotFound();
+        if (!await permissionService.CanWriteAsync(GetUserId(ctx), repo)) return Results.Forbid();
+
+        var execution = await cosmo.GetWorkflowExecutionAsync(execId, repo.AccountId);
+        if (execution == null || execution.RepositoryId != repo.id) return Results.NotFound();
+        if (execution.Status != "PendingApproval")
+            return Results.BadRequest(new { error = $"Execution is not awaiting approval (status: {execution.Status})." });
+
+        execution.Status = "Cancelled";
+        execution.FinishedUtc = DateTime.UtcNow;
+        execution.Error = $"Rejected by {GetUserName(ctx)}.";
+        await cosmo.UpdateWorkflowExecutionAsync(execution);
+        return Results.Ok(execution);
+    }
+
+    private static async Task<IResult> ListPendingApprovals(
+        HttpContext ctx, string owner, string slug,
+        RepositoryService repoService, WorkflowService workflowService,
+        PermissionService permissionService)
+    {
+        var repo = await repoService.GetRepositoryBySlugAsync(owner, slug);
+        if (repo == null) return Results.NotFound();
+        if (!await permissionService.CanReadAsync(GetUserId(ctx), repo)) return Results.Forbid();
+
+        var runs = await workflowService.ListExecutionsAsync(
+            repo.AccountId, repositoryId: repo.id, take: 100, skip: 0);
+        return Results.Ok(runs.Where(r => r.Status == "PendingApproval").ToList());
+    }
+
     private static async Task<IResult> GetRun(
         HttpContext ctx, string owner, string slug, string execId,
         RepositoryService repoService, WorkflowService workflowService,
@@ -182,6 +244,7 @@ public static class WorkflowApiEndpoints
     {
         workflow.Name = parsed.Name;
         workflow.Steps = parsed.Steps;
+        workflow.Jobs = parsed.Jobs is { Count: > 0 } ? parsed.Jobs : null;
         workflow.Env = parsed.Env;
         workflow.Inputs = parsed.Inputs ?? [];
 

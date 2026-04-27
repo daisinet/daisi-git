@@ -688,6 +688,158 @@
                         Emails are sent from Daisi Git (<code>noreply@git.daisi.ai</code>).
                     </div>
                     break;
+
+                case WorkflowStepType.AcrBuild:
+                    <div class="mb-3">
+                        <label class="form-label">ACR Registry <span class="text-danger">*</span></label>
+                        <input type="text" class="form-control" @bind="step.AcrRegistry" placeholder="myregistry" />
+                        <div class="form-text">Without the .azurecr.io suffix.</div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Image:tag(s) <span class="text-danger">*</span></label>
+                        <input type="text" class="form-control" @bind="step.AcrImage" placeholder="myapp:latest, myapp:{{push.newSha}}" />
+                        <div class="form-text">Comma-separate multiple tags.</div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Dockerfile</label>
+                        <input type="text" class="form-control" @bind="step.AcrDockerfile" placeholder="Dockerfile" />
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Build context</label>
+                        <input type="text" class="form-control" @bind="step.AcrContext" placeholder="." />
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Build args (optional)</label>
+                        <input type="text" class="form-control" @bind="step.AcrBuildArgs" placeholder="VERSION=1.0,FOO=bar" />
+                    </div>
+                    <div class="text-muted small">
+                        Requires the worker container to have the Azure CLI available (the Full and DotNet runtime images do).
+                    </div>
+                    break;
+
+                case WorkflowStepType.NugetPush:
+                    <div class="mb-3">
+                        <label class="form-label">Package path <span class="text-danger">*</span></label>
+                        <input type="text" class="form-control" @bind="step.NugetPackagePath" placeholder="bin/Release/MyPkg.1.2.3.nupkg" />
+                        <div class="form-text">Workspace-relative; globs are supported.</div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Source URL</label>
+                        <input type="text" class="form-control" @bind="step.NugetSource" placeholder="https://api.nuget.org/v3/index.json" />
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">API key secret <span class="text-danger">*</span></label>
+                        <select class="form-select" @bind="step.NugetApiKeySecret">
+                            <option value="">— Select a secret —</option>
+                            @foreach (var sn in repoSecrets)
+                            {
+                                <option value="@sn">@sn</option>
+                            }
+                        </select>
+                    </div>
+                    <div class="form-check mb-3">
+                        <input type="checkbox" class="form-check-input" id="wf-nuget-skip-dup"
+                               checked="@(step.NugetSkipDuplicate == true)"
+                               @onchange="e => step.NugetSkipDuplicate = (bool)(e.Value ?? false)" />
+                        <label class="form-check-label" for="wf-nuget-skip-dup">Ignore "already exists" errors</label>
+                    </div>
+                    break;
+
+                case WorkflowStepType.DispatchWorkflow:
+                    <div class="mb-3">
+                        <label class="form-label">Target repo</label>
+                        <input type="text" class="form-control" @bind="step.DispatchRepo" placeholder="owner/slug (blank = same repo)" />
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Target workflow <span class="text-danger">*</span></label>
+                        <input type="text" class="form-control" @bind="step.DispatchWorkflow" placeholder="Workflow id or name" />
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Inputs (optional)</label>
+                        <input type="text" class="form-control" @bind="step.DispatchInputs" placeholder="version={{inputs.version}}, env=prod" />
+                        <div class="form-text">Comma-separated <code>key=value</code>; values can use merge fields.</div>
+                    </div>
+                    <div class="form-check mb-3">
+                        <input type="checkbox" class="form-check-input" id="wf-dispatch-wait"
+                               checked="@(step.DispatchWait == true)"
+                               @onchange="e => step.DispatchWait = (bool)(e.Value ?? false)" />
+                        <label class="form-check-label" for="wf-dispatch-wait">
+                            Wait for completion and collect outputs
+                        </label>
+                        <div class="form-text">When enabled, this step pauses until the called workflow finishes; its job outputs land in <code>{{outputs.NAME}}</code>.</div>
+                    </div>
+                    break;
+
+                case WorkflowStepType.WaitForApproval:
+                    <div class="mb-3">
+                        <label class="form-label">Environment</label>
+                        <input type="text" class="form-control" @bind="step.ApprovalEnvironment" placeholder="prod" />
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Message (optional)</label>
+                        <input type="text" class="form-control" @bind="step.ApprovalMessage" placeholder="Confirm production rollout" />
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Approvers (optional)</label>
+                        <input type="text" class="form-control" @bind="step.ApprovalApprovers" placeholder="userId1, userId2" />
+                        <div class="form-text">Leave empty to allow any user with write access.</div>
+                    </div>
+                    <div class="text-muted small">
+                        <i class="fa-duotone fa-info-circle me-1"></i>
+                        Execution status moves to <code>PendingApproval</code> at this step. Approve or reject via the API or the run-detail page.
+                    </div>
+                    break;
+
+                case WorkflowStepType.UploadArtifact:
+                    <div class="mb-3">
+                        <label class="form-label">Artifact name <span class="text-danger">*</span></label>
+                        <input type="text" class="form-control" @bind="step.ArtifactName" placeholder="build-output" />
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Path <span class="text-danger">*</span></label>
+                        <input type="text" class="form-control" @bind="step.ArtifactPath" placeholder="bin/Release" />
+                        <div class="form-text">Workspace-relative file or directory.</div>
+                    </div>
+                    break;
+
+                case WorkflowStepType.DownloadArtifact:
+                    <div class="mb-3">
+                        <label class="form-label">Artifact name <span class="text-danger">*</span></label>
+                        <input type="text" class="form-control" @bind="step.ArtifactName" placeholder="build-output" />
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Destination path</label>
+                        <input type="text" class="form-control" @bind="step.ArtifactPath" placeholder="(workspace root)" />
+                        <div class="form-text">Defaults to a subdir matching the artifact name.</div>
+                    </div>
+                    break;
+
+                case WorkflowStepType.CreateRelease:
+                    <div class="mb-3">
+                        <label class="form-label">Tag <span class="text-danger">*</span></label>
+                        <input type="text" class="form-control" @bind="step.ReleaseTag" placeholder="v1.2.3 or {{inputs.version}}" />
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Display name (optional)</label>
+                        <input type="text" class="form-control" @bind="step.ReleaseName" placeholder="Defaults to the tag" />
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Body (Markdown)</label>
+                        <textarea class="form-control" rows="4" @bind="step.ReleaseBody"
+                                  placeholder="## Changes\n- ..."></textarea>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Files</label>
+                        <input type="text" class="form-control" @bind="step.ReleaseFiles" placeholder="bin/Release/foo.zip, dist/bar.tgz" />
+                        <div class="form-text">Comma-separated workspace-relative paths.</div>
+                    </div>
+                    <div class="form-check mb-3">
+                        <input type="checkbox" class="form-check-input" id="wf-release-prerelease"
+                               checked="@(step.ReleasePrerelease == true)"
+                               @onchange="e => step.ReleasePrerelease = (bool)(e.Value ?? false)" />
+                        <label class="form-check-label" for="wf-release-prerelease">Prerelease</label>
+                    </div>
+                    break;
             }
         </div>
     </aside>
@@ -1154,6 +1306,13 @@
         WorkflowStepType.ImportFromUrl => "⬇",
         WorkflowStepType.RunMinion => "🤖",
         WorkflowStepType.Condition => "⑂",
+        WorkflowStepType.AcrBuild => "🐳",
+        WorkflowStepType.NugetPush => "📦",
+        WorkflowStepType.DispatchWorkflow => "↗",
+        WorkflowStepType.WaitForApproval => "🛑",
+        WorkflowStepType.UploadArtifact => "⬆",
+        WorkflowStepType.DownloadArtifact => "⬇",
+        WorkflowStepType.CreateRelease => "🏷",
         _ => "•"
     };
 
@@ -1174,6 +1333,13 @@
         WorkflowStepType.ImportFromUrl => "Import from URL",
         WorkflowStepType.RunMinion => "Run Minion",
         WorkflowStepType.Condition => "Condition",
+        WorkflowStepType.AcrBuild => "ACR Build",
+        WorkflowStepType.NugetPush => "NuGet Push",
+        WorkflowStepType.DispatchWorkflow => "Dispatch Workflow",
+        WorkflowStepType.WaitForApproval => "Wait for Approval",
+        WorkflowStepType.UploadArtifact => "Upload Artifact",
+        WorkflowStepType.DownloadArtifact => "Download Artifact",
+        WorkflowStepType.CreateRelease => "Create Release",
         _ => type.ToString()
     };
 
@@ -1366,14 +1532,23 @@
         new("Build & Deploy", "Build", "fa-duotone fa-rocket", "#0078d4", [
             new(WorkflowStepType.Checkout, "Checkout", "Pull a repo into the build workspace", "fa-duotone fa-folder-arrow-down", "#0d6efd"),
             new(WorkflowStepType.RunScript, "Run Script", "Execute a shell command in the workspace", "fa-duotone fa-terminal", "#212529"),
+            new(WorkflowStepType.AcrBuild, "ACR Build", "Server-side Docker build via 'az acr build' (no DinD required)", "fa-brands fa-docker", "#2496ed"),
+            new(WorkflowStepType.NugetPush, "NuGet Push", "Publish a .nupkg to a NuGet feed", "fa-duotone fa-cube", "#004880"),
             new(WorkflowStepType.DeployAzureWebApp, "Deploy to Azure Web App", "Zip-deploy workspace or repo to Azure App Service", "fa-duotone fa-cloud-arrow-up", "#0078d4"),
             new(WorkflowStepType.ImportFromUrl, "Import from Git URL", "Clone an external git repo and import all objects and refs", "fa-duotone fa-cloud-arrow-down", "#198754"),
+        ]),
+        new("Artifacts", "Artifacts", "fa-duotone fa-box-archive", "#fd7e14", [
+            new(WorkflowStepType.UploadArtifact, "Upload Artifact", "Save a workspace path under a named artifact for downstream jobs", "fa-duotone fa-cloud-arrow-up", "#fd7e14"),
+            new(WorkflowStepType.DownloadArtifact, "Download Artifact", "Restore a previously-uploaded artifact into the workspace", "fa-duotone fa-cloud-arrow-down", "#fd7e14"),
+            new(WorkflowStepType.CreateRelease, "Create Release", "Create a tagged release with attached files", "fa-duotone fa-tag", "#198754"),
         ]),
         new("AI", "AI", "fa-duotone fa-robot", "#6610f2", [
             new(WorkflowStepType.RunMinion, "Run Minion", "Run an autonomous AI agent in the workspace via daisinet", "fa-duotone fa-robot", "#6610f2"),
         ]),
         new("Flow Control", "Flow", "fa-duotone fa-route", "#6c757d", [
             new(WorkflowStepType.Wait, "Wait", "Pause the workflow for a set duration", "fa-duotone fa-clock", "#6c757d"),
+            new(WorkflowStepType.WaitForApproval, "Wait for Approval", "Pause until a reviewer with write access approves", "fa-duotone fa-user-check", "#6c757d"),
+            new(WorkflowStepType.DispatchWorkflow, "Dispatch Workflow", "Trigger another daisi-git workflow with optional inputs", "fa-duotone fa-share-from-square", "#6c757d"),
         ]),
     ];
 }

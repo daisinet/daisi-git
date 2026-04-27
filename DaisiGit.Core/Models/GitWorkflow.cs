@@ -49,6 +49,16 @@ public class GitWorkflow
     /// </summary>
     public DateTime? NextScheduledRunUtc { get; set; }
 
+    /// <summary>
+    /// Concurrency group key. When set, the engine ensures at most one execution per
+    /// (group, trigger-context) is running at a time; if <see cref="ConcurrencyCancelInProgress"/>
+    /// is true, a new dispatch cancels any earlier execution in the same group.
+    /// </summary>
+    public string? ConcurrencyGroup { get; set; }
+
+    /// <summary>If true, dispatching cancels any earlier execution in the same group.</summary>
+    public bool ConcurrencyCancelInProgress { get; set; }
+
     public DateTime CreatedUtc { get; set; } = DateTime.UtcNow;
     public DateTime? UpdatedUtc { get; set; }
 }

@@ -5,6 +5,7 @@
 @inject CommentService CommentService
 @inject MergeService MergeService
 @inject ReviewService ReviewService
+@inject DaisiGit.Data.DaisiGitCosmo Cosmo
 
 <PageTitle>#@Number - @Owner/@RepoSlug - Daisi Git</PageTitle>
 
@@ -257,6 +258,40 @@
             }
         }
 
+        <!-- Workflow checks (latest run per name) -->
+        @if (latestChecks.Count > 0)
+        {
+            <div class="card mb-3">
+                <div class="card-header py-2">
+                    <i class="fa-duotone fa-list-check me-1"></i> Checks
+                </div>
+                <ul class="list-group list-group-flush">
+                    @foreach (var c in latestChecks)
+                    {
+                        <li class="list-group-item d-flex justify-content-between align-items-center py-2">
+                            <div class="d-flex align-items-center gap-2">
+                                @CheckIcon(c)
+                                <span class="fw-semibold">@c.Name</span>
+                                @if (!string.IsNullOrEmpty(c.Summary))
+                                {
+                                    <span class="text-muted small">— @c.Summary</span>
+                                }
+                            </div>
+                            <div class="text-muted small">
+                                @CheckLabel(c)
+                                @if (!string.IsNullOrEmpty(c.ExecutionId))
+                                {
+                                    <a class="ms-2" href="/@Owner/@RepoSlug/workflows/@(c.WorkflowId ?? "")/history" title="View run">
+                                        <i class="fa-regular fa-arrow-up-right-from-square"></i>
+                                    </a>
+                                }
+                            </div>
+                        </li>
+                    }
+                </ul>
+            </div>
+        }
+
         <!-- Reviews -->
         @if (reviews.Count > 0)
         {
@@ -365,6 +400,7 @@
     private List<Comment> comments = [];
     private List<Review> reviews = [];
     private List<DiffComment> diffComments = [];
+    private List<CheckRun> latestChecks = [];
     private ReviewSummary? reviewSummary;
     private bool loading = true;
     private bool merging;
@@ -387,6 +423,18 @@
             reviews = await ReviewService.ListReviewsAsync(repo.id, Number);
             reviewSummary = await ReviewService.GetReviewSummaryAsync(repo.id, Number);
             diffComments = await ReviewService.GetDiffCommentsAsync(repo.id, Number);
+
+            // Latest check per name (workflows can post multiple runs as commits land).
+            try
+            {
+                var allChecks = await Cosmo.GetCheckRunsByPullRequestAsync(repo.id, Number);
+                latestChecks = allChecks
+                    .GroupBy(c => c.Name)
+                    .Select(g => g.OrderByDescending(c => c.StartedUtc).First())
+                    .OrderBy(c => c.Name, StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+            }
+            catch { latestChecks = []; }
 
             // Compute diff between target and source
             var sourceSha = await BrowseService.ResolveRefAsync(repo.id, pr.SourceBranch);
@@ -474,4 +522,24 @@
         if (diff.TotalDays < 365) return $"{(int)(diff.TotalDays / 30)}mo ago";
         return $"{(int)(diff.TotalDays / 365)}y ago";
     }
+
+    private static MarkupString CheckIcon(CheckRun c) => new(c.Status switch
+    {
+        "completed" when c.Conclusion == "success" => "<i class='fa-solid fa-check-circle text-success'></i>",
+        "completed" when c.Conclusion == "failure" => "<i class='fa-solid fa-circle-xmark text-danger'></i>",
+        "completed" when c.Conclusion == "cancelled" => "<i class='fa-solid fa-ban text-secondary'></i>",
+        "in_progress" => "<i class='fa-solid fa-spinner fa-spin text-primary'></i>",
+        "queued" => "<i class='fa-regular fa-hourglass text-muted'></i>",
+        _ => "<i class='fa-regular fa-circle text-muted'></i>"
+    });
+
+    private static string CheckLabel(CheckRun c) => c.Status switch
+    {
+        "completed" when c.Conclusion == "success" => "Passed " + (c.CompletedUtc.HasValue ? FormatRelativeDate(c.CompletedUtc.Value) : ""),
+        "completed" when c.Conclusion == "failure" => "Failed " + (c.CompletedUtc.HasValue ? FormatRelativeDate(c.CompletedUtc.Value) : ""),
+        "completed" => $"{c.Conclusion}",
+        "in_progress" => "Running " + FormatRelativeDate(c.StartedUtc),
+        "queued" => "Queued",
+        _ => c.Status
+    };
 }

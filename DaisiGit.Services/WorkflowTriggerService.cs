@@ -55,6 +55,20 @@ public class WorkflowTriggerService(DaisiGitCosmo cosmo)
 
         foreach (var (key, value) in filters)
         {
+            // The "paths" filter is special: it matches against a list of changed paths
+            // (push.changedPaths is a newline-separated list populated by the push handler),
+            // and any glob match counts as a hit.
+            if (key == "paths" || key == "path")
+            {
+                var changed = context.GetValueOrDefault("push.changedPaths", "")
+                    .Split('\n', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+                if (changed.Length == 0) return false;
+                var patterns = value.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+                if (!patterns.Any(p => changed.Any(c => MatchesPathGlob(p, c))))
+                    return false;
+                continue;
+            }
+
             // A filter key maps to one or more context keys. For "branch", we check the push
             // branch (push events) AND the PR target branch (pr-* events) so the same
             // "branch: main" filter works for both trigger families.
@@ -84,6 +98,28 @@ public class WorkflowTriggerService(DaisiGitCosmo cosmo)
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// Minimal glob match supporting `*` (any segment chars), `**` (any segments incl. /),
+    /// and `?` (single char). Matches GH Actions' path-filter semantics for the cases the
+    /// surveyed workflows use (e.g. "marketplace/**", "Daisi.SecureTools/**").
+    /// </summary>
+    internal static bool MatchesPathGlob(string pattern, string path)
+    {
+        if (string.IsNullOrEmpty(pattern)) return false;
+        // Translate glob to regex: ** -> .*, * -> [^/]*, ? -> .
+        var regex = new System.Text.StringBuilder("^");
+        for (var i = 0; i < pattern.Length; i++)
+        {
+            var c = pattern[i];
+            if (c == '*' && i + 1 < pattern.Length && pattern[i + 1] == '*') { regex.Append(".*"); i++; }
+            else if (c == '*') regex.Append("[^/]*");
+            else if (c == '?') regex.Append('.');
+            else regex.Append(System.Text.RegularExpressions.Regex.Escape(c.ToString()));
+        }
+        regex.Append('$');
+        return System.Text.RegularExpressions.Regex.IsMatch(path, regex.ToString());
     }
 
     public static int CountSteps(List<WorkflowStep> steps)

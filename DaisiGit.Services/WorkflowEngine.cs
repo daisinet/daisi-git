@@ -72,6 +72,18 @@ public class WorkflowEngine(
 
             while (execution.CurrentStepIndex < flatSteps.Count)
             {
+                // Honor concurrency-cancellation between steps: if a newer dispatch flipped
+                // this execution to Cancelled, stop right here without running the next step.
+                var liveStatus = await cosmo.GetWorkflowExecutionAsync(execution.id, execution.AccountId);
+                if (liveStatus?.Status == "Cancelled")
+                {
+                    execution.Status = "Cancelled";
+                    execution.Error = liveStatus.Error;
+                    execution.FinishedUtc = DateTime.UtcNow;
+                    await cosmo.UpdateWorkflowExecutionAsync(execution);
+                    return;
+                }
+
                 var step = flatSteps[execution.CurrentStepIndex];
                 var stepResult = new WorkflowStepResult
                 {

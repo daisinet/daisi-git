@@ -89,6 +89,26 @@ public class WorkflowService(DaisiGitCosmo cosmo)
             }
         }
 
+        // Resolve concurrency: if the workflow declares a group and cancel-in-progress is
+        // set, mark every peer execution as Cancelled before queuing this one. Workers
+        // honor the Cancelled status between steps.
+        var concurrencyGroup = ResolveConcurrencyGroup(workflow.ConcurrencyGroup, context);
+        if (!string.IsNullOrEmpty(concurrencyGroup) && workflow.ConcurrencyCancelInProgress)
+        {
+            try
+            {
+                var peers = await cosmo.GetActiveExecutionsByConcurrencyGroupAsync(workflow.AccountId, concurrencyGroup);
+                foreach (var peer in peers)
+                {
+                    peer.Status = "Cancelled";
+                    peer.Error = "Cancelled by a newer dispatch in the same concurrency group.";
+                    peer.FinishedUtc = DateTime.UtcNow;
+                    await cosmo.UpdateWorkflowExecutionAsync(peer);
+                }
+            }
+            catch { /* concurrency cleanup is best-effort; never block a dispatch */ }
+        }
+
         return await cosmo.CreateWorkflowExecutionAsync(new WorkflowExecution
         {
             AccountId = workflow.AccountId,
@@ -101,8 +121,20 @@ public class WorkflowService(DaisiGitCosmo cosmo)
             CurrentStepIndex = 0,
             TotalSteps = WorkflowTriggerService.CountSteps(workflow.Steps),
             NextRunAt = DateTime.UtcNow,
-            Status = "Running"
+            Status = "Running",
+            ConcurrencyGroup = concurrencyGroup
         });
+    }
+
+    /// <summary>
+    /// Renders the concurrency group with merge-field expansion against the execution
+    /// context (e.g. "deploy-${{push.branch}}"). Templates are rendered manually here so
+    /// the engine can resolve a group at dispatch time before any step runs.
+    /// </summary>
+    private static string? ResolveConcurrencyGroup(string? template, Dictionary<string, string> context)
+    {
+        if (string.IsNullOrWhiteSpace(template)) return null;
+        return WorkflowMergeService.Render(template, context).Trim();
     }
 
     /// <summary>

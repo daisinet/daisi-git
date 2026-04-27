@@ -40,6 +40,9 @@ public class WorkflowExecution
 
     public string? Error { get; set; }
 
+    /// <summary>Concurrency group this execution participates in (copied from the workflow).</summary>
+    public string? ConcurrencyGroup { get; set; }
+
     /// <summary>When to next process this execution (for Wait steps).</summary>
     public DateTime? NextRunAt { get; set; }
 

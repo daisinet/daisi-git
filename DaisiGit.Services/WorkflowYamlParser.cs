@@ -195,6 +195,7 @@ public static class WorkflowYamlParser
         WorkflowStepType.AcrBuild => "acr-build",
         WorkflowStepType.NugetPush => "nuget-push",
         WorkflowStepType.DispatchWorkflow => "dispatch-workflow",
+        WorkflowStepType.WaitForApproval => "wait-for-approval",
         _ => type.ToString().ToLowerInvariant()
     };
 
@@ -281,6 +282,11 @@ public static class WorkflowYamlParser
                 if (!string.IsNullOrEmpty(step.DispatchRepo)) with["repo"] = step.DispatchRepo;
                 if (!string.IsNullOrEmpty(step.DispatchWorkflow)) with["workflow"] = step.DispatchWorkflow;
                 if (!string.IsNullOrEmpty(step.DispatchInputs)) with["inputs"] = step.DispatchInputs;
+                break;
+            case WorkflowStepType.WaitForApproval:
+                if (!string.IsNullOrEmpty(step.ApprovalEnvironment)) with["environment"] = step.ApprovalEnvironment;
+                if (!string.IsNullOrEmpty(step.ApprovalApprovers)) with["approvers"] = step.ApprovalApprovers;
+                if (!string.IsNullOrEmpty(step.ApprovalMessage)) with["message"] = step.ApprovalMessage;
                 break;
         }
         return with;
@@ -528,6 +534,11 @@ public static class WorkflowYamlParser
                 step.DispatchWorkflow = with.GetValueOrDefault("workflow");
                 step.DispatchInputs = with.GetValueOrDefault("inputs");
                 break;
+            case WorkflowStepType.WaitForApproval:
+                step.ApprovalEnvironment = with.GetValueOrDefault("environment");
+                step.ApprovalApprovers = with.GetValueOrDefault("approvers");
+                step.ApprovalMessage = with.GetValueOrDefault("message");
+                break;
         }
 
         // Simple condition from `if:`
@@ -580,6 +591,7 @@ public static class WorkflowYamlParser
         "acr-build" or "docker-build" => WorkflowStepType.AcrBuild,
         "nuget-push" or "dotnet-nuget-push" => WorkflowStepType.NugetPush,
         "dispatch-workflow" or "trigger-workflow" => WorkflowStepType.DispatchWorkflow,
+        "wait-for-approval" or "approval" or "manual-approval" => WorkflowStepType.WaitForApproval,
         _ => null
     };
 

@@ -167,6 +167,23 @@ public class WorkflowEngine(
                         case WorkflowStepType.DispatchWorkflow:
                             await ExecuteDispatchWorkflow(step, stepResult, execution);
                             break;
+                        case WorkflowStepType.WaitForApproval:
+                            // Mark this step's result as a pending pause and exit the loop;
+                            // the execution stays paused with Status=PendingApproval until a
+                            // reviewer hits the approve endpoint, which flips it back to
+                            // Running with NextRunAt=now so the background worker re-dispatches.
+                            stepResult.Success = true;
+                            stepResult.RenderedBody = string.IsNullOrEmpty(step.ApprovalMessage)
+                                ? $"Waiting for approval ({step.ApprovalEnvironment ?? "manual"})"
+                                : step.ApprovalMessage;
+                            stepResult.FinishedUtc = DateTime.UtcNow;
+                            execution.StepResults.Add(stepResult);
+                            execution.CurrentStepIndex++;
+                            execution.Status = "PendingApproval";
+                            execution.Error = null;
+                            execution.NextRunAt = null;
+                            await cosmo.UpdateWorkflowExecutionAsync(execution);
+                            return;
                         case WorkflowStepType.Condition:
                             stepResult.Success = true;
                             break;

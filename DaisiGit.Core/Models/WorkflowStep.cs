@@ -139,6 +139,14 @@ public class WorkflowStep
     /// <summary>Set per-cell after expansion. Inputs to the cell as matrix.&lt;key&gt;.</summary>
     public Dictionary<string, string>? MatrixValues { get; set; }
 
+    // ── WaitForApproval ──
+    /// <summary>Optional environment label shown to approvers (e.g. "prod").</summary>
+    public string? ApprovalEnvironment { get; set; }
+    /// <summary>Optional comma-separated list of user-id approvers; empty = anyone with write access.</summary>
+    public string? ApprovalApprovers { get; set; }
+    /// <summary>Optional message shown on the approval prompt.</summary>
+    public string? ApprovalMessage { get; set; }
+
     // ── DispatchWorkflow (call another workflow in this or another repo) ──
     /// <summary>Target repo as "owner/slug". Empty = same repo as the current workflow.</summary>
     public string? DispatchRepo { get; set; }

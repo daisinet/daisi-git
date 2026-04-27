@@ -113,6 +113,21 @@ public partial class RepositoryService(
     }
 
     /// <summary>
+    /// Returns repositories the user can see in "Your Repositories" — repos they own
+    /// directly, plus repos owned by orgs they're a member of. Public-but-otherwise-
+    /// unrelated repos (e.g. public repos in another org) are excluded; users discover
+    /// those via /explore.
+    /// </summary>
+    public async Task<List<GitRepository>> GetRepositoriesForUserAsync(string accountId, string userId)
+    {
+        var memberships = await cosmo.GetUserMembershipsAsync(userId);
+        var ownerIds = memberships.Select(m => m.OrganizationId).ToHashSet();
+        ownerIds.Add(userId);
+        var all = await cosmo.GetRepositoriesAsync(accountId);
+        return all.Where(r => ownerIds.Contains(r.OwnerId)).ToList();
+    }
+
+    /// <summary>
     /// Lists all repositories for an owner (public-facing).
     /// </summary>
     public async Task<List<GitRepository>> GetRepositoriesByOwnerAsync(string ownerName)
@@ -403,6 +418,23 @@ public partial class RepositoryService(
     public async Task<List<GitRepository>> SearchRepositoriesAsync(string accountId, string search, int skip = 0, int take = 50)
     {
         return await cosmo.SearchRepositoriesAsync(accountId, search, skip, take);
+    }
+
+    /// <summary>
+    /// Search results scoped to repos the user has access to (same rules as
+    /// <see cref="GetRepositoriesForUserAsync"/>).
+    /// </summary>
+    public async Task<List<GitRepository>> SearchRepositoriesForUserAsync(
+        string accountId, string userId, string search, int skip = 0, int take = 50)
+    {
+        var memberships = await cosmo.GetUserMembershipsAsync(userId);
+        var ownerIds = memberships.Select(m => m.OrganizationId).ToHashSet();
+        ownerIds.Add(userId);
+        // Search a wide window then filter — Cosmos has no efficient join from search
+        // to membership in a single query.
+        var hits = await cosmo.SearchRepositoriesAsync(accountId, search, 0, Math.Max(200, skip + take));
+        var filtered = hits.Where(r => ownerIds.Contains(r.OwnerId)).ToList();
+        return filtered.Skip(skip).Take(take).ToList();
     }
 
     private async Task IncrementStarCountAsync(string repositoryId, int delta)

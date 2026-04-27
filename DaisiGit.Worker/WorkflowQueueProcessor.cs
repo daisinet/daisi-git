@@ -128,7 +128,7 @@ public class WorkflowQueueProcessor(
                     return;
                 }
 
-                await engine.ProcessExecutionAsync(execution, workflow.Steps, workflow.Env);
+                await engine.ProcessExecutionAsync(execution, workflow, workflow.Env);
             }
         }
         catch (Exception ex)

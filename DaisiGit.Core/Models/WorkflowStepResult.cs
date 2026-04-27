@@ -10,6 +10,12 @@ public class WorkflowStepResult
 {
     public int StepIndex { get; set; }
 
+    /// <summary>Id of the job this step belongs to (or "default" for legacy flat-steps workflows).</summary>
+    public string JobId { get; set; } = "default";
+
+    /// <summary>Display label for the job-cell, e.g. "build" or "build (rid=linux)".</summary>
+    public string JobLabel { get; set; } = "";
+
     public string StepName { get; set; } = "";
 
     [JsonConverter(typeof(JsonStringEnumConverter))]

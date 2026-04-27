@@ -40,6 +40,14 @@ public class GitWorkflow
     public List<WorkflowInput> Inputs { get; set; } = [];
 
     public List<WorkflowStep> Steps { get; set; } = [];
+
+    /// <summary>
+    /// Multi-job definition. When non-empty this takes precedence over <see cref="Steps"/>;
+    /// when null/empty the engine falls back to running <see cref="Steps"/> as a single
+    /// implicit job named "default". Allows incremental migration of legacy workflows.
+    /// </summary>
+    public List<WorkflowJob>? Jobs { get; set; }
+
     public bool IsEnabled { get; set; } = true;
     public string Status { get; set; } = "Active";
 

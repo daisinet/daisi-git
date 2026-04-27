@@ -244,6 +244,7 @@ public static class WorkflowApiEndpoints
     {
         workflow.Name = parsed.Name;
         workflow.Steps = parsed.Steps;
+        workflow.Jobs = parsed.Jobs is { Count: > 0 } ? parsed.Jobs : null;
         workflow.Env = parsed.Env;
         workflow.Inputs = parsed.Inputs ?? [];
 

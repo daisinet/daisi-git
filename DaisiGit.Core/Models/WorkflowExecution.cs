@@ -48,6 +48,13 @@ public class WorkflowExecution
 
     public List<WorkflowStepResult> StepResults { get; set; } = [];
 
+    /// <summary>
+    /// Outputs emitted by completed jobs, keyed by job id (matrix cells use
+    /// "&lt;jobId&gt;[k=v;k=v]"). Available to downstream jobs as
+    /// {{needs.&lt;jobId&gt;.outputs.&lt;name&gt;}}.
+    /// </summary>
+    public Dictionary<string, Dictionary<string, string>> JobOutputs { get; set; } = new();
+
     /// <summary>When the execution record was created (queue start).</summary>
     public DateTime CreatedUtc { get; set; } = DateTime.UtcNow;
     public DateTime? UpdatedUtc { get; set; }

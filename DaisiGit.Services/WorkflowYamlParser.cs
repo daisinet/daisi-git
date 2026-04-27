@@ -221,6 +221,9 @@ public static class WorkflowYamlParser
         WorkflowStepType.NugetPush => "nuget-push",
         WorkflowStepType.DispatchWorkflow => "dispatch-workflow",
         WorkflowStepType.WaitForApproval => "wait-for-approval",
+        WorkflowStepType.UploadArtifact => "upload-artifact",
+        WorkflowStepType.DownloadArtifact => "download-artifact",
+        WorkflowStepType.CreateRelease => "create-release",
         _ => type.ToString().ToLowerInvariant()
     };
 
@@ -307,11 +310,24 @@ public static class WorkflowYamlParser
                 if (!string.IsNullOrEmpty(step.DispatchRepo)) with["repo"] = step.DispatchRepo;
                 if (!string.IsNullOrEmpty(step.DispatchWorkflow)) with["workflow"] = step.DispatchWorkflow;
                 if (!string.IsNullOrEmpty(step.DispatchInputs)) with["inputs"] = step.DispatchInputs;
+                if (step.DispatchWait == true) with["wait"] = "true";
                 break;
             case WorkflowStepType.WaitForApproval:
                 if (!string.IsNullOrEmpty(step.ApprovalEnvironment)) with["environment"] = step.ApprovalEnvironment;
                 if (!string.IsNullOrEmpty(step.ApprovalApprovers)) with["approvers"] = step.ApprovalApprovers;
                 if (!string.IsNullOrEmpty(step.ApprovalMessage)) with["message"] = step.ApprovalMessage;
+                break;
+            case WorkflowStepType.UploadArtifact:
+            case WorkflowStepType.DownloadArtifact:
+                if (!string.IsNullOrEmpty(step.ArtifactName)) with["name"] = step.ArtifactName;
+                if (!string.IsNullOrEmpty(step.ArtifactPath)) with["path"] = step.ArtifactPath;
+                break;
+            case WorkflowStepType.CreateRelease:
+                if (!string.IsNullOrEmpty(step.ReleaseTag)) with["tag"] = step.ReleaseTag;
+                if (!string.IsNullOrEmpty(step.ReleaseName)) with["name"] = step.ReleaseName;
+                if (!string.IsNullOrEmpty(step.ReleaseBody)) with["body"] = step.ReleaseBody;
+                if (step.ReleasePrerelease == true) with["prerelease"] = "true";
+                if (!string.IsNullOrEmpty(step.ReleaseFiles)) with["files"] = step.ReleaseFiles;
                 break;
         }
         return with;
@@ -608,11 +624,24 @@ public static class WorkflowYamlParser
                 step.DispatchRepo = with.GetValueOrDefault("repo");
                 step.DispatchWorkflow = with.GetValueOrDefault("workflow");
                 step.DispatchInputs = with.GetValueOrDefault("inputs");
+                if (bool.TryParse(with.GetValueOrDefault("wait"), out var dw)) step.DispatchWait = dw;
                 break;
             case WorkflowStepType.WaitForApproval:
                 step.ApprovalEnvironment = with.GetValueOrDefault("environment");
                 step.ApprovalApprovers = with.GetValueOrDefault("approvers");
                 step.ApprovalMessage = with.GetValueOrDefault("message");
+                break;
+            case WorkflowStepType.UploadArtifact:
+            case WorkflowStepType.DownloadArtifact:
+                step.ArtifactName = with.GetValueOrDefault("name");
+                step.ArtifactPath = with.GetValueOrDefault("path");
+                break;
+            case WorkflowStepType.CreateRelease:
+                step.ReleaseTag = with.GetValueOrDefault("tag");
+                step.ReleaseName = with.GetValueOrDefault("name");
+                step.ReleaseBody = with.GetValueOrDefault("body");
+                if (bool.TryParse(with.GetValueOrDefault("prerelease"), out var pre)) step.ReleasePrerelease = pre;
+                step.ReleaseFiles = with.GetValueOrDefault("files");
                 break;
         }
 
@@ -667,6 +696,9 @@ public static class WorkflowYamlParser
         "nuget-push" or "dotnet-nuget-push" => WorkflowStepType.NugetPush,
         "dispatch-workflow" or "trigger-workflow" => WorkflowStepType.DispatchWorkflow,
         "wait-for-approval" or "approval" or "manual-approval" => WorkflowStepType.WaitForApproval,
+        "upload-artifact" => WorkflowStepType.UploadArtifact,
+        "download-artifact" => WorkflowStepType.DownloadArtifact,
+        "create-release" or "github-release" or "gh-release" => WorkflowStepType.CreateRelease,
         _ => null
     };
 

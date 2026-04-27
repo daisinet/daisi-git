@@ -106,6 +106,10 @@ public static class DaisiGitApiEndpoints
         pub.MapGet("/orgs/{slug}/groups", ListRepoGroups);
         pub.MapGet("/repos/{owner}/{slug}/pulls/{number:int}/checks", ListPullRequestChecks);
         pub.MapGet("/repos/{owner}/{slug}/commit/{sha}/checks", ListCommitChecks);
+        pub.MapGet("/repos/{owner}/{slug}/releases", ListReleases);
+        pub.MapGet("/repos/{owner}/{slug}/releases/{tag}", GetRelease);
+        pub.MapGet("/repos/{owner}/{slug}/releases/{tag}/assets/{file}", DownloadReleaseAsset);
+        api.MapDelete("/repos/{owner}/{slug}/releases/{tag}", DeleteRelease);
         pub.MapGet("/orgs/{slug}/activity", GetOrgActivity);
         pub.MapGet("/repos/{owner}/{slug}/commits-in-range", GetCommitsInRange);
         pub.MapGet("/repos/{owner}/{slug}/branches", ListBranches);
@@ -1133,6 +1137,60 @@ public static class DaisiGitApiEndpoints
         repo!.GroupId = string.IsNullOrEmpty(req.GroupId) ? null : req.GroupId;
         await repoService.UpdateRepositoryAsync(repo);
         return Results.Ok(new { repo.GroupId });
+    }
+
+    // ── Releases ──
+
+    private static async Task<IResult> ListReleases(
+        HttpContext ctx, string owner, string slug,
+        RepositoryService repoService, PermissionService permissionService,
+        DaisiGit.Data.DaisiGitCosmo cosmo)
+    {
+        var (repo, error) = await RequireRead(ctx, owner, slug, repoService, permissionService);
+        if (error != null) return error;
+        return Results.Ok(await cosmo.GetReleasesAsync(repo!.id));
+    }
+
+    private static async Task<IResult> GetRelease(
+        HttpContext ctx, string owner, string slug, string tag,
+        RepositoryService repoService, PermissionService permissionService,
+        DaisiGit.Data.DaisiGitCosmo cosmo)
+    {
+        var (repo, error) = await RequireRead(ctx, owner, slug, repoService, permissionService);
+        if (error != null) return error;
+        var release = await cosmo.GetReleaseByTagAsync(repo!.id, tag);
+        return release == null ? Results.NotFound() : Results.Ok(release);
+    }
+
+    private static async Task<IResult> DownloadReleaseAsset(
+        HttpContext ctx, string owner, string slug, string tag, string file,
+        RepositoryService repoService, PermissionService permissionService,
+        DaisiGit.Services.StorageAdapterFactory storageFactory,
+        DaisiGit.Data.DaisiGitCosmo cosmo)
+    {
+        var (repo, error) = await RequireRead(ctx, owner, slug, repoService, permissionService);
+        if (error != null) return error;
+
+        var release = await cosmo.GetReleaseByTagAsync(repo!.id, tag);
+        var asset = release?.Assets.FirstOrDefault(a => a.Name == file);
+        if (release == null || asset == null) return Results.NotFound();
+
+        var adapter = await storageFactory.GetAdapterAsync(repo);
+        var bytes = await adapter.DownloadAsync(asset.DriveFileId);
+        return Results.File(bytes, asset.ContentType, asset.Name);
+    }
+
+    private static async Task<IResult> DeleteRelease(
+        HttpContext ctx, string owner, string slug, string tag,
+        RepositoryService repoService, PermissionService permissionService,
+        DaisiGit.Data.DaisiGitCosmo cosmo)
+    {
+        var (repo, error) = await RequireWrite(ctx, owner, slug, repoService, permissionService);
+        if (error != null) return error;
+        var release = await cosmo.GetReleaseByTagAsync(repo!.id, tag);
+        if (release == null) return Results.NotFound();
+        await cosmo.DeleteReleaseAsync(release.id, repo.id);
+        return Results.NoContent();
     }
 
     // ── Check runs ──

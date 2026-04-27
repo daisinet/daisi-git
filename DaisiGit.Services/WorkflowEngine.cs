@@ -1062,30 +1062,60 @@ public class WorkflowEngine(
             return;
         }
 
-        var usernameKey = step.AzureUsernameSecret;
-        var passwordKey = step.AzurePasswordSecret;
-        if (string.IsNullOrEmpty(usernameKey) || string.IsNullOrEmpty(passwordKey))
-        {
-            result.Success = false;
-            result.Error = "Deploy username and password secrets must be configured";
-            return;
-        }
+        // Pick auth mode early so we know whether secrets or a managed-identity token
+        // will authenticate the deploy. Defaults to "basic" for back-compat.
+        var authMode = (step.AzureAuthMode ?? "basic").Trim().ToLowerInvariant();
+        string? username = null;
+        string? password = null;
+        string? bearerToken = null;
 
-        var username = execution.Context.GetValueOrDefault($"secrets.{usernameKey}", "").Trim();
-        var password = execution.Context.GetValueOrDefault($"secrets.{passwordKey}", "").Trim();
-        if (string.IsNullOrEmpty(username) || string.IsNullOrEmpty(password))
+        if (authMode == "oidc" || authMode == "identity")
         {
-            result.Success = false;
-            result.Error = $"Could not resolve secrets '{usernameKey}' and/or '{passwordKey}'. Add them in Settings > Secrets.";
-            return;
+            try
+            {
+                // Acquires an ARM token via the worker's managed identity. Locally this
+                // falls through to dev creds (Azure CLI / VS / env). The Kudu /api/zipdeploy
+                // endpoint accepts ARM bearer tokens when the principal has Website
+                // Contributor (or equivalent) on the target App Service.
+                var credential = new Azure.Identity.DefaultAzureCredential();
+                var tokenRequest = new Azure.Core.TokenRequestContext(
+                    new[] { "https://management.azure.com/.default" });
+                var token = await credential.GetTokenAsync(tokenRequest, CancellationToken.None);
+                bearerToken = token.Token;
+            }
+            catch (Exception ex)
+            {
+                result.Success = false;
+                result.Error = $"Could not acquire Azure token via managed identity: {ex.Message}. " +
+                               "Confirm the worker has a system-assigned identity and the Website " +
+                               "Contributor role on the target App Service.";
+                return;
+            }
         }
+        else
+        {
+            var usernameKey = step.AzureUsernameSecret;
+            var passwordKey = step.AzurePasswordSecret;
+            if (string.IsNullOrEmpty(usernameKey) || string.IsNullOrEmpty(passwordKey))
+            {
+                result.Success = false;
+                result.Error = "Deploy username and password secrets must be configured (or set auth-mode: oidc to use managed identity).";
+                return;
+            }
 
-        // Azure's portal shows the FTPS-protocol username as "{sitename}\{user}" or
-        // "{sitename}\${appname}", but Kudu /api/zipdeploy uses HTTP Basic Auth which
-        // does not accept the site prefix. Strip it so users can paste the portal value
-        // verbatim into the secret.
-        var backslashIdx = username.IndexOf('\\');
-        if (backslashIdx >= 0) username = username[(backslashIdx + 1)..];
+            username = execution.Context.GetValueOrDefault($"secrets.{usernameKey}", "").Trim();
+            password = execution.Context.GetValueOrDefault($"secrets.{passwordKey}", "").Trim();
+            if (string.IsNullOrEmpty(username) || string.IsNullOrEmpty(password))
+            {
+                result.Success = false;
+                result.Error = $"Could not resolve secrets '{usernameKey}' and/or '{passwordKey}'. Add them in Settings > Secrets.";
+                return;
+            }
+
+            // Strip Azure's "{sitename}\" FTPS prefix so users can paste the portal value verbatim.
+            var backslashIdx = username.IndexOf('\\');
+            if (backslashIdx >= 0) username = username[(backslashIdx + 1)..];
+        }
 
         // Build ZIP — from workspace (if Checkout+Build ran) or from git objects
         using var zipStream = new MemoryStream();
@@ -1171,8 +1201,15 @@ public class WorkflowEngine(
         client.Timeout = TimeSpan.FromMinutes(5);
 
         using var request = new HttpRequestMessage(HttpMethod.Post, kuduUrl);
-        var authBytes = Encoding.ASCII.GetBytes($"{username}:{password}");
-        request.Headers.Authorization = new AuthenticationHeaderValue("Basic", Convert.ToBase64String(authBytes));
+        if (bearerToken != null)
+        {
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearerToken);
+        }
+        else
+        {
+            var authBytes = Encoding.ASCII.GetBytes($"{username}:{password}");
+            request.Headers.Authorization = new AuthenticationHeaderValue("Basic", Convert.ToBase64String(authBytes));
+        }
         request.Content = new StreamContent(zipStream);
         request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/zip");
 

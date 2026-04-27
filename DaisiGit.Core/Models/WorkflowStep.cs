@@ -52,6 +52,12 @@ public class WorkflowStep
     /// </summary>
     public string? AzureScmHost { get; set; }
 
+    /// <summary>
+    /// "basic" (default) — username/password from secrets; "oidc" — use the worker's
+    /// managed identity to acquire an ARM token and call Kudu with Authorization: Bearer.
+    /// </summary>
+    public string? AzureAuthMode { get; set; }
+
     // ── Checkout ──
     public string? CheckoutRepo { get; set; }
     public string? CheckoutBranch { get; set; }

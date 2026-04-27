@@ -232,6 +232,7 @@ public static class WorkflowYamlParser
                 if (!string.IsNullOrEmpty(step.AzureUsernameSecret)) with["username-secret"] = step.AzureUsernameSecret;
                 if (!string.IsNullOrEmpty(step.AzurePasswordSecret)) with["password-secret"] = step.AzurePasswordSecret;
                 if (!string.IsNullOrEmpty(step.AzureScmHost)) with["scm-host"] = step.AzureScmHost;
+                if (!string.IsNullOrEmpty(step.AzureAuthMode)) with["auth-mode"] = step.AzureAuthMode;
                 break;
             case WorkflowStepType.Checkout:
                 if (!string.IsNullOrEmpty(step.CheckoutRepo)) with["repo"] = step.CheckoutRepo;
@@ -467,6 +468,7 @@ public static class WorkflowYamlParser
                 step.AzureUsernameSecret = with.GetValueOrDefault("username-secret");
                 step.AzurePasswordSecret = with.GetValueOrDefault("password-secret");
                 step.AzureScmHost = with.GetValueOrDefault("scm-host");
+                step.AzureAuthMode = with.GetValueOrDefault("auth-mode");
                 break;
             case WorkflowStepType.Checkout:
                 step.CheckoutRepo = with.GetValueOrDefault("repo");

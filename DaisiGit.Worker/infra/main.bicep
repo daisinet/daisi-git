@@ -129,6 +129,12 @@ resource buildCacheStorage 'Microsoft.App/managedEnvironments/storages@2024-03-0
 resource workerJobs 'Microsoft.App/jobs@2024-03-01' = [for runtime in runtimes: {
   name: '${namePrefix}-worker-${runtime}'
   location: location
+  identity: {
+    // System-assigned managed identity so the worker can authenticate to Azure
+    // services (App Service Kudu, etc.) without storing client secrets. Grant
+    // this identity Website Contributor on the target App Services after first deploy.
+    type: 'SystemAssigned'
+  }
   properties: {
     environmentId: containerAppsEnv.id
     configuration: {

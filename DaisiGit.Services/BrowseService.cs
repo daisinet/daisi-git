@@ -237,6 +237,28 @@ public class BrowseService(GitObjectStore objectStore, GitRefService refService)
                        .ToList();
     }
 
+    /// <summary>
+    /// Returns the file paths that differ between two commits — additions, modifications,
+    /// and deletions. Used by the push pipeline to populate push.changedPaths context for
+    /// path-based trigger filters. Cheaper than GetCommitDiffAsync because it skips
+    /// content comparison.
+    /// </summary>
+    public async Task<List<string>> GetChangedPathsAsync(string repositoryId, string? oldSha, string newSha)
+    {
+        var newCommit = await objectStore.GetObjectAsync(repositoryId, newSha) as GitCommit;
+        if (newCommit == null) return [];
+
+        string? oldTreeSha = null;
+        if (!string.IsNullOrEmpty(oldSha) && !oldSha.All(c => c == '0'))
+        {
+            var oldCommit = await objectStore.GetObjectAsync(repositoryId, oldSha) as GitCommit;
+            oldTreeSha = oldCommit?.TreeSha;
+        }
+
+        var diffs = await DiffTreesAsync(repositoryId, oldTreeSha, newCommit.TreeSha, "");
+        return diffs.Select(d => d.Path).Distinct().ToList();
+    }
+
     private async Task<List<FileDiff>> DiffTreesAsync(string repositoryId, string? oldTreeSha, string? newTreeSha, string basePath)
     {
         var diffs = new List<FileDiff>();

@@ -215,6 +215,7 @@ public static class GitSmartProtocolEndpoints
         RepositoryService repoService,
         GitRefService refService,
         GitObjectStore objectStore,
+        BrowseService browseService,
         PermissionService permissionService,
         GitEventService events,
         RepoActivityRollupService rollupService)
@@ -333,6 +334,20 @@ public static class GitSmartProtocolEndpoints
                 ["push.isCreate"] = isCreate.ToString(),
                 ["push.isDelete"] = isDelete.ToString()
             };
+
+            // Compute the changed-files list for branch updates (not deletes/tags) so the
+            // path-based trigger filter has something to match. Best-effort — failures
+            // here just leave the filter unmatched.
+            if (isBranch && !isDelete)
+            {
+                try
+                {
+                    var changed = await browseService.GetChangedPathsAsync(repository.id, oldSha, newSha);
+                    if (changed.Count > 0)
+                        payload["push.changedPaths"] = string.Join("\n", changed);
+                }
+                catch { }
+            }
 
             await events.EmitAsync(repository.AccountId, repository.id, eventType,
                 userId, userName, payload);

@@ -23,5 +23,8 @@ public enum WorkflowStepType
     AcrBuild,
     NugetPush,
     DispatchWorkflow,
-    WaitForApproval
+    WaitForApproval,
+    UploadArtifact,
+    DownloadArtifact,
+    CreateRelease
 }

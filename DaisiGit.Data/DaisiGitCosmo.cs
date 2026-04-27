@@ -62,6 +62,7 @@ public partial class DaisiGitCosmo(IConfiguration configuration, string connecti
             RepoGroupsContainerName => RepoGroupsPartitionKeyName,
             CheckRunsContainerName => CheckRunsPartitionKeyName,
             GitHubImportJobsContainerName => GitHubImportJobsPartitionKeyName,
+            ReleasesContainerName => ReleasesPartitionKeyName,
             MembersContainerName => MembersPartitionKeyName,
             PermissionsContainerName => PermissionsPartitionKeyName,
             ReviewsContainerName => ReviewsPartitionKeyName,

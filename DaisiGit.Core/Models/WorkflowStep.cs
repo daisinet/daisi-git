@@ -147,6 +147,20 @@ public class WorkflowStep
     /// <summary>Optional message shown on the approval prompt.</summary>
     public string? ApprovalMessage { get; set; }
 
+    // ── UploadArtifact / DownloadArtifact ──
+    /// <summary>Logical artifact name; downstream jobs reference the same name to fetch.</summary>
+    public string? ArtifactName { get; set; }
+    /// <summary>Workspace-relative file or directory to upload (or where to download to).</summary>
+    public string? ArtifactPath { get; set; }
+
+    // ── CreateRelease ──
+    public string? ReleaseTag { get; set; }
+    public string? ReleaseName { get; set; }
+    public string? ReleaseBody { get; set; }
+    public bool? ReleasePrerelease { get; set; }
+    /// <summary>Comma-separated workspace-relative file paths to attach as release assets.</summary>
+    public string? ReleaseFiles { get; set; }
+
     // ── DispatchWorkflow (call another workflow in this or another repo) ──
     /// <summary>Target repo as "owner/slug". Empty = same repo as the current workflow.</summary>
     public string? DispatchRepo { get; set; }
@@ -154,6 +168,10 @@ public class WorkflowStep
     public string? DispatchWorkflow { get; set; }
     /// <summary>Inputs to pass — comma-separated key=value entries (templates allowed in values).</summary>
     public string? DispatchInputs { get; set; }
+
+    /// <summary>If true, the dispatching step blocks until the called workflow finishes,
+    /// then merges its job outputs into the caller's context as outputs.&lt;name&gt;.</summary>
+    public bool? DispatchWait { get; set; }
 }
 
 /// <summary>

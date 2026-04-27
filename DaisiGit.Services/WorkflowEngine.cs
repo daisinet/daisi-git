@@ -24,7 +24,8 @@ public class WorkflowEngine(
     BrowseService browseService,
     RepositoryService repoService,
     EmailService emailService,
-    ImportService importService)
+    ImportService importService,
+    StorageAdapterFactory storageFactory)
 {
     /// <summary>
     /// Processes an execution, injecting secrets and env into the context.
@@ -198,6 +199,15 @@ public class WorkflowEngine(
                             break;
                         case WorkflowStepType.DispatchWorkflow:
                             await ExecuteDispatchWorkflow(step, stepResult, execution);
+                            break;
+                        case WorkflowStepType.UploadArtifact:
+                            await ExecuteUploadArtifact(step, stepResult, execution);
+                            break;
+                        case WorkflowStepType.DownloadArtifact:
+                            await ExecuteDownloadArtifact(step, stepResult, execution);
+                            break;
+                        case WorkflowStepType.CreateRelease:
+                            await ExecuteCreateRelease(step, stepResult, execution);
                             break;
                         case WorkflowStepType.WaitForApproval:
                             // Mark this step's result as a pending pause and exit the loop;
@@ -1357,6 +1367,170 @@ public class WorkflowEngine(
         execution.NextRunAt = DateTime.UtcNow + waitTime;
     }
 
+    // ── Artifacts (upload/download via the shared /cache/artifacts area) ──
+
+    /// <summary>Per-execution artifact root within the shared cache mount.</summary>
+    private static string ArtifactRoot(string executionId)
+        => Path.Combine("/cache", "artifacts", executionId);
+
+    private async Task ExecuteUploadArtifact(WorkflowStep step, WorkflowStepResult result, WorkflowExecution execution)
+    {
+        var name = WorkflowMergeService.Render(step.ArtifactName ?? "", execution.Context).Trim();
+        var path = WorkflowMergeService.Render(step.ArtifactPath ?? "", execution.Context).Trim();
+        if (string.IsNullOrEmpty(name) || string.IsNullOrEmpty(path))
+        {
+            result.Success = false; result.Error = "upload-artifact requires `name` and `path`.";
+            return;
+        }
+        var workspace = EnsureWorkspace(execution);
+        var src = Path.Combine(workspace, path.Trim('/').Replace('/', Path.DirectorySeparatorChar));
+        if (!File.Exists(src) && !Directory.Exists(src))
+        {
+            result.Success = false; result.Error = $"upload-artifact: '{path}' not found in workspace.";
+            return;
+        }
+
+        try
+        {
+            var dest = Path.Combine(ArtifactRoot(execution.id), name);
+            Directory.CreateDirectory(dest);
+            if (File.Exists(src))
+            {
+                File.Copy(src, Path.Combine(dest, Path.GetFileName(src)), overwrite: true);
+            }
+            else
+            {
+                CopyDirectory(src, dest);
+            }
+            result.Success = true;
+            result.RenderedBody = $"Uploaded artifact '{name}' from {path}";
+        }
+        catch (Exception ex)
+        {
+            result.Success = false;
+            result.Error = $"upload-artifact failed: {ex.Message}. Confirm /cache is mounted on this worker.";
+        }
+        await Task.CompletedTask;
+    }
+
+    private async Task ExecuteDownloadArtifact(WorkflowStep step, WorkflowStepResult result, WorkflowExecution execution)
+    {
+        var name = WorkflowMergeService.Render(step.ArtifactName ?? "", execution.Context).Trim();
+        var path = WorkflowMergeService.Render(step.ArtifactPath ?? "", execution.Context).Trim();
+        if (string.IsNullOrEmpty(name))
+        {
+            result.Success = false; result.Error = "download-artifact requires `name`.";
+            return;
+        }
+
+        var src = Path.Combine(ArtifactRoot(execution.id), name);
+        if (!Directory.Exists(src))
+        {
+            result.Success = false;
+            result.Error = $"Artifact '{name}' not found. Did an earlier job upload it?";
+            return;
+        }
+
+        try
+        {
+            var workspace = EnsureWorkspace(execution);
+            var dest = string.IsNullOrEmpty(path)
+                ? Path.Combine(workspace, name)
+                : Path.Combine(workspace, path.Trim('/').Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(dest);
+            CopyDirectory(src, dest);
+            result.Success = true;
+            result.RenderedBody = $"Downloaded artifact '{name}' to {Path.GetRelativePath(workspace, dest)}";
+        }
+        catch (Exception ex)
+        {
+            result.Success = false;
+            result.Error = $"download-artifact failed: {ex.Message}";
+        }
+        await Task.CompletedTask;
+    }
+
+    private static void CopyDirectory(string src, string dest)
+    {
+        Directory.CreateDirectory(dest);
+        foreach (var dir in Directory.GetDirectories(src, "*", SearchOption.AllDirectories))
+            Directory.CreateDirectory(Path.Combine(dest, Path.GetRelativePath(src, dir)));
+        foreach (var file in Directory.GetFiles(src, "*", SearchOption.AllDirectories))
+            File.Copy(file, Path.Combine(dest, Path.GetRelativePath(src, file)), overwrite: true);
+    }
+
+    // ── CreateRelease: writes a Release record + uploads each file as an asset ──
+
+    private async Task ExecuteCreateRelease(WorkflowStep step, WorkflowStepResult result, WorkflowExecution execution)
+    {
+        var tag = WorkflowMergeService.Render(step.ReleaseTag ?? "", execution.Context).Trim();
+        var name = WorkflowMergeService.Render(step.ReleaseName ?? "", execution.Context).Trim();
+        var body = WorkflowMergeService.Render(step.ReleaseBody ?? "", execution.Context);
+        var filesCsv = WorkflowMergeService.Render(step.ReleaseFiles ?? "", execution.Context);
+
+        if (string.IsNullOrEmpty(tag))
+        {
+            result.Success = false; result.Error = "create-release requires `tag`.";
+            return;
+        }
+
+        var repo = await repoService.GetRepositoryAsync(execution.RepositoryId, execution.AccountId);
+        if (repo == null)
+        {
+            result.Success = false; result.Error = "create-release could not load repository record.";
+            return;
+        }
+
+        // Upsert the release record (one per tag — re-running replaces it).
+        var existing = await cosmo.GetReleaseByTagAsync(repo.id, tag);
+        var release = existing ?? new Release { RepositoryId = repo.id, Tag = tag };
+        release.Name = string.IsNullOrEmpty(name) ? tag : name;
+        release.Body = string.IsNullOrEmpty(body) ? null : body;
+        release.Prerelease = step.ReleasePrerelease == true;
+        release.AuthorId = execution.Context.GetValueOrDefault("actor.id", "");
+        release.AuthorName = execution.Context.GetValueOrDefault("actor.name", "Workflow");
+
+        // Attach files. Each path is workspace-relative; existing assets with the same
+        // file name are replaced.
+        var assets = release.Assets ?? [];
+        if (!string.IsNullOrWhiteSpace(filesCsv))
+        {
+            var workspace = EnsureWorkspace(execution);
+            var paths = filesCsv.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+
+            var driveAdapter = await storageFactory.GetAdapterAsync(repo);
+
+            foreach (var rel in paths)
+            {
+                var abs = Path.Combine(workspace, rel.Trim('/').Replace('/', Path.DirectorySeparatorChar));
+                if (!File.Exists(abs))
+                {
+                    result.Success = false;
+                    result.Error = $"create-release: file '{rel}' not found in workspace.";
+                    return;
+                }
+                var fileName = Path.GetFileName(abs);
+                var bytes = await File.ReadAllBytesAsync(abs);
+                var driveFileId = await driveAdapter.UploadAsync(repo.DriveRepositoryId,
+                    $"/releases/{tag}/{fileName}", bytes);
+
+                assets = assets.Where(a => a.Name != fileName).ToList();
+                assets.Add(new ReleaseAsset
+                {
+                    Name = fileName,
+                    DriveFileId = driveFileId,
+                    SizeBytes = bytes.LongLength,
+                    ContentType = "application/octet-stream"
+                });
+            }
+        }
+        release.Assets = assets;
+        var saved = await cosmo.UpsertReleaseAsync(release);
+
+        result.Success = true;
+        result.RenderedBody = $"Released {saved.Tag} with {saved.Assets.Count} asset(s)";
+    }
+
     // ── AcrBuild: server-side Docker build via `az acr build`. No DinD required. ──
 
     private async Task ExecuteAcrBuild(WorkflowStep step, WorkflowStepResult result, WorkflowExecution execution)
@@ -1492,8 +1666,41 @@ public class WorkflowEngine(
         var newExec = await new WorkflowService(cosmo).RunNowAsync(
             targetWorkflow, targetRepo, actorId, actorName, inputs: inputs);
 
-        result.Success = true;
-        result.RenderedBody = $"Dispatched {ownerSlug}/{targetWorkflow.Name} (execution {newExec.id})";
+        if (step.DispatchWait == true)
+        {
+            // Run the called workflow in-process synchronously so caller can collect its
+            // job outputs. This holds the worker until the child finishes — fine for short
+            // composable workflows; for long-running children, leave wait=false.
+            try
+            {
+                await ProcessExecutionAsync(newExec, targetWorkflow, targetWorkflow.Env);
+                var refreshed = await cosmo.GetWorkflowExecutionAsync(newExec.id, newExec.AccountId) ?? newExec;
+                if (refreshed.Status != "Completed")
+                {
+                    result.Success = false;
+                    result.Error = $"Called workflow finished as {refreshed.Status}: {refreshed.Error}";
+                    return;
+                }
+                // Merge every job output from the child into the parent context as
+                // outputs.<name>. Multi-job children expose all outputs flatly; tag
+                // collisions take the last write.
+                foreach (var (jobId, outs) in refreshed.JobOutputs)
+                    foreach (var (k, v) in outs)
+                        execution.Context[$"outputs.{k}"] = v;
+                result.Success = true;
+                result.RenderedBody = $"Called {ownerSlug}/{targetWorkflow.Name} ({refreshed.JobOutputs.Sum(o => o.Value.Count)} output(s))";
+            }
+            catch (Exception ex)
+            {
+                result.Success = false;
+                result.Error = $"Called workflow threw: {ex.Message}";
+            }
+        }
+        else
+        {
+            result.Success = true;
+            result.RenderedBody = $"Dispatched {ownerSlug}/{targetWorkflow.Name} (execution {newExec.id})";
+        }
     }
 
     private static string EscapeArg(string value)

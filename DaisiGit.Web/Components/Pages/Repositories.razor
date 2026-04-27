@@ -133,8 +133,8 @@ else
         {
             if (!string.IsNullOrWhiteSpace(searchTerm))
             {
-                displayedRepos = await RepoService.SearchRepositoriesAsync(
-                    AccountId, searchTerm.Trim(), currentPage * pageSize, pageSize);
+                displayedRepos = await RepoService.SearchRepositoriesForUserAsync(
+                    AccountId, UserId, searchTerm.Trim(), currentPage * pageSize, pageSize);
             }
             else if (activeTab == "starred")
             {
@@ -143,7 +143,10 @@ else
             }
             else
             {
-                var all = await RepoService.GetRepositoriesAsync(AccountId);
+                // Scope to repos the user actually has access to: their own repos plus
+                // repos owned by orgs they're a member of. Public repos in unrelated
+                // orgs surface via /explore, not here.
+                var all = await RepoService.GetRepositoriesForUserAsync(AccountId, UserId);
                 displayedRepos = all.Skip(currentPage * pageSize).Take(pageSize).ToList();
             }
         }

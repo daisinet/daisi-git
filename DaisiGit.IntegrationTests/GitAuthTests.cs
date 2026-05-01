@@ -92,13 +92,108 @@ public class GitAuthTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task T04_UploadPack_WithoutAuth_Returns401()
+    public async Task T04_UploadPack_PublicRepo_WithoutAuth_Returns200()
     {
+        // Public repos must be readable without authentication so anonymous
+        // git clone works. _repo is created Public in InitializeAsync.
         var request = new HttpRequestMessage(HttpMethod.Get,
             $"{_repo.OwnerName}/{_repo.Slug}.git/info/refs?service=git-upload-pack");
 
         var response = await _http.SendAsync(request);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task T04b_UploadPack_PrivateRepo_WithoutAuth_Returns401WithChallenge()
+    {
+        // Private repos must still demand auth, with WWW-Authenticate so
+        // git clients prompt for credentials.
+        var priv = await _client.CreateRepoAsync($"private-clone-{_testId}",
+            "Private repo auth test", GitRepoVisibility.Private);
+        _createdRepos.Add((priv.OwnerName, priv.Slug));
+
+        var request = new HttpRequestMessage(HttpMethod.Get,
+            $"{priv.OwnerName}/{priv.Slug}.git/info/refs?service=git-upload-pack");
+
+        var response = await _http.SendAsync(request);
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        Assert.Contains(response.Headers.WwwAuthenticate,
+            h => h.Scheme.Equals("Basic", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task T04c_UploadPack_InternalRepo_WithoutAuth_Returns401()
+    {
+        // Internal repos require auth — anonymous bypass is Public-only.
+        var internalRepo = await _client.CreateRepoAsync($"internal-clone-{_testId}",
+            "Internal repo auth test", GitRepoVisibility.Internal);
+        _createdRepos.Add((internalRepo.OwnerName, internalRepo.Slug));
+
+        var request = new HttpRequestMessage(HttpMethod.Get,
+            $"{internalRepo.OwnerName}/{internalRepo.Slug}.git/info/refs?service=git-upload-pack");
+
+        var response = await _http.SendAsync(request);
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task T04d_UploadPackPost_PublicRepo_WithoutAuth_NotChallenged()
+    {
+        // POST git-upload-pack on a public repo must not 401. The body here
+        // is empty so the endpoint will respond with NAK + flush, but the auth
+        // middleware should let the request through.
+        var request = new HttpRequestMessage(HttpMethod.Post,
+            $"{_repo.OwnerName}/{_repo.Slug}.git/git-upload-pack")
+        {
+            Content = new ByteArrayContent(Array.Empty<byte>())
+            {
+                Headers = { ContentType = new MediaTypeHeaderValue("application/x-git-upload-pack-request") }
+            }
+        };
+
+        var response = await _http.SendAsync(request);
+        Assert.NotEqual(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task T04e_UploadPackPost_PrivateRepo_WithoutAuth_Returns401()
+    {
+        var priv = await _client.CreateRepoAsync($"private-uploadpost-{_testId}",
+            "Private uploadpost test", GitRepoVisibility.Private);
+        _createdRepos.Add((priv.OwnerName, priv.Slug));
+
+        var request = new HttpRequestMessage(HttpMethod.Post,
+            $"{priv.OwnerName}/{priv.Slug}.git/git-upload-pack")
+        {
+            Content = new ByteArrayContent(Array.Empty<byte>())
+            {
+                Headers = { ContentType = new MediaTypeHeaderValue("application/x-git-upload-pack-request") }
+            }
+        };
+
+        var response = await _http.SendAsync(request);
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task T04f_ReceivePack_PublicRepo_WithoutAuth_Returns401()
+    {
+        // Push must always require auth, even on public repos. T03 already
+        // covers this for info/refs?service=git-receive-pack; this asserts
+        // the same for the POST form.
+        var request = new HttpRequestMessage(HttpMethod.Post,
+            $"{_repo.OwnerName}/{_repo.Slug}.git/git-receive-pack")
+        {
+            Content = new ByteArrayContent(Array.Empty<byte>())
+            {
+                Headers = { ContentType = new MediaTypeHeaderValue("application/x-git-receive-pack-request") }
+            }
+        };
+
+        var response = await _http.SendAsync(request);
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        Assert.Contains(response.Headers.WwwAuthenticate,
+            h => h.Scheme.Equals("Basic", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]

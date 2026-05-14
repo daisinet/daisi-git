@@ -1,3 +1,9 @@
+# DAISI has moved to [Daisi Git](https://git.daisi.ai/daisinet/daisi-git), a free and fast git management studio that we built from scratch in C#.
+## This code base is no longer kept up to date here.
+---
+
+
+
 # Daisi Git
 
 A GitHub-like git hosting service built on the Daisinet platform. Stores git objects in Daisi Drive, uses Cosmos DB for metadata, and provides a Blazor web UI for browsing code and managing repositories.
